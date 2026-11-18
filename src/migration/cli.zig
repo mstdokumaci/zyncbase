@@ -181,7 +181,11 @@ fn openFile(allocator: Allocator, path: []const u8, write: bool) !sqlite.Db {
     // zwanzig-disable-next-line: sentinel-alloc
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
-    return sqlite.Db.init(.{ .mode = .{ .File = path_z }, .open_flags = .{ .write = write, .create = write } });
+    var db = try sqlite.Db.init(.{ .mode = .{ .File = path_z }, .open_flags = .{ .write = write, .create = write } });
+    errdefer db.deinit();
+    // Match the runtime connections so a read-only status waits out a checkpoint.
+    _ = try db.pragma(void, .{}, "busy_timeout", "5000");
+    return db;
 }
 
 /// An empty database as `StorageEngine.init` leaves it.
@@ -203,6 +207,11 @@ const DbState = struct {
         return findLedger(self.ledger, id);
     }
 
+    /// The newest history entry by id; `readLedger` orders by id.
+    fn newestLedgerId(self: DbState) ?[]const u8 {
+        return if (self.ledger.len == 0) null else self.ledger[self.ledger.len - 1].id;
+    }
+
     /// The newest ledger entry is `id`, applied (not baseline).
     fn newestApplied(self: DbState, id: []const u8) bool {
         if (self.ledger.len == 0) return false;
@@ -218,6 +227,12 @@ fn findLedger(ledger: []const state.LedgerEntry, id: []const u8) ?usize {
     return null;
 }
 
+fn newestKnownId(folder: ?[]const u8, ledger: ?[]const u8) ?[]const u8 {
+    const a = folder orelse return ledger;
+    const b = ledger orelse return a;
+    return if (std.mem.order(u8, a, b) == .gt) a else b;
+}
+
 fn readDbState(ctx: Context, arena: Allocator, db_path: []const u8) !DbState {
     if (!try fileExists(ctx.io, db_path)) return .{};
     var lock = try DataLock.acquireShared(ctx.io, ctx.allocator, dirOf(db_path));
@@ -225,9 +240,16 @@ fn readDbState(ctx: Context, arena: Allocator, db_path: []const u8) !DbState {
     var db = try openFile(ctx.allocator, db_path, false);
     defer db.deinit();
     if (!try state.hasSchemaTable(&db)) return .{ .exists = true };
+    const applied = try state.readApplied(arena, &db);
+    if (applied) |a| {
+        if (a.layout != state.layout_version) {
+            try ctx.out.print("The database uses storage layout {d}; this build supports layout {d}.\n", .{ a.layout, state.layout_version });
+            return error.UnsupportedLayout;
+        }
+    }
     return .{
         .exists = true,
-        .applied = try state.readApplied(arena, &db),
+        .applied = applied,
         .ledger = try state.readLedger(arena, &db),
     };
 }
@@ -468,9 +490,10 @@ fn new(ctx: Context, cmd: Command) !void {
 
     var stamp_buf: [backup.utc_timestamp_len]u8 = undefined;
     const id = try std.fmt.allocPrint(arena, "{s}_{s}", .{ backup.utcTimestamp(ctx.io, &stamp_buf), name });
-    if (project.newest()) |last| {
-        if (std.mem.order(u8, id, last.id) != .gt) {
-            try ctx.out.print("The new id {s} would not sort after {s}. Check the clock, or wait a second and retry.\n", .{ id, last.id });
+    const newest_folder = if (project.newest()) |last| last.id else null;
+    if (newestKnownId(newest_folder, base.db.newestLedgerId())) |newest| {
+        if (std.mem.order(u8, id, newest) != .gt) {
+            try ctx.out.print("The new id {s} would not sort after {s}. Check the clock; a migration recorded in the ledger can be newer than every folder.\n", .{ id, newest });
             return error.MigrationOutOfOrder;
         }
     }
@@ -583,9 +606,38 @@ fn checkVersions(
 
 const Files = struct { before: []const u8, after: []const u8, sql: []const u8 };
 
+/// Dot-prefixed so the loader ignores it. Only exists while a folder is replaced.
+fn replaceBackupPath(arena: Allocator, dir: []const u8, old: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}/.{s}.replaced", .{ dir, old });
+}
+
+fn ensureNoInterruptedAmend(ctx: Context, arena: Allocator, dir: []const u8, old: []const u8) !void {
+    const backup_path = try replaceBackupPath(arena, dir, old);
+    if (!try fileExists(ctx.io, backup_path)) return;
+    const target = try std.fs.path.join(arena, &.{ dir, old });
+    try ctx.out.print("A previous interrupted amend left {s}. Restore it to {s} or remove it before retrying.\n", .{ backup_path, target });
+    return error.InterruptedAmend;
+}
+
+/// The backup of any folder an interrupted amend left behind, or null.
+fn findInterruptedAmend(ctx: Context, arena: Allocator, dir: []const u8) !?[]const u8 {
+    var open = std.Io.Dir.cwd().openDir(ctx.io, dir, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer open.close(ctx.io);
+    var iter = open.iterate();
+    while (try iter.next(ctx.io)) |entry| {
+        if (entry.kind != .directory) continue;
+        if (!std.mem.startsWith(u8, entry.name, ".") or !std.mem.endsWith(u8, entry.name, ".replaced")) continue;
+        return try std.fs.path.join(arena, &.{ dir, entry.name });
+    }
+    return null;
+}
+
 /// Writes the folder under a dot-prefixed temporary name (ignored by the
-/// loader), then renames it into place. With `replace`, that folder is
-/// removed first. Returns the folder path.
+/// loader), then renames it into place. With `replace`, the old folder is
+/// moved to a dot-prefixed backup first and restored if the swap fails.
 fn writeFolder(ctx: Context, arena: Allocator, dir: []const u8, replace: ?[]const u8, id: []const u8, files: Files) ![]const u8 {
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(ctx.io, dir);
@@ -595,6 +647,7 @@ fn writeFolder(ctx: Context, arena: Allocator, dir: []const u8, replace: ?[]cons
         try ctx.out.print("{s} already exists.\n", .{final});
         return error.PathAlreadyExists;
     }
+    if (replace) |old| try ensureNoInterruptedAmend(ctx, arena, dir, old);
 
     const partial = try std.fmt.allocPrint(arena, "{s}/.{s}.partial", .{ dir, id });
     try cwd.deleteTree(ctx.io, partial);
@@ -612,8 +665,30 @@ fn writeFolder(ctx: Context, arena: Allocator, dir: []const u8, replace: ?[]cons
         try cwd.writeFile(ctx.io, .{ .sub_path = path, .data = entry.data });
     }
 
-    if (replace) |old| try cwd.deleteTree(ctx.io, try std.fs.path.join(arena, &.{ dir, old }));
+    var backup_path: ?[]const u8 = null;
+    var old_path: ?[]const u8 = null;
+    if (replace) |old| {
+        const old_dir = try std.fs.path.join(arena, &.{ dir, old });
+        const backup_dir = try replaceBackupPath(arena, dir, old);
+        try cwd.rename(old_dir, cwd, backup_dir, ctx.io);
+        backup_path = backup_dir;
+        old_path = old_dir;
+    }
+    var restore_backup = true;
+    errdefer if (restore_backup) {
+        if (backup_path) |b| {
+            if (old_path) |o| {
+                cwd.rename(b, cwd, o, ctx.io) catch |err| {
+                    std.log.err("could not restore {s} from {s}: {}", .{ o, b, err });
+                };
+            }
+        }
+    };
     try cwd.rename(partial, cwd, final, ctx.io);
+    restore_backup = false;
+    if (backup_path) |b| cwd.deleteTree(ctx.io, b) catch |err| {
+        std.log.warn("could not remove the replaced migration backup {s}: {}", .{ b, err });
+    };
     return final;
 }
 
@@ -645,6 +720,10 @@ fn amend(ctx: Context, cmd: Command) !void {
         try out.print("There is no migration to amend in {s}.\n", .{project.migrations_dir});
         return error.NothingToAmend;
     };
+    if (try findInterruptedAmend(ctx, arena, project.migrations_dir)) |path| {
+        try out.print("A previous interrupted amend left {s}. Restore or remove it before retrying.\n", .{path});
+        return error.InterruptedAmend;
+    }
     const data_dir = dataDir(ctx, cmd);
     const db_path = try backup.dbPath(arena, data_dir);
     const db = try readDbState(ctx, arena, db_path);
@@ -679,9 +758,12 @@ fn amend(ctx: Context, cmd: Command) !void {
     });
 
     const id = try std.fmt.allocPrint(arena, "{s}_{s}", .{ last.id[0..backup.utc_timestamp_len], name });
-    if (items.len > 1 and std.mem.order(u8, id, items[items.len - 2].id) != .gt) {
-        try out.print("The amended id {s} would not sort after {s}; choose another name.\n", .{ id, items[items.len - 2].id });
-        return error.MigrationOutOfOrder;
+    const previous_folder = if (items.len > 1) items[items.len - 2].id else null;
+    if (newestKnownId(previous_folder, rule_db.newestLedgerId())) |newest| {
+        if (std.mem.order(u8, id, newest) != .gt) {
+            try out.print("The amended id {s} would not sort after {s}; choose another name.\n", .{ id, newest });
+            return error.MigrationOutOfOrder;
+        }
     }
 
     var sql = std.ArrayListUnmanaged(u8).empty;

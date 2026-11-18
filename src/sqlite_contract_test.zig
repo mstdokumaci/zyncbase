@@ -177,3 +177,22 @@ test "sqlite contract: coalesce does not evaluate later arguments" {
     try expectOk(&db, "SELECT coalesce(1, abs(-9223372036854775808))");
     try std.testing.expectEqual(@as(c_int, c.SQLITE_ERROR), exec(&db, "SELECT coalesce(NULL, abs(-9223372036854775808))"));
 }
+
+test "sqlite contract: json_valid accepts JSON text and JSONB with flag 5" {
+    var db = try openDb();
+    defer db.deinit();
+
+    // 5 = JSON text (1) + JSONB (4). Arrays are stored as JSONB by the runtime.
+    const cases = [_]struct { sql: []const u8, expected: i64 }{
+        .{ .sql = "SELECT json_valid('[1]', 5)", .expected = 1 },
+        .{ .sql = "SELECT json_valid(CAST('[1]' AS BLOB), 5)", .expected = 1 },
+        .{ .sql = "SELECT json_valid(jsonb('[1]'), 5)", .expected = 1 },
+        .{ .sql = "SELECT json_valid('not json', 5)", .expected = 0 },
+        // CASE evaluates only the chosen branch, so invalid JSON becomes NULL.
+        .{ .sql = "SELECT CASE WHEN json_valid(CAST('not json' AS BLOB), 5) THEN json(CAST('not json' AS BLOB)) END IS NULL", .expected = 1 },
+    };
+    for (cases) |case| {
+        const value = (try db.oneDynamic(i64, case.sql, .{}, .{})) orelse return error.TestExpectedValue;
+        try std.testing.expectEqual(case.expected, value);
+    }
+}

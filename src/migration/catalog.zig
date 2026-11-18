@@ -5,6 +5,7 @@ const std = @import("std");
 
 const sqlite = @import("sqlite");
 
+const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
 const sql_buf = @import("../sql/buf.zig");
 const ddl = @import("../sql/ddl.zig");
@@ -78,11 +79,16 @@ pub const ExpectedColumn = struct {
 /// Every physical column `table` implies, in DDL order.
 pub fn expectedColumns(arena: Allocator, table: *const Table) ![]const ExpectedColumn {
     var columns = std.ArrayListUnmanaged(ExpectedColumn).empty;
-    try columns.append(arena, .{ .name = "id", .sql_type = "BLOB", .not_null = true, .primary_key = true });
-    try columns.append(arena, .{ .name = "namespace_id", .sql_type = "INTEGER", .not_null = true, .primary_key = false });
-    try columns.append(arena, .{ .name = "owner_id", .sql_type = "BLOB", .not_null = true, .primary_key = false });
+    for (schema_system.leading_system_fields, 0..) |field, i| {
+        try columns.append(arena, .{
+            .name = field.name,
+            .sql_type = field.storage_type.toSqlType(),
+            .not_null = field.required,
+            .primary_key = i == 0,
+        });
+    }
     if (table.is_users_table) {
-        try columns.append(arena, .{ .name = "external_id", .sql_type = "TEXT", .not_null = true, .primary_key = false });
+        try columns.append(arena, .{ .name = schema_system.external_id_column, .sql_type = "TEXT", .not_null = true, .primary_key = false });
     }
     for (table.userFields()) |field| {
         try columns.append(arena, .{
@@ -92,8 +98,14 @@ pub fn expectedColumns(arena: Allocator, table: *const Table) ![]const ExpectedC
             .primary_key = false,
         });
     }
-    try columns.append(arena, .{ .name = "created_at", .sql_type = "INTEGER", .not_null = true, .primary_key = false });
-    try columns.append(arena, .{ .name = "updated_at", .sql_type = "INTEGER", .not_null = true, .primary_key = false });
+    for (schema_system.trailing_system_fields) |field| {
+        try columns.append(arena, .{
+            .name = field.name,
+            .sql_type = field.storage_type.toSqlType(),
+            .not_null = field.required,
+            .primary_key = false,
+        });
+    }
     return columns.toOwnedSlice(arena);
 }
 

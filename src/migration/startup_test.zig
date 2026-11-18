@@ -490,6 +490,34 @@ test "validate: arrays must use the runtime encoding and booleans must be 0 or 1
     try std.testing.expect(saw_canonical and saw_boolean);
 }
 
+test "validate: malformed array JSON is a row violation, not a statement error" {
+    var h = try Harness.init();
+    defer h.deinit();
+    const json =
+        \\{"version":"1.0.0","store":{"items":{"fields":{"tags":{"type":"array","items":"string"}}}}}
+    ;
+    _ = try h.migrate(json);
+    try insertRow(&h, "items", "\"tags\"", "CAST('not json' AS BLOB)");
+    try insertRow(&h, "items", "\"tags\"", "jsonb('5')");
+
+    var schema = try schema_parse.initFromJson(allocator, json);
+    defer schema.deinit();
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    var diag = Diagnostics.init(allocator);
+    defer diag.deinit();
+    const items = schema.table("items") orelse return error.TestExpectedValue;
+    try std.testing.expectEqual(@as(u64, 2), try validate.validateTable(arena.allocator(), &h.db, items, null, &diag));
+
+    var saw_invalid = false;
+    var saw_not_array = false;
+    for (diag.items()) |line| {
+        if (std.mem.indexOf(u8, line, "not valid JSON") != null) saw_invalid = true;
+        if (std.mem.indexOf(u8, line, "not a JSON array") != null) saw_not_array = true;
+    }
+    try std.testing.expect(saw_invalid and saw_not_array);
+}
+
 test "validate: constraint violations are counted per field" {
     var h = try Harness.init();
     defer h.deinit();

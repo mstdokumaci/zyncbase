@@ -335,7 +335,8 @@ It refuses to write anything when:
 - the base is a pending migration that already produces `schema.json` (edit that migration instead)
 - `schema.json`'s version is lower than the base's
 - the deployment version rule would fail against the base database. The pending migrations before the new one count as part of the deployment. Without a database the rule is left to startup.
-- the new id (`<utc now>_<name>`) would not sort after the newest migration
+- the base database's storage layout is unknown to this build
+- the new id (`<utc now>_<name>`) would not sort after the newest migration folder or ledger entry
 
 The folder is written under a dot-prefixed temporary name, which the loader ignores, and then renamed into place. Both JSON files are pretty-printed. The report lists the changes and the number of `zync_todo` decisions.
 
@@ -345,6 +346,8 @@ The folder is written under a dot-prefixed temporary name, which the loader igno
 - Otherwise it refuses.
 
 The migration keeps its timestamp and takes `<name>`. `after.json` and the scaffold are regenerated from `before.json` to `schema.json`, and the previous `migration.sql` is appended as a comment block. It refuses when the migration already produces `schema.json`. `--amend` cannot be combined with `--from`.
+
+The replaced folder is moved to a dot-prefixed backup before the new folder is renamed into place, and moved back if the swap fails. An interrupted amend leaves that backup next to the migrations; the next `--amend` refuses and names it so the folder can be restored.
 
 `reset` without `--yes` explains what it would do and exits non-zero.
 

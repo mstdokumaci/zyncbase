@@ -82,7 +82,8 @@ fn validateField(arena: Allocator, db: *sqlite.Db, table: *const Table, field: *
     if (!needs_scan) return 0;
 
     const value_expr = if (field.storage_type == .array)
-        try std.fmt.allocPrint(arena, "json({s})", .{field.name_quoted})
+        // 5 = JSON text (1) + JSONB (4); the runtime stores arrays as JSONB.
+        try std.fmt.allocPrint(arena, "CASE WHEN json_valid({0s}, 5) THEN json({0s}) END", .{field.name_quoted})
     else
         field.name_quoted;
     const sql = try std.fmt.allocPrint(
@@ -176,6 +177,7 @@ fn checkArray(
 
     const parsed = std.json.parseFromSlice(std.json.Value, arena, stored, .{}) catch return "array is not valid JSON";
     defer parsed.deinit();
+    if (parsed.value != .array) return "value is not a JSON array";
     const value = typed_codec.fromJson(arena, .array, items_type, parsed.value) catch return "array has an element of the wrong type";
     defer value.deinit(arena);
 

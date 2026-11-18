@@ -313,6 +313,59 @@ test "migrate cli: new demands a major bump, and --amend folds the change into t
     try std.testing.expectEqual(@as(i64, 3), try h.int("SELECT count(*) FROM tasks"));
 }
 
+test "migrate cli: a database with an unknown layout is refused" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+    try h.exec("UPDATE _zync_schema SET layout = 99");
+
+    try std.testing.expectError(error.UnsupportedLayout, h.run(&.{ "new", "blocked" }));
+    try h.expectOutput("layout 99");
+}
+
+test "migrate cli: a new id must sort after the newest ledger entry" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+    try h.exec(
+        "INSERT INTO _zync_migrations (id, mode, before_version, after_version, after_hash, sql_hash, applied_at) " ++
+            "VALUES ('20991231T235959Z_future', 'applied', '1.0.0', '1.0.0', 'sha256:00', 'sha256:00', 0)",
+    );
+
+    try std.testing.expectError(error.MigrationOutOfOrder, h.run(&.{ "new", "too_early" }));
+    try h.expectOutput("20991231T235959Z_future");
+}
+
+test "migrate cli: an interrupted amend is refused before the database is restored" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+    try h.seedTasks();
+    try h.setSchema(v2);
+    try h.runOk(&.{ "new", "priority_to_string" });
+    const folder = try h.onlyMigration();
+    defer allocator.free(folder);
+    try h.writeMigrationFile(folder, "migration.sql", v1_to_v2_sql);
+    try h.runOk(&.{"apply"});
+
+    // Simulate a crash after the old folder was moved to the backup.
+    const backup = try std.fmt.allocPrint(allocator, "{s}/.{s}.replaced", .{ h.migrations_dir, std.fs.path.basename(folder) });
+    defer allocator.free(backup);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, backup);
+
+    const v2_without_priority =
+        \\{"version":"2.0.0","store":{"tasks":{"fields":{"title":{"type":"string"}},"required":["title"]}}}
+    ;
+    try h.setSchema(v2_without_priority);
+    try std.testing.expectError(error.InterruptedAmend, h.run(&.{ "new", "priority_to_string", "--amend" }));
+    try h.expectOutput(".replaced");
+
+    // The failure happens before the snapshot restore.
+    try h.setSchema(v2);
+    try h.expectAppliedVersion("2.0.0");
+    try std.Io.Dir.cwd().access(std.testing.io, folder, .{});
+}
+
 test "migrate cli: reset needs --yes and moves the database aside" {
     var h = try Harness.init(v1);
     defer h.deinit();

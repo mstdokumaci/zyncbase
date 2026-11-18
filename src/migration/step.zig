@@ -96,14 +96,14 @@ pub fn execute(arena: Allocator, io: std.Io, db: *sqlite.Db, input: Input, diag:
                     diag.add("Table \"{s}\" already exists in the database but is not managed by ZyncBase.", .{t.name});
                     return error.UnmanagedTableConflict;
                 }
-                try execSql(arena, db, try gen.generateCreateTable((try targetOf(t)).*), diag);
+                try execSql(db, try gen.generateCreateTable((try targetOf(t)).*), diag);
             },
             .alter => {
                 const to = try targetOf(t);
                 for (t.field_changes) |change| {
                     if (change.kind != .added_optional) continue;
                     const field = change.to orelse return error.InvalidState;
-                    try execSql(arena, db, try gen.generateAddColumn(to.*, field.*), diag);
+                    try execSql(db, try gen.generateAddColumn(to.*, field.*), diag);
                 }
             },
             .rebuild, .remove => {
@@ -113,11 +113,11 @@ pub fn execute(arena: Allocator, io: std.Io, db: *sqlite.Db, input: Input, diag:
                     return error.InvalidState;
                 }
                 try dropManagedIndexes(arena, db, t.name, diag);
-                try execSql(arena, db, try std.fmt.allocPrint(arena, "ALTER TABLE \"{s}\" RENAME TO \"{s}\"", .{ t.name, prev }), diag);
+                try execSql(db, try std.fmt.allocPrint(arena, "ALTER TABLE \"{s}\" RENAME TO \"{s}\"", .{ t.name, prev }), diag);
                 reports[i].rows_before = try countRows(arena, db, prev);
                 try prev_tables.append(arena, prev);
                 if (t.action == .rebuild) {
-                    try execSql(arena, db, try gen.generateCreateTable((try targetOf(t)).*), diag);
+                    try execSql(db, try gen.generateCreateTable((try targetOf(t)).*), diag);
                     rebuilt = true;
                 }
             },
@@ -149,7 +149,7 @@ pub fn execute(arena: Allocator, io: std.Io, db: *sqlite.Db, input: Input, diag:
     }
     if (guard_failed) return error.RowsNotCarriedOver;
     for (prev_tables.items) |prev| {
-        try execSql(arena, db, try std.fmt.allocPrint(arena, "DROP TABLE \"{s}\"", .{prev}), diag);
+        try execSql(db, try std.fmt.allocPrint(arena, "DROP TABLE \"{s}\"", .{prev}), diag);
     }
 
     // ─── Managed indexes ────────────────────────────────────────────────
@@ -268,7 +268,7 @@ fn generatedFill(arena: Allocator, db: *sqlite.Db, diff: *const SchemaDiff, repo
             "INSERT INTO {s} ({s}) SELECT {s} FROM \"{s}\"",
             .{ to.name_quoted, list.items, list.items, prev },
         );
-        try execSql(arena, db, sql, diag);
+        try execSql(db, sql, diag);
     }
 }
 
@@ -315,7 +315,7 @@ fn reportMissingRows(
 fn dropManagedIndexes(arena: Allocator, db: *sqlite.Db, table_name: []const u8, diag: *Diagnostics) !void {
     const names = try catalog.listManagedIndexNames(arena, db, table_name);
     for (names) |name| {
-        try execSql(arena, db, try std.fmt.allocPrint(arena, "DROP INDEX \"{s}\"", .{name}), diag);
+        try execSql(db, try std.fmt.allocPrint(arena, "DROP INDEX \"{s}\"", .{name}), diag);
     }
 }
 
@@ -381,8 +381,7 @@ fn countWhere(arena: Allocator, db: *sqlite.Db, table_name: []const u8, conditio
 }
 
 /// Executes one statement; on failure records SQLite's message.
-pub fn execSql(arena: Allocator, db: *sqlite.Db, sql: []const u8, diag: *Diagnostics) !void {
-    _ = arena;
+pub fn execSql(db: *sqlite.Db, sql: []const u8, diag: *Diagnostics) !void {
     execSqlQuiet(db, sql) catch |err| {
         diag.add("SQL failed: {s}", .{std.mem.span(c.sqlite3_errmsg(db.db))});
         diag.add("  {s}", .{sql});
