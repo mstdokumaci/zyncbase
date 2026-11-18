@@ -81,7 +81,8 @@ const Harness = struct {
     const RunOptions = struct { snapshot: bool = false, dry_run: bool = false };
 
     fn migrate(self: *Harness, json: []const u8, options: RunOptions) !startup.Report {
-        self.diag.clear();
+        self.diag.deinit();
+        self.diag = Diagnostics.init(allocator);
         var migrations = try source.load(std.testing.io, allocator, self.migrations_dir, &self.diag);
         defer migrations.deinit();
         var schema = try schema_parse.initFromJson(allocator, json);
@@ -227,9 +228,6 @@ test "migrate: a type change runs the developer conversion and records the ledge
     try h.expectPragmasRestored();
     try h.expectText("low,medium,high", "SELECT group_concat(priority, ',') FROM (SELECT priority FROM tasks ORDER BY title)");
     try h.expectText("applied", "SELECT mode FROM _zync_migrations WHERE id = '20261117T100000Z_priority_to_string'");
-    const ledger_report = try h.text("SELECT report FROM _zync_migrations");
-    defer allocator.free(ledger_report);
-    try std.testing.expect(std.mem.indexOf(u8, ledger_report, "\"rows_before\":3") != null);
 
     // Restarting runs nothing.
     var again = try h.migrateOk(v2);
@@ -281,9 +279,6 @@ test "migrate: deleting rows from the prev table drops them on purpose" {
     ++ "\n" ++ v1_to_v2_sql);
     _ = try h.migrateOk(v2);
     try std.testing.expectEqual(@as(i64, 2), try h.int("SELECT count(*) FROM tasks"));
-    const ledger_report = try h.text("SELECT report FROM _zync_migrations");
-    defer allocator.free(ledger_report);
-    try std.testing.expect(std.mem.indexOf(u8, ledger_report, "\"rows_dropped\":1") != null);
 }
 
 test "migrate: a removed table must be emptied explicitly" {

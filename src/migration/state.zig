@@ -33,12 +33,9 @@ const create_migrations_table_sql =
     \\  mode TEXT NOT NULL CHECK (mode IN ('applied', 'baseline')),
     \\  before_version TEXT NOT NULL,
     \\  after_version TEXT NOT NULL,
-    \\  before_hash TEXT NOT NULL,
     \\  after_hash TEXT NOT NULL,
     \\  sql_hash TEXT NOT NULL,
-    \\  applied_at INTEGER NOT NULL,
-    \\  duration_us INTEGER NOT NULL,
-    \\  report TEXT NOT NULL
+    \\  applied_at INTEGER NOT NULL
     \\) STRICT
 ;
 
@@ -141,20 +138,16 @@ pub const NewLedgerEntry = struct {
     mode: LedgerMode,
     before_version: []const u8,
     after_version: []const u8,
-    before_hash: []const u8,
     after_hash: []const u8,
     sql_hash: []const u8,
-    duration_us: i64,
-    /// JSON object describing what the migration did.
-    report: []const u8,
 };
 
 pub fn insertLedger(io: std.Io, db: *sqlite.Db, entry: NewLedgerEntry) !void {
     const now = std.Io.Clock.real.now(io).toMicroseconds();
     try db.exec(
         \\INSERT INTO _zync_migrations
-        \\  (id, mode, before_version, after_version, before_hash, after_hash, sql_hash, applied_at, duration_us, report)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        \\  (id, mode, before_version, after_version, after_hash, sql_hash, applied_at)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?)
     ,
         .{},
         .{
@@ -162,12 +155,9 @@ pub fn insertLedger(io: std.Io, db: *sqlite.Db, entry: NewLedgerEntry) !void {
             @as([]const u8, @tagName(entry.mode)),
             entry.before_version,
             entry.after_version,
-            entry.before_hash,
             entry.after_hash,
             entry.sql_hash,
             now,
-            entry.duration_us,
-            entry.report,
         },
     );
 }

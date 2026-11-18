@@ -3,6 +3,7 @@ const std = @import("std");
 const sqlite = @import("sqlite");
 
 const schema_parse = @import("../schema/parse.zig");
+const schema_helpers = @import("../schema/test_helpers.zig");
 const schema_types = @import("../schema/types.zig");
 const ddl = @import("../sql/ddl.zig");
 const catalog = @import("catalog.zig");
@@ -31,9 +32,8 @@ const Fixture = struct {
         errdefer db.deinit();
         var schema = try schema_parse.initFromJson(allocator, schema_json);
         errdefer schema.deinit();
-        var gen = ddl.DDLGenerator.init(allocator);
         for (schema.tables) |table| {
-            const sql = try gen.generateDDL(table);
+            const sql = try schema_helpers.fullDDL(allocator, table);
             defer allocator.free(sql);
             // zwanzig-disable-next-line: sentinel-alloc
             const sql_z = try allocator.dupeZ(u8, sql);
@@ -51,7 +51,8 @@ const Fixture = struct {
     }
 
     fn check(self: *Fixture, table_name: []const u8) !catalog.Drift {
-        self.diag.clear();
+        self.diag.deinit();
+        self.diag = Diagnostics.init(allocator);
         const table = self.schema.table(table_name) orelse return error.TestExpectedValue;
         return catalog.checkTable(self.arena.allocator(), &self.db, table, &self.diag);
     }

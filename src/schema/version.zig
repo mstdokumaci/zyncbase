@@ -21,10 +21,6 @@ pub const Version = struct {
         if (a.minor != b.minor) return std.math.order(a.minor, b.minor);
         return std.math.order(a.patch, b.patch);
     }
-
-    pub fn format(self: Version, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        try writer.print("{d}.{d}.{d}", .{ self.major, self.minor, self.patch });
-    }
 };
 
 fn parseComponent(component: ?[]const u8) error{InvalidVersion}!u32 {

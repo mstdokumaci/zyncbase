@@ -5,6 +5,7 @@ const sqlite = @import("sqlite");
 const config_state = @import("../config/state.zig");
 const send_queue_mod = @import("../connection/send_queue.zig");
 const migration_startup = @import("../migration/startup.zig");
+const ddl = @import("../sql/ddl.zig");
 const canonical = @import("canonical.zig");
 const schema_index = @import("index.zig");
 const schema_parse = @import("parse.zig");
@@ -480,4 +481,23 @@ pub fn setupTestEngineWithJson(
     errdefer context.change_queue.?.deinit();
 
     try engine.start(&context.send_queue.?, &context.change_queue.?, null);
+}
+
+/// Test-only full DDL: the `CREATE TABLE ... STRICT;` statement followed by
+/// every managed index. Production creates tables and indexes as separate steps.
+pub fn fullDDL(allocator: std.mem.Allocator, table: schema_types.Table) ![]u8 {
+    var gen = ddl.DDLGenerator.init(allocator);
+    var out = std.ArrayListUnmanaged(u8).empty;
+    errdefer out.deinit(allocator);
+    const create = try gen.generateCreateTable(table);
+    defer allocator.free(create);
+    try out.appendSlice(allocator, create);
+    var iter = ddl.ManagedIndexIterator.init(&table);
+    while (iter.next()) |managed_index| {
+        const statement = try gen.generateIndexDDL(table, managed_index);
+        defer allocator.free(statement);
+        try out.appendSlice(allocator, "\n");
+        try out.appendSlice(allocator, statement);
+    }
+    return out.toOwnedSlice(allocator);
 }

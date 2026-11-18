@@ -30,7 +30,8 @@ const Harness = struct {
 
     /// Runs the startup migration to `json`. Diagnostics stay available.
     fn migrate(self: *Harness, json: []const u8) !startup.Report {
-        self.diag.clear();
+        self.diag.deinit();
+        self.diag = Diagnostics.init(allocator);
         var schema = try schema_parse.initFromJson(allocator, json);
         defer schema.deinit();
         const identity = try canonical.Identity.init(allocator, json);
@@ -148,6 +149,21 @@ test "startup: whitespace-only edits do not change the applied schema" {
     defer allocator.free(pretty);
     const report = try h.migrate(pretty);
     try std.testing.expectEqual(@as(usize, 0), report.steps);
+}
+
+test "startup: a version-only change rewrites the snapshot and nothing else" {
+    var h = try Harness.init();
+    defer h.deinit();
+    _ = try h.migrate(
+        \\{"version":"1.0.0","store":{"tasks":{"fields":{"title":{"type":"string"}}}}}
+    );
+    const report = try h.migrate(
+        \\{"version":"1.0.1","store":{"tasks":{"fields":{"title":{"type":"string"}}}}}
+    );
+    try std.testing.expectEqual(@as(usize, 1), report.steps);
+    const version = try h.text("SELECT version FROM _zync_schema");
+    defer allocator.free(version);
+    try std.testing.expectEqualStrings("1.0.1", version);
 }
 
 test "startup: auto changes reach the same layout as a fresh database and keep rows" {

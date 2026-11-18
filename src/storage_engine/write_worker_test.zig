@@ -5,7 +5,6 @@ const schema_helpers = @import("../schema/test_helpers.zig");
 const storage_mod = @import("../storage_engine.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
 const write_worker = @import("write_worker.zig");
-const DDLGenerator = @import("../sql/ddl.zig").DDLGenerator;
 
 const testing = std.testing;
 
@@ -42,9 +41,8 @@ const DirectWriterContext = struct {
         );
         errdefer self.engine.deinit();
 
-        var gen = DDLGenerator.init(allocator);
         for (self.schema.tables) |schema_table| {
-            const ddl = try gen.generateDDL(schema_table);
+            const ddl = try schema_helpers.fullDDL(allocator, schema_table);
             defer allocator.free(ddl);
             // zwanzig-disable-next-line: sentinel-alloc
             const ddl_z = try allocator.dupeZ(u8, ddl);

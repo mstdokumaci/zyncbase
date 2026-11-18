@@ -35,9 +35,3 @@ test "version: orders by major, minor, then patch" {
         try std.testing.expectEqual(case.expected, a.order(b));
     }
 }
-
-test "version: formats back to text" {
-    var buf: [32]u8 = undefined;
-    const text = try std.fmt.bufPrint(&buf, "{f}", .{try Version.parse("3.14.15")});
-    try std.testing.expectEqualStrings("3.14.15", text);
-}

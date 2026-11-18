@@ -38,16 +38,6 @@ pub const Diagnostics = struct {
         return self.lines.items;
     }
 
-    pub fn isEmpty(self: *const Diagnostics) bool {
-        return self.lines.items.len == 0;
-    }
-
-    pub fn clear(self: *Diagnostics) void {
-        for (self.lines.items) |line| self.allocator.free(line);
-        self.lines.clearRetainingCapacity();
-        self.truncated = false;
-    }
-
     /// Writes every line through `std.log.err`.
     pub fn logErrors(self: *const Diagnostics) void {
         for (self.lines.items) |line| std.log.err("{s}", .{line});

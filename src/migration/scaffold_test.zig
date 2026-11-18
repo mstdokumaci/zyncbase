@@ -226,7 +226,8 @@ const Harness = struct {
     }
 
     fn migrate(self: *Harness, json: []const u8) !startup.Report {
-        self.diag.clear();
+        self.diag.deinit();
+        self.diag = Diagnostics.init(allocator);
         var migrations = try source.load(std.testing.io, allocator, self.migrations_dir, &self.diag);
         defer migrations.deinit();
         var schema = try schema_parse.initFromJson(allocator, json);

@@ -13,7 +13,6 @@ const DDLGenerator = ddl_generator.DDLGenerator;
 
 test "ddl_generator: generate DDL for a known table" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     const fields = [_]Field{
         schema_helpers.makeRequiredField("title", .text),
@@ -23,7 +22,7 @@ test "ddl_generator: generate DDL for a known table" {
 
     const table = schema_helpers.makeTable("tasks", &fields);
 
-    const ddl = try gen.generateDDL(table);
+    const ddl = try schema_helpers.fullDDL(allocator, table);
     defer allocator.free(ddl);
 
     const expected =
@@ -49,7 +48,6 @@ test "ddl_generator: generate DDL for a known table" {
 
 test "ddl_generator: generate DDL with foreign key and on delete cascade" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     var user_id_field = schema_helpers.makeRequiredField("user_id", .doc_id);
     user_id_field.references = "users";
@@ -59,7 +57,7 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
 
     const table = schema_helpers.makeTable("posts", &fields);
 
-    const ddl = try gen.generateDDL(table);
+    const ddl = try schema_helpers.fullDDL(allocator, table);
     defer allocator.free(ddl);
 
     try std.testing.expect(std.mem.indexOf(u8, ddl, "FOREIGN KEY (\"user_id\") REFERENCES \"users\"(\"id\") ON DELETE CASCADE") != null);
@@ -75,11 +73,10 @@ test "ddl_generator: generate DDL with foreign key and on delete cascade" {
 
 test "ddl_generator: foreign keys default to restrict and are indexed" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     var author_id = schema_helpers.makeField("author_id", .doc_id);
     author_id.references = "users";
-    const ddl = try gen.generateDDL(schema_helpers.makeTable("posts", &.{author_id}));
+    const ddl = try schema_helpers.fullDDL(allocator, schema_helpers.makeTable("posts", &.{author_id}));
     defer allocator.free(ddl);
 
     try std.testing.expect(std.mem.indexOf(u8, ddl, "FOREIGN KEY (\"author_id\") REFERENCES \"users\"(\"id\") ON DELETE RESTRICT") != null);
@@ -88,7 +85,6 @@ test "ddl_generator: foreign keys default to restrict and are indexed" {
 
 test "ddl_generator: array field uses BLOB column type" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     const fields = [_]Field{
         schema_helpers.makeField("tags", .array),
@@ -97,7 +93,7 @@ test "ddl_generator: array field uses BLOB column type" {
 
     const table = schema_helpers.makeTable("items", &fields);
 
-    const ddl = try gen.generateDDL(table);
+    const ddl = try schema_helpers.fullDDL(allocator, table);
     defer allocator.free(ddl);
 
     // Array field should use BLOB
@@ -108,7 +104,6 @@ test "ddl_generator: array field uses BLOB column type" {
 
 test "ddl_generator: quoted identifiers allow SQLite keywords" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     var from_field = schema_helpers.makeRequiredField("from", .text);
     from_field.indexed = true;
@@ -117,7 +112,7 @@ test "ddl_generator: quoted identifiers allow SQLite keywords" {
 
     const table = schema_helpers.makeTable("select", &fields);
 
-    const ddl = try gen.generateDDL(table);
+    const ddl = try schema_helpers.fullDDL(allocator, table);
     defer allocator.free(ddl);
 
     var db = try sqlite.Db.init(.{
@@ -136,7 +131,7 @@ test "ddl_generator: quoted identifiers allow SQLite keywords" {
 }
 
 // Feature: schema-aware-storage, Property 7: DDL contains all required columns and constraints
-// For any Table value t, the DDL string produced by DDL_Generator.generateDDL(t) SHALL contain:
+// For any Table value t, the DDL string produced by fullDDL(t) SHALL contain:
 // id BLOB NOT NULL CHECK(length(id) = 16), namespace_id INTEGER NOT NULL,
 // owner_id BLOB NOT NULL CHECK(length(owner_id) = 16),
 // one correctly-typed column per field in t.fields
@@ -144,7 +139,6 @@ test "ddl_generator: quoted identifiers allow SQLite keywords" {
 // created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, and a CREATE INDEX on namespace_id.
 test "ddl_generator: DDL contains required columns and constraints" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     var prng = std.Random.DefaultPrng.init(42);
     const rand = prng.random();
@@ -182,7 +176,7 @@ test "ddl_generator: DDL contains required columns and constraints" {
 
         const table = schema_helpers.makeTable("test_table", fields);
 
-        const ddl = try gen.generateDDL(table);
+        const ddl = try schema_helpers.fullDDL(allocator, table);
         defer allocator.free(ddl);
 
         // Assert required structural elements
@@ -236,11 +230,10 @@ test "ddl_generator: DDL contains required columns and constraints" {
 }
 
 // Feature: schema-aware-storage, Property 8: Generated DDL is executable
-// For any Table value t, executing the DDL produced by DDL_Generator.generateDDL(t)
+// For any Table value t, executing the DDL produced by fullDDL(t)
 // against an empty in-memory SQLite database SHALL succeed without error.
 test "ddl_generator: generated DDL is executable" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     var prng = std.Random.DefaultPrng.init(99);
     const rand = prng.random();
@@ -293,7 +286,7 @@ test "ddl_generator: generated DDL is executable" {
             allocator.free(table.name_quoted);
         }
 
-        const ddl = try gen.generateDDL(table);
+        const ddl = try schema_helpers.fullDDL(allocator, table);
         defer allocator.free(ddl);
 
         // Open an in-memory SQLite database and execute the DDL
@@ -321,10 +314,9 @@ test "ddl_generator: generated DDL is executable" {
 
 // Feature: array-jsonb-storage, Property 1: DDL emits BLOB for array fields
 // For any Table with a mix of field types including at least one .array field,
-// generateDDL shall emit BLOB for array columns and the correct type for all others.
+// the full DDL shall emit BLOB for array columns and the correct type for all others.
 test "ddl_generator: DDL emits BLOB for array fields" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     var prng = std.Random.DefaultPrng.init(0xABCD_1234);
     const rand = prng.random();
@@ -353,7 +345,7 @@ test "ddl_generator: DDL emits BLOB for array fields" {
         }
 
         const table = schema_helpers.makeTable("prop1_tbl", fields);
-        const ddl = try gen.generateDDL(table);
+        const ddl = try schema_helpers.fullDDL(allocator, table);
         defer allocator.free(ddl);
 
         for (fields) |f| {
@@ -388,7 +380,6 @@ fn makeUniqueTable(
 
 test "ddl_generator: exact SQL for single and compound unique constraints" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     const fields = [_]Field{
         schema_helpers.makeRequiredField("slug", .text),
@@ -402,7 +393,7 @@ test "ddl_generator: exact SQL for single and compound unique constraints" {
     };
     const table = makeUniqueTable("projects", &fields, &constraints);
 
-    const ddl = try gen.generateDDL(table);
+    const ddl = try schema_helpers.fullDDL(allocator, table);
     defer allocator.free(ddl);
 
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, ddl, "CREATE UNIQUE INDEX \"uidx__projects__constraint__0\" ON \"projects\"(\"namespace_id\", \"slug\")"));
@@ -455,7 +446,6 @@ test "ddl_generator: nested unique paths use flattened quoted columns in order" 
 
 test "ddl_generator: multiple unique constraints preserve schema order and coexist with managed indexes" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     var status = schema_helpers.makeField("status", .text);
     status.indexed = true;
@@ -471,7 +461,7 @@ test "ddl_generator: multiple unique constraints preserve schema order and coexi
     };
     const table = makeUniqueTable("ord", &fields, &constraints);
 
-    const ddl = try gen.generateDDL(table);
+    const ddl = try schema_helpers.fullDDL(allocator, table);
     defer allocator.free(ddl);
 
     const find = struct {
@@ -494,13 +484,12 @@ test "ddl_generator: multiple unique constraints preserve schema order and coexi
 
 test "ddl_generator: users identity index unchanged and coexists with custom unique constraints" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     const fields = [_]Field{schema_helpers.makeField("handle", .text)};
     const constraints = [_]schema_types.UniqueConstraint{.{ .field_indexes = &.{0} }};
     const table = makeUniqueTable("users", &fields, &constraints);
 
-    const ddl = try gen.generateDDL(table);
+    const ddl = try schema_helpers.fullDDL(allocator, table);
     defer allocator.free(ddl);
 
     try std.testing.expect(std.mem.indexOf(u8, ddl, "CREATE UNIQUE INDEX \"uidx__users__identity\" ON \"users\"(\"namespace_id\", \"external_id\")") != null);
@@ -509,7 +498,6 @@ test "ddl_generator: users identity index unchanged and coexists with custom uni
 
 test "ddl_generator: managed names cannot collide across valid table and field boundaries" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     var external_id = schema_helpers.makeField("external_id", .text);
     external_id.indexed = true;
@@ -520,7 +508,7 @@ test "ddl_generator: managed names cannot collide across valid table and field b
     defer db.deinit();
 
     for ([_]schema_types.Table{ users_namespace, users }) |table| {
-        const ddl = try gen.generateDDL(table);
+        const ddl = try schema_helpers.fullDDL(allocator, table);
         defer allocator.free(ddl);
         // zwanzig-disable-next-line: sentinel-alloc
         const ddl_z = try allocator.dupeZ(u8, ddl);
@@ -539,9 +527,8 @@ test "ddl_generator: managed names cannot collide across valid table and field b
     );
 }
 
-test "ddl_generator: generateDDL contains exactly the managed-index definitions" {
+test "ddl_generator: fullDDL contains exactly the managed-index definitions" {
     const allocator = std.testing.allocator;
-    var gen = DDLGenerator.init(allocator);
 
     var status = schema_helpers.makeField("status", .text);
     status.indexed = true;
@@ -555,10 +542,10 @@ test "ddl_generator: generateDDL contains exactly the managed-index definitions"
     const constraints = [_]schema_types.UniqueConstraint{.{ .field_indexes = &.{0} }};
     const table = makeUniqueTable("posts", &fields, &constraints);
 
-    const full = try gen.generateDDL(table);
+    const full = try schema_helpers.fullDDL(allocator, table);
     defer allocator.free(full);
 
-    // Every managed index statement appears in generateDDL exactly once.
+    // Every managed index statement appears in the full DDL exactly once.
     try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, full, "CREATE INDEX"));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, full, "CREATE UNIQUE INDEX"));
 

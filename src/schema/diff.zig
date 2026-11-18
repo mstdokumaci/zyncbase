@@ -156,13 +156,6 @@ pub const TableDiff = struct {
         return result;
     }
 
-    pub fn hasField(self: *const TableDiff, kind: FieldChangeKind) bool {
-        for (self.field_changes) |c| {
-            if (c.kind == kind) return true;
-        }
-        return false;
-    }
-
     pub fn isEmpty(self: *const TableDiff) bool {
         return self.action == .unchanged and !self.indexes_changed and
             self.table_changes.len == 0 and self.field_changes.len == 0;
@@ -173,10 +166,6 @@ pub const SchemaDiff = struct {
     allocator: Allocator,
     /// Tables present in the target (target order), then removed tables (source order).
     tables: []TableDiff,
-    version_changed: bool,
-    presence_changed: bool,
-    actions_changed: bool,
-    metadata_changed: bool,
 
     pub fn deinit(self: *SchemaDiff) void {
         for (self.tables) |t| {
@@ -202,21 +191,6 @@ pub const SchemaDiff = struct {
             if (!t.isEmpty()) return false;
         }
         return true;
-    }
-
-    /// True when the step must touch tables or indexes.
-    pub fn hasPhysicalChanges(self: *const SchemaDiff) bool {
-        for (self.tables) |t| {
-            if (t.action != .unchanged or t.indexes_changed) return true;
-        }
-        return false;
-    }
-
-    pub fn table(self: *const SchemaDiff, name: []const u8) ?*const TableDiff {
-        for (self.tables) |*t| {
-            if (std.mem.eql(u8, t.name, name)) return t;
-        }
-        return null;
     }
 };
 
@@ -261,10 +235,6 @@ pub fn diff(allocator: Allocator, from: ?*const Schema, to: *const Schema) !Sche
     return .{
         .allocator = allocator,
         .tables = try tables.toOwnedSlice(allocator),
-        .version_changed = if (from) |f| !std.mem.eql(u8, f.version, to.version) else true,
-        .presence_changed = if (from) |f| !presenceEqual(f, to) else true,
-        .actions_changed = if (from) |f| !actionsEqual(f, to) else to.actions.len > 0,
-        .metadata_changed = if (from) |f| !metadataEqual(f.metadata, to.metadata) else to.metadata != null,
     };
 }
 
@@ -574,43 +544,4 @@ fn sameUniqueFields(a_table: *const Table, a: types.UniqueConstraint, b_table: *
 fn metadataEqual(a: ?types.Metadata, b: ?types.Metadata) bool {
     if (a == null or b == null) return a == null and b == null;
     return std.mem.eql(u8, a.?.json, b.?.json);
-}
-
-fn presenceEqual(a: *const Schema, b: *const Schema) bool {
-    return presenceFieldsEqual(a.presence_user_fields, b.presence_user_fields) and
-        presenceFieldsEqual(a.presence_shared_fields, b.presence_shared_fields);
-}
-
-fn presenceFieldsEqual(a: []const types.PresenceField, b: []const types.PresenceField) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |fa, fb| {
-        if (!std.mem.eql(u8, fa.name, fb.name) or fa.declared_type != fb.declared_type) return false;
-        if (compareConstraints(fa.constraints, fb.constraints) != .same) return false;
-    }
-    return true;
-}
-
-fn actionsEqual(a: *const Schema, b: *const Schema) bool {
-    if (a.actions.len != b.actions.len) return false;
-    for (a.actions, b.actions) |aa, ab| {
-        if (!std.mem.eql(u8, aa.name, ab.name) or aa.scope != ab.scope) return false;
-        if (!actionFieldsEqual(aa.params, ab.params)) return false;
-        if ((aa.returns == null) != (ab.returns == null)) return false;
-        if (aa.returns) |ra| if (!actionFieldsEqual(ra, ab.returns.?)) return false;
-        if (aa.claims.len != ab.claims.len) return false;
-        for (aa.claims, ab.claims) |ca, cb| {
-            if (!std.mem.eql(u8, ca, cb)) return false;
-        }
-    }
-    return true;
-}
-
-fn actionFieldsEqual(a: []const types.ActionField, b: []const types.ActionField) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |fa, fb| {
-        if (!std.mem.eql(u8, fa.name, fb.name) or fa.declared_type != fb.declared_type) return false;
-        if (fa.items_type != fb.items_type or fa.required != fb.required) return false;
-        if (compareConstraints(fa.constraints, fb.constraints) != .same) return false;
-    }
-    return true;
 }

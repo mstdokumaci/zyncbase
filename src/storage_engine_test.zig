@@ -15,7 +15,6 @@ const sth = @import("storage_engine_test_helpers.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const tth = @import("typed/test_helpers.zig");
 const typed = @import("typed/types.zig");
-const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 const MessageType = @import("wire/message_type.zig").MessageType;
 
 const testing = std.testing;
@@ -2272,9 +2271,8 @@ test "foreign key startup rejects legacy orphaned rows" {
     );
     defer engine.deinit();
 
-    var gen = DDLGenerator.init(allocator);
     for (schema.tables) |table| {
-        const ddl = try gen.generateDDL(table);
+        const ddl = try schema_helpers.fullDDL(allocator, table);
         defer allocator.free(ddl);
         const ddl_z = try allocator.dupeZ(u8, ddl);
         defer allocator.free(ddl_z);

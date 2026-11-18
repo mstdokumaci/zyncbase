@@ -142,26 +142,6 @@ pub const DDLGenerator = struct {
         return .{ .allocator = allocator };
     }
 
-    /// Generate strict DDL for a table and all managed indexes.
-    /// Returns a single string with all statements separated by ";\n".
-    /// Caller owns the returned slice.
-    pub fn generateDDL(self: *DDLGenerator, table: schema_types.Table) ![]const u8 {
-        var buf = SqlBuf.init();
-        defer buf.deinit(self.allocator);
-
-        try emitCreateTable(self.allocator, &buf, table);
-
-        var iter = ManagedIndexIterator.init(&table);
-        while (iter.next()) |managed_index| {
-            try buf.appendSlice(self.allocator, ";\n");
-            try emitManagedIndex(self.allocator, &buf, &table, managed_index);
-        }
-
-        try buf.append(self.allocator, ';');
-
-        return buf.toOwnedSlice(self.allocator);
-    }
-
     /// Generate only the `CREATE TABLE ... STRICT;` statement, without managed
     /// indexes. Migration steps create indexes after loading data. Caller owns the result.
     pub fn generateCreateTable(self: *DDLGenerator, table: schema_types.Table) ![]const u8 {
@@ -188,7 +168,7 @@ pub const DDLGenerator = struct {
     /// Generate `ALTER TABLE ... ADD COLUMN ...;` for an optional user field.
     /// Reference fields carry a column-level `REFERENCES` clause, which SQLite
     /// reports through `PRAGMA foreign_key_list` exactly like the table-level
-    /// constraint emitted by `generateDDL`. SQLite cannot add a `NOT NULL`
+    /// constraint emitted by `generateCreateTable`. SQLite cannot add a `NOT NULL`
     /// column without a default, so required fields need a table rebuild.
     /// Caller owns the result.
     pub fn generateAddColumn(self: *DDLGenerator, table: schema_types.Table, field: schema_types.Field) ![]const u8 {

@@ -424,7 +424,6 @@ fn runTransaction(
 
     try state.ensureSystemTables(db);
     for (plan.steps.items, 0..) |*planned, i| {
-        const started = std.Io.Clock.awake.now(io).toMicroseconds();
         var developer: ?DeveloperRun = if (planned.migration) |m| .{ .io = io, .allocator = allocator, .migration = m } else null;
         const fill: step.Fill = if (developer) |*d|
             .{ .developer = .{ .context = d, .run = DeveloperRun.run } }
@@ -440,7 +439,6 @@ fn runTransaction(
             .fill = fill,
             .repair_indexes = if (i == 0) plan.repair else &.{},
         }, diag);
-        const duration = std.Io.Clock.awake.now(io).toMicroseconds() - started;
 
         if (planned.migration) |m| {
             try state.insertLedger(io, db, .{
@@ -448,11 +446,8 @@ fn runTransaction(
                 .mode = .applied,
                 .before_version = m.before.schema.version,
                 .after_version = m.after.schema.version,
-                .before_hash = &m.before.hash,
                 .after_hash = &m.after.hash,
                 .sql_hash = &m.sql_hash,
-                .duration_us = duration,
-                .report = try std.json.Stringify.valueAlloc(arena, .{ .tables = result.tables }, .{}),
             });
             report.migrations_applied += 1;
         }
@@ -466,11 +461,8 @@ fn runTransaction(
             .mode = .baseline,
             .before_version = m.before.schema.version,
             .after_version = m.after.schema.version,
-            .before_hash = &m.before.hash,
             .after_hash = &m.after.hash,
             .sql_hash = &m.sql_hash,
-            .duration_us = 0,
-            .report = "{}",
         });
         report.migrations_baselined += 1;
     }

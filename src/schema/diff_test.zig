@@ -18,6 +18,20 @@ fn wrap(comptime version: []const u8, comptime tasks: []const u8) []const u8 {
     return "{\"version\":\"" ++ version ++ "\",\"store\":{\"users\":{\"fields\":{}},\"projects\":{\"fields\":{\"name\":{\"type\":\"string\"}}},\"tasks\":" ++ tasks ++ "}}";
 }
 
+fn tableOf(d: *const schema_diff.SchemaDiff, name: []const u8) ?*const schema_diff.TableDiff {
+    for (d.tables) |*t| {
+        if (std.mem.eql(u8, t.name, name)) return t;
+    }
+    return null;
+}
+
+fn hasPhysicalChanges(d: *const schema_diff.SchemaDiff) bool {
+    for (d.tables) |t| {
+        if (t.action != .unchanged or t.indexes_changed) return true;
+    }
+    return false;
+}
+
 const base_tasks =
     \\{"fields":{
     \\  "title":{"type":"string","minLength":1,"maxLength":100},
@@ -121,7 +135,7 @@ test "diff: every field change is classified with its bucket and table action" {
         var d = try schema_diff.diff(allocator, &from, &to);
         defer d.deinit();
 
-        const tasks = d.table("tasks") orelse return error.TestExpectedValue;
+        const tasks = tableOf(&d, "tasks") orelse return error.TestExpectedValue;
         var found = false;
         for (tasks.field_changes) |change| {
             if (change.kind == case.kind and std.mem.eql(u8, change.name, case.field)) found = true;
@@ -132,7 +146,7 @@ test "diff: every field change is classified with its bucket and table action" {
             return error.TestUnexpectedResult;
         }
         try std.testing.expectEqual(case.bucket, d.bucket());
-        try std.testing.expect(d.table("projects").?.isEmpty());
+        try std.testing.expect(tableOf(&d, "projects").?.isEmpty());
     }
 }
 
@@ -144,8 +158,7 @@ test "diff: identical schemas produce no changes" {
     var d = try schema_diff.diff(allocator, &a, &b);
     defer d.deinit();
     for (d.tables) |*t| try std.testing.expect(t.isEmpty());
-    try std.testing.expect(d.version_changed);
-    try std.testing.expect(!d.hasPhysicalChanges());
+    try std.testing.expect(!hasPhysicalChanges(&d));
     try std.testing.expectEqual(Bucket.auto, d.bucket());
 }
 
@@ -160,7 +173,7 @@ test "diff: table-level changes" {
         defer to.deinit();
         var d = try schema_diff.diff(allocator, &from, &to);
         defer d.deinit();
-        const tasks = d.table("tasks") orelse return error.TestExpectedValue;
+        const tasks = tableOf(&d, "tasks") orelse return error.TestExpectedValue;
         try std.testing.expectEqual(TableAction.remove, tasks.action);
         try std.testing.expectEqualSlices(TableChangeKind, &.{.removed}, tasks.table_changes);
         try std.testing.expectEqual(Bucket.migration_required, d.bucket());
@@ -176,7 +189,7 @@ test "diff: table-level changes" {
         defer smaller.deinit();
         var d = try schema_diff.diff(allocator, &smaller, &to);
         defer d.deinit();
-        const projects = d.table("projects") orelse return error.TestExpectedValue;
+        const projects = tableOf(&d, "projects") orelse return error.TestExpectedValue;
         try std.testing.expectEqual(TableAction.rebuild, projects.action);
         try std.testing.expectEqualSlices(TableChangeKind, &.{.namespaced_changed}, projects.table_changes);
         try std.testing.expectEqual(Bucket.migration_required, d.bucket());
@@ -188,8 +201,8 @@ test "diff: table-level changes" {
         defer smaller.deinit();
         var d = try schema_diff.diff(allocator, &smaller, &from);
         defer d.deinit();
-        try std.testing.expectEqual(TableAction.create, d.table("tasks").?.action);
-        try std.testing.expectEqual(TableAction.create, d.table("projects").?.action);
+        try std.testing.expectEqual(TableAction.create, tableOf(&d, "tasks").?.action);
+        try std.testing.expectEqual(TableAction.create, tableOf(&d, "projects").?.action);
         try std.testing.expectEqual(Bucket.auto, d.bucket());
     }
 }
@@ -213,7 +226,7 @@ test "diff: unique constraints tighten when added or changed and loosen when rem
         defer to.deinit();
         var d = try schema_diff.diff(allocator, &from, &to);
         defer d.deinit();
-        const t = d.table("t") orelse return error.TestExpectedValue;
+        const t = tableOf(&d, "t") orelse return error.TestExpectedValue;
         try std.testing.expectEqualSlices(TableChangeKind, &.{case.kind}, t.table_changes);
         try std.testing.expect(t.indexes_changed);
         try std.testing.expectEqual(TableAction.unchanged, t.action);
@@ -231,8 +244,8 @@ test "diff: field order changes are not physical changes" {
     defer b.deinit();
     var d = try schema_diff.diff(allocator, &a, &b);
     defer d.deinit();
-    try std.testing.expect(!d.hasPhysicalChanges());
-    try std.testing.expect(d.table("t").?.isEmpty());
+    try std.testing.expect(!hasPhysicalChanges(&d));
+    try std.testing.expect(tableOf(&d, "t").?.isEmpty());
 }
 
 test "diff: fresh database creates every table" {
@@ -256,8 +269,6 @@ test "diff: presence and action changes are snapshot-only" {
     defer b.deinit();
     var d = try schema_diff.diff(allocator, &a, &b);
     defer d.deinit();
-    try std.testing.expect(d.presence_changed);
-    try std.testing.expect(d.actions_changed);
-    try std.testing.expect(!d.hasPhysicalChanges());
+    try std.testing.expect(!hasPhysicalChanges(&d));
     try std.testing.expectEqual(Bucket.auto, d.bucket());
 }
