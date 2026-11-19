@@ -15,6 +15,7 @@ const schema_diff = @import("../schema/diff.zig");
 const schema_parse = @import("../schema/parse.zig");
 const connection = @import("../storage_engine/connection.zig");
 const storage_sql = @import("../storage_engine/sql.zig");
+const catalog = @import("catalog.zig");
 const scaffold = @import("scaffold.zig");
 const source = @import("source.zig");
 const startup = @import("startup.zig");
@@ -172,6 +173,13 @@ fn printLines(out: *Writer, diag: *const Diagnostics, indent: []const u8) !void 
 
 fn dirOf(path: []const u8) []const u8 {
     return std.fs.path.dirname(path) orelse ".";
+}
+
+/// Lexical path comparison: resolves `.`/`..` and relative paths.
+fn sameDatabasePath(arena: Allocator, a: []const u8, b: []const u8) !bool {
+    const resolved_a = try std.fs.path.resolve(arena, &.{a});
+    const resolved_b = try std.fs.path.resolve(arena, &.{b});
+    return std.mem.eql(u8, resolved_a, resolved_b);
 }
 
 fn dataDir(ctx: Context, cmd: Command) []const u8 {
@@ -343,6 +351,8 @@ fn apply(ctx: Context, cmd: Command) !void {
     const arena = arena_state.allocator();
 
     const db_path = cmd.db orelse try backup.dbPath(arena, dataDir(ctx, cmd));
+    const configured_db = try backup.dbPath(arena, dataDir(ctx, cmd));
+    const is_configured = if (cmd.db == null) true else try sameDatabasePath(arena, db_path, configured_db);
     var lock = DataLock.acquire(ctx.io, ctx.allocator, dirOf(db_path)) catch |err| {
         if (err == error.DataDirLocked) {
             try out.print("{s} is in use by another zyncbase process. Stop the server first.\n", .{dirOf(db_path)});
@@ -350,17 +360,33 @@ fn apply(ctx: Context, cmd: Command) !void {
         return err;
     };
     defer lock.release(ctx.io);
-    if (cmd.db != null and !try fileExists(ctx.io, db_path)) {
-        try out.print("No database at {s}.\n", .{db_path});
-        return error.DatabaseNotFound;
-    }
-    if (cmd.db == null) {
+    if (is_configured) {
         try backup.recoverInterruptedRestore(ctx.io, ctx.allocator, dataDir(ctx, cmd));
-        try backup.recoverInterruptedReset(ctx.io, ctx.allocator, dataDir(ctx, cmd));
+        if (try backup.recoverInterruptedReset(ctx.io, ctx.allocator, dataDir(ctx, cmd))) |recovered| {
+            var info = recovered;
+            info.deinit(ctx.allocator);
+        }
+    } else {
+        if (!try fileExists(ctx.io, db_path)) {
+            try out.print("No database at {s}.\n", .{db_path});
+            return error.DatabaseNotFound;
+        }
+        if (try backup.recoveryPending(ctx.io, ctx.allocator, db_path)) {
+            try out.print("Cannot migrate {s}: a restore or reset recovery is pending. Run with the configured data directory, or finish recovery first.\n", .{db_path});
+            return error.RecoveryPending;
+        }
     }
 
-    var db = try openFile(ctx.allocator, db_path, true, cmd.db == null);
+    var db = try openFile(ctx.allocator, db_path, true, is_configured);
     defer db.deinit();
+    if (!try state.hasSchemaTable(&db)) {
+        const tables = try catalog.listUserTables(arena, &db);
+        if (tables.len > 0) {
+            try out.print("Cannot migrate {s}: the database has tables but no ZyncBase schema record (first: \"{s}\").\n", .{ db_path, tables[0] });
+            try out.print("Nothing was changed.\n", .{});
+            return error.UnrecognizedDatabase;
+        }
+    }
     try connection.configureDatabase(&db, true, ctx.config.storage.synchronous);
     try storage_sql.ensureNamespaceTable(&db);
 

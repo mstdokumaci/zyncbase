@@ -416,7 +416,8 @@ fn runTransaction(
 
     // Both pragmas must change outside a transaction; restore them on every path.
     _ = try db.pragma(void, .{}, "foreign_keys", "off");
-    defer if (foreign_keys_were_on) {
+    var restore_foreign_keys = foreign_keys_were_on;
+    defer if (restore_foreign_keys) {
         _ = db.pragma(void, .{}, "foreign_keys", "on") catch |err| {
             std.log.err("Failed to restore foreign-key enforcement after migration: {}", .{err});
         };
@@ -495,12 +496,20 @@ fn runTransaction(
     if (options.dry_run) {
         try db.exec("ROLLBACK", .{}, .{});
         open = false;
+        if (restore_foreign_keys) {
+            _ = try db.pragma(void, .{}, "foreign_keys", "on");
+            restore_foreign_keys = false;
+        }
         for (logs.items) |entry| logStep(entry.label, entry.result, true);
         std.log.info("Dry run: rolled back {d} step(s).", .{report.steps});
         return;
     }
     try db.exec("COMMIT", .{}, .{});
     open = false;
+    if (restore_foreign_keys) {
+        _ = try db.pragma(void, .{}, "foreign_keys", "on");
+        restore_foreign_keys = false;
+    }
     for (logs.items) |entry| logStep(entry.label, entry.result, false);
 
     if (report.rebuilt) {

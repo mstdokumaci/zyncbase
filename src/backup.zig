@@ -214,7 +214,7 @@ pub fn reset(
     var lock = try DataLock.acquire(io, allocator, data_dir);
     defer lock.release(io);
     try recoverInterruptedRestore(io, allocator, data_dir);
-    try recoverInterruptedReset(io, allocator, data_dir);
+    if (try recoverInterruptedReset(io, allocator, data_dir)) |recovered| return recovered;
 
     const db_path = try dbPath(allocator, data_dir);
     defer allocator.free(db_path);
@@ -242,10 +242,15 @@ pub fn reset(
         for (sidecars) |suffix| {
             try deleteOrFail(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
         }
+        try deleteResetJournal(io, allocator, db_path);
+        return .{ .outcome = .deleted, .moved_to = null };
     }
-    try deleteResetJournal(io, allocator, db_path);
-    if (!keep_safety_copy) return .{ .outcome = .deleted, .moved_to = null };
-    return .{ .outcome = .moved, .moved_to = try allocator.dupe(u8, aside) };
+    const owned = try allocator.dupe(u8, aside);
+    deleteResetJournal(io, allocator, db_path) catch |err| {
+        allocator.free(owned);
+        return err;
+    };
+    return .{ .outcome = .moved, .moved_to = owned };
 }
 
 /// Validate a snapshot. `full` runs `PRAGMA integrity_check`; otherwise
@@ -275,7 +280,10 @@ pub fn restore(
     defer lock.release(io);
 
     try recoverInterruptedRestore(io, allocator, data_dir);
-    try recoverInterruptedReset(io, allocator, data_dir);
+    if (try recoverInterruptedReset(io, allocator, data_dir)) |recovered| {
+        var info = recovered;
+        info.deinit(allocator);
+    }
     try verifyFile(io, allocator, backup_path, true);
     try rejectWalSidecar(io, allocator, backup_path);
 
@@ -419,12 +427,13 @@ pub fn recoverInterruptedRestore(
 
 /// Complete or roll back a reset that was interrupted while moving the
 /// database and sidecars. Must run while holding the exclusive data lock and
-/// before the database is opened or replaced.
-pub fn recoverInterruptedReset(io: std.Io, allocator: std.mem.Allocator, data_dir: []const u8) !void {
+/// before the database is opened or replaced. Returns the completed reset when
+/// recovery finished one; null when it rolled back or found nothing to do.
+pub fn recoverInterruptedReset(io: std.Io, allocator: std.mem.Allocator, data_dir: []const u8) !?ResetInfo {
     const db_path = try dbPath(allocator, data_dir);
     defer allocator.free(db_path);
     var stamp_buf: [utc_timestamp_len]u8 = undefined;
-    const journal = try readResetJournal(io, allocator, db_path, &stamp_buf) orelse return;
+    const journal = try readResetJournal(io, allocator, db_path, &stamp_buf) orelse return null;
 
     var aside_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const aside = try std.fmt.bufPrint(&aside_buf, "{s}.pre-reset-{s}", .{ db_path, journal.stamp });
@@ -446,7 +455,7 @@ pub fn recoverInterruptedReset(io: std.Io, allocator: std.mem.Allocator, data_di
         }
         try syncParentDir(io, db_path);
         try deleteResetJournal(io, allocator, db_path);
-        return;
+        return null;
     }
     if (!aside_db) {
         // Nothing is left at either path. A no-safety reset may have deleted
@@ -457,7 +466,7 @@ pub fn recoverInterruptedReset(io: std.Io, allocator: std.mem.Allocator, data_di
             }
         }
         try deleteResetJournal(io, allocator, db_path);
-        return;
+        return null;
     }
 
     // The database reached the safety path; finish the remaining sidecars.
@@ -471,8 +480,15 @@ pub fn recoverInterruptedReset(io: std.Io, allocator: std.mem.Allocator, data_di
         for (sidecars) |suffix| {
             try deleteOrFail(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
         }
+        try deleteResetJournal(io, allocator, db_path);
+        return .{ .outcome = .deleted, .moved_to = null };
     }
-    try deleteResetJournal(io, allocator, db_path);
+    const owned = try allocator.dupe(u8, aside);
+    deleteResetJournal(io, allocator, db_path) catch |err| {
+        allocator.free(owned);
+        return err;
+    };
+    return .{ .outcome = .moved, .moved_to = owned };
 }
 
 fn clearRestoreArtifacts(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !void {
@@ -678,6 +694,17 @@ fn deleteResetJournal(io: std.Io, allocator: std.mem.Allocator, db_path: []const
 
 fn resetJournalPath(allocator: std.mem.Allocator, db_path: []const u8) ![]u8 {
     return std.fmt.allocPrint(allocator, "{s}.reset-journal", .{db_path});
+}
+
+fn resetJournalExists(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !bool {
+    const journal_path = try resetJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+    return fileExists(io, journal_path);
+}
+
+/// True when a restore or reset journal is waiting next to `db_path`.
+pub fn recoveryPending(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !bool {
+    return (try restoreJournalExists(io, allocator, db_path)) or (try resetJournalExists(io, allocator, db_path));
 }
 
 fn fileExists(io: std.Io, path: []const u8) !bool {

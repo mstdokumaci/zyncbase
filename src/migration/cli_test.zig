@@ -555,6 +555,73 @@ test "migrate cli: an explicit --db must exist and is not recreated" {
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, missing, .{}));
 }
 
+test "migrate cli: apply rejects an unrelated explicit database without writing" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    const other_path = try std.fs.path.join(allocator, &.{ h.root, "other.db" });
+    defer allocator.free(other_path);
+    // zwanzig-disable-next-line: sentinel-alloc
+    const other_path_z = try allocator.dupeZ(u8, other_path);
+    defer allocator.free(other_path_z);
+
+    {
+        var other = try sqlite.Db.init(.{ .mode = .{ .File = other_path_z }, .open_flags = .{ .write = true, .create = true } });
+        defer other.deinit();
+        try other.exec("CREATE TABLE other (id INTEGER PRIMARY KEY)", .{}, .{});
+    }
+
+    try std.testing.expectError(error.UnrecognizedDatabase, h.run(&.{ "apply", "--db", other_path }));
+
+    var other = try sqlite.Db.init(.{ .mode = .{ .File = other_path_z }, .open_flags = .{ .write = false } });
+    defer other.deinit();
+    const tables = try other.one(i64, "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'", .{}, .{});
+    try std.testing.expectEqual(@as(?i64, 1), tables);
+    const namespace_tables = try other.one(i64, "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = '_zync_namespaces'", .{}, .{});
+    try std.testing.expectEqual(@as(?i64, 0), namespace_tables);
+}
+
+test "migrate cli: apply recovers a configured explicit database" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+
+    var stamp_buf: [backup.utc_timestamp_len]u8 = undefined;
+    const stamp = backup.utcTimestamp(std.testing.io, &stamp_buf);
+    const journal_path = try std.fmt.allocPrint(allocator, "{s}.reset-journal", .{h.db_path});
+    defer allocator.free(journal_path);
+    const journal = try std.fmt.allocPrint(allocator, "zyncbase-reset-v1\n{s}\n1\n", .{stamp});
+    defer allocator.free(journal);
+    const aside = try std.fmt.allocPrint(allocator, "{s}.pre-reset-{s}", .{ h.db_path, stamp });
+    defer allocator.free(aside);
+    const cwd = std.Io.Dir.cwd();
+    try cwd.writeFile(std.testing.io, .{ .sub_path = journal_path, .data = journal });
+    try cwd.rename(h.db_path, cwd, aside, std.testing.io);
+
+    try h.runOk(&.{ "apply", "--db", h.db_path });
+    try h.expectAppliedVersion("1.0.0");
+    try cwd.access(std.testing.io, aside, .{});
+}
+
+test "migrate cli: apply rejects pending recovery for another explicit database" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    const other_path = try std.fs.path.join(allocator, &.{ h.root, "other.db" });
+    defer allocator.free(other_path);
+    // zwanzig-disable-next-line: sentinel-alloc
+    const other_path_z = try allocator.dupeZ(u8, other_path);
+    defer allocator.free(other_path_z);
+    {
+        var other = try sqlite.Db.init(.{ .mode = .{ .File = other_path_z }, .open_flags = .{ .write = true, .create = true } });
+        defer other.deinit();
+        try other.exec("CREATE TABLE other (id INTEGER PRIMARY KEY)", .{}, .{});
+    }
+    const journal_path = try std.fmt.allocPrint(allocator, "{s}.reset-journal", .{other_path});
+    defer allocator.free(journal_path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = journal_path, .data = "pending" });
+
+    try std.testing.expectError(error.RecoveryPending, h.run(&.{ "apply", "--db", other_path }));
+}
+
 test "migrate cli: a max major version reports that it cannot be raised" {
     const vmax =
         \\{"version":"4294967295.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"priority":{"type":"integer"}},"required":["title"]}}}

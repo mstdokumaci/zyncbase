@@ -238,13 +238,20 @@ test "backup: reset completes an interrupted keep move" {
 
     var info = try backup.reset(std.testing.io, allocator, data_dir, true);
     defer info.deinit(allocator);
-    try std.testing.expectEqual(backup.ResetOutcome.absent, info.outcome);
+    try std.testing.expectEqual(backup.ResetOutcome.moved, info.outcome);
+    const moved = info.moved_to orelse return error.TestExpectedValue;
+    try std.testing.expectEqualStrings(aside, moved);
     try cwd.access(std.testing.io, aside, .{});
     try cwd.access(std.testing.io, aside_wal, .{});
     try std.testing.expectError(error.FileNotFound, cwd.access(std.testing.io, wal_path, .{}));
     const journal_path = try std.fmt.allocPrint(allocator, "{s}.reset-journal", .{db_path});
     defer allocator.free(journal_path);
     try std.testing.expectError(error.FileNotFound, cwd.access(std.testing.io, journal_path, .{}));
+
+    // The completed reset is not repeated.
+    var again = try backup.reset(std.testing.io, allocator, data_dir, true);
+    defer again.deinit(allocator);
+    try std.testing.expectEqual(backup.ResetOutcome.absent, again.outcome);
 }
 
 test "backup: reset rolls back an interrupted partial move" {
@@ -315,7 +322,11 @@ test "backup: reset recovery finishes a no-safety deletion" {
     const cwd = std.Io.Dir.cwd();
     try cwd.rename(db_path, cwd, aside, std.testing.io);
 
-    try backup.recoverInterruptedReset(std.testing.io, allocator, data_dir);
+    const recovered = (try backup.recoverInterruptedReset(std.testing.io, allocator, data_dir)) orelse return error.TestExpectedValue;
+    var info = recovered;
+    defer info.deinit(allocator);
+    try std.testing.expectEqual(backup.ResetOutcome.deleted, info.outcome);
+    try std.testing.expect(info.moved_to == null);
     try std.testing.expectError(error.FileNotFound, cwd.access(std.testing.io, aside, .{}));
     const journal_path = try std.fmt.allocPrint(allocator, "{s}.reset-journal", .{db_path});
     defer allocator.free(journal_path);
@@ -351,7 +362,7 @@ test "backup: reset recovery finishes a partial no-safety deletion" {
     try cwd.writeFile(std.testing.io, .{ .sub_path = aside_wal, .data = "pending" });
     try cwd.deleteFile(std.testing.io, aside);
 
-    try backup.recoverInterruptedReset(std.testing.io, allocator, data_dir);
+    _ = try backup.recoverInterruptedReset(std.testing.io, allocator, data_dir);
     try std.testing.expectError(error.FileNotFound, cwd.access(std.testing.io, aside_wal, .{}));
     const journal_path = try std.fmt.allocPrint(allocator, "{s}.reset-journal", .{db_path});
     defer allocator.free(journal_path);
