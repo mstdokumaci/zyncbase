@@ -119,8 +119,8 @@ Main server configuration file.
   "performance": {
     "messageBufferSize": 1000,
     "batchWrites": true,
-    "batchSize": 200,
-    "batchTimeout": 10,
+    "batchSize": 500,
+    "batchTimeout": 8,
     "presenceBatchTimeoutMs": 8,
     "presenceBatchMaxUpdates": 512,
     "statementCacheSize": 100
@@ -323,8 +323,8 @@ Performance tuning.
   "performance": {
     "messageBufferSize": 1000,
     "batchWrites": true,
-    "batchSize": 200,
-    "batchTimeout": 10,
+    "batchSize": 500,
+    "batchTimeout": 8,
     "presenceBatchTimeoutMs": 8,
     "presenceBatchMaxUpdates": 512,
     "statementCacheSize": 100
