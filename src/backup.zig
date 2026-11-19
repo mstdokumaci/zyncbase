@@ -230,7 +230,7 @@ pub fn reset(
 
     if (!keep_safety_copy) {
         for (sidecars) |suffix| {
-            deleteQuietly(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
+            try deleteOrFail(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
         }
         return .{ .outcome = .deleted, .moved_to = null };
     }
@@ -583,5 +583,16 @@ fn deleteQuietly(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => std.log.debug("could not remove {s}: {}", .{ path, err }),
+    };
+}
+
+/// Deletes a file that reset must not leave behind. Reports which path failed.
+fn deleteOrFail(io: std.Io, path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => {
+            std.log.err("reset could not remove {s}: {}", .{ path, err });
+            return err;
+        },
     };
 }

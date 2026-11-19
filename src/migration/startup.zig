@@ -491,8 +491,10 @@ fn runTransaction(
     }
 
     if (options.dry_run) {
+        try db.exec("ROLLBACK", .{}, .{});
+        open = false;
         for (logs.items) |entry| logStep(entry.label, entry.result, true);
-        std.log.info("Dry run: rolling back {d} step(s).", .{report.steps});
+        std.log.info("Dry run: rolled back {d} step(s).", .{report.steps});
         return;
     }
     try db.exec("COMMIT", .{}, .{});

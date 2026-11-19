@@ -1981,6 +1981,46 @@ test "storage: schema update integrity" {
     }
 }
 
+// Property: a schema snapshot written for a code-built schema reparses on restart
+test "storage: nested presence survives a serialized snapshot restart" {
+    const allocator = std.heap.smp_allocator;
+    var context = try sth.TestContext.init(allocator, "storage-presence-restart");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+
+    const v1 =
+        \\{"version":"1.0.0","presence":{"user":{"profile":{"type":"object","fields":{"status":{"type":"string"}}}}},"store":{"test":{"fields":{"val":{"type":"string"}}}}}
+    ;
+    var parsed = try schema_parse.initFromJson(allocator, v1);
+    defer parsed.deinit();
+    const snapshot = try schema_helpers.schemaJsonForTest(allocator, &parsed);
+    defer allocator.free(snapshot);
+    try testing.expect(std.mem.indexOf(u8, snapshot, "__") == null);
+
+    {
+        var ctx: sth.EngineTestContext = undefined;
+        try sth.setupEngineFromJsonWithDir(&ctx, allocator, test_dir, snapshot, .{ .in_memory = false });
+        defer ctx.deinitNoCleanup();
+
+        try ctx.insertText("test", 1, 1, "val", "kept");
+        try ctx.engine.flushPendingWrites();
+    }
+
+    const v2 =
+        \\{"version":"1.1.0","presence":{"user":{"profile":{"type":"object","fields":{"status":{"type":"string"}}}}},"store":{"test":{"fields":{"val":{"type":"string"},"extra":{"type":"integer"}}}}}
+    ;
+    {
+        var ctx: sth.EngineTestContext = undefined;
+        try sth.setupEngineFromJsonWithDir(&ctx, allocator, test_dir, v2, .{ .in_memory = false });
+        defer ctx.deinitNoCleanup();
+
+        const test_table = try ctx.table("test");
+        const record = (try test_table.readDoc(allocator, 1, 1)) orelse return error.TestExpectedValue;
+        defer record.deinit(allocator);
+        _ = try sth.expectFieldString(record, test_table.metadata, "val", "kept");
+    }
+}
+
 // Fuzzy testing of random operations to ensure no crashes
 test "storage: random operations fuzzing" {
     const allocator = std.heap.smp_allocator;

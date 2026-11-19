@@ -1057,7 +1057,8 @@ Startup is all or nothing. Either the database reaches the new schema, or it sta
 
 When `migration.sql` runs:
 
-- Tables that changed shape are empty and already have the new shape. Their old rows are in `"_zync_prev_<table>"`.
+- Rebuilt tables are empty and already have the new shape. Their old rows are in `"_zync_prev_<table>"`.
+- Altered tables keep their rows; new columns start as `NULL`.
 - Removed tables exist only as `"_zync_prev_<table>"`.
 - Every other table is already up to date, and you can read or update it.
 - Foreign keys are off and cascades don't run. Integrity is checked once at the end.
@@ -1088,8 +1089,8 @@ Helper functions available in `migration.sql`:
 Change a type:
 
 ```sql
-INSERT INTO "tasks" ("id", "namespace_id", "owner_id", "title", "priority", "created_at", "updated_at")
-SELECT "id", "namespace_id", "owner_id", "title",
+INSERT INTO "tasks" ("id", "namespace_id", "owner_id", "title", "status", "priority", "created_at", "updated_at")
+SELECT "id", "namespace_id", "owner_id", "title", "status",
        CASE "priority" WHEN 1 THEN 'low' WHEN 2 THEN 'medium' ELSE 'high' END,
        "created_at", "updated_at"
 FROM "_zync_prev_tasks";

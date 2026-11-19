@@ -187,7 +187,9 @@ pub fn execute(arena: Allocator, io: std.Io, db: *sqlite.Db, input: Input, diag:
         if (t.action != .unchanged) reports[i].rows_after = try countRows(arena, db, t.name);
 
         const developer_wrote = containsName(written, t.name);
-        if (developer_wrote or (input.fill == .developer and (t.action == .create or t.action == .rebuild))) {
+        const full_validation = developer_wrote or t.action == .rebuild or
+            (input.fill == .developer and t.action == .create);
+        if (full_validation) {
             violations += try validate.validateTable(arena, db, to, null, diag);
         } else {
             const tightened = try tightenedFields(arena, t);

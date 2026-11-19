@@ -5,6 +5,7 @@ const std = @import("std");
 
 const sqlite = @import("sqlite");
 
+const backup = @import("../backup.zig");
 const cli = @import("cli.zig");
 const ConfigLoader = @import("../config/loader.zig").ConfigLoader;
 const Config = @import("../config/state.zig").Config;
@@ -164,6 +165,43 @@ const Harness = struct {
         return found orelse error.TestExpectedValue;
     }
 
+    /// The newest snapshot written for `id`. Owned by the caller.
+    fn latestSnapshot(self: *Harness, id: []const u8) ![]u8 {
+        const dir_path = std.fs.path.dirname(self.db_path) orelse ".";
+        var dir = try std.Io.Dir.cwd().openDir(std.testing.io, dir_path, .{ .iterate = true });
+        defer dir.close(std.testing.io);
+        var prefix_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const prefix = try std.fmt.bufPrint(&prefix_buf, "{s}.pre-migration-{s}-", .{ std.fs.path.basename(self.db_path), id });
+        var found: ?[]u8 = null;
+        errdefer if (found) |path| allocator.free(path);
+        var iter = dir.iterate();
+        while (try iter.next(std.testing.io)) |entry| {
+            if (entry.kind != .file or !std.mem.startsWith(u8, entry.name, prefix)) continue;
+            if (found) |current| {
+                const keep_current = std.mem.order(u8, std.fs.path.basename(current), entry.name) == .gt;
+                if (keep_current) continue;
+                allocator.free(current);
+                found = null;
+            }
+            found = try std.fs.path.join(allocator, &.{ dir_path, entry.name });
+        }
+        return found orelse error.TestExpectedValue;
+    }
+
+    fn deleteSnapshots(self: *Harness) !void {
+        const dir_path = std.fs.path.dirname(self.db_path) orelse ".";
+        var dir = try std.Io.Dir.cwd().openDir(std.testing.io, dir_path, .{ .iterate = true });
+        defer dir.close(std.testing.io);
+        var prefix_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const prefix = try std.fmt.bufPrint(&prefix_buf, "{s}.pre-migration-", .{std.fs.path.basename(self.db_path)});
+        var iter = dir.iterate();
+        while (try iter.next(std.testing.io)) |entry| {
+            if (entry.kind != .file or !std.mem.startsWith(u8, entry.name, prefix)) continue;
+            var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+            try std.Io.Dir.cwd().deleteFile(std.testing.io, try std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, entry.name }));
+        }
+    }
+
     fn readMigrationFile(self: *Harness, folder: []const u8, name: []const u8) ![]u8 {
         _ = self;
         const path = try std.fs.path.join(allocator, &.{ folder, name });
@@ -316,6 +354,110 @@ test "migrate cli: new demands a major bump, and --amend folds the change into t
     try std.testing.expectEqual(@as(i64, 3), try h.int("SELECT count(*) FROM tasks"));
 }
 
+test "migrate cli: an explicit base must be reachable from the migration chain" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+    try h.setSchema(v2);
+    try h.runOk(&.{ "new", "first" });
+
+    const v3 =
+        \\{"version":"3.0.0","store":{"tasks":{"fields":{
+        \\  "title":{"type":"string"},
+        \\  "priority":{"type":"string","enum":["low","medium","high"]},
+        \\  "notes":{"type":"string"}
+        \\},"required":["title"]}}}
+    ;
+    try h.setSchema(v3);
+
+    const blocked =
+        \\{"version":"2.0.0","store":{"tasks":{"fields":{"title":{"type":"string"}},"required":["title"]}}}
+    ;
+    const blocked_path = try std.fs.path.join(allocator, &.{ h.root, "blocked.json" });
+    defer allocator.free(blocked_path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = blocked_path, .data = blocked });
+    try std.testing.expectError(error.MigrationBaseMismatch, h.run(&.{ "new", "second", "--from", blocked_path }));
+    try h.expectOutput("not reachable");
+
+    const reachable =
+        \\{"version":"2.0.0","store":{"tasks":{"fields":{
+        \\  "title":{"type":"string"},
+        \\  "priority":{"type":"string","enum":["low","medium","high"]},
+        \\  "assignee":{"type":"string"}
+        \\},"required":["title"]}}}
+    ;
+    const reachable_path = try std.fs.path.join(allocator, &.{ h.root, "reachable.json" });
+    defer allocator.free(reachable_path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = reachable_path, .data = reachable });
+    try h.runOk(&.{ "new", "second", "--from", reachable_path });
+    try h.expectOutput("Created ");
+}
+
+test "migrate cli: --amend is not suggested without a usable snapshot" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+    try h.seedTasks();
+    try h.setSchema(v2);
+    try h.runOk(&.{ "new", "priority_to_string" });
+    const folder = try h.onlyMigration();
+    defer allocator.free(folder);
+    try h.writeMigrationFile(folder, "migration.sql", v1_to_v2_sql);
+    try h.runOk(&.{"apply"});
+    try h.deleteSnapshots();
+
+    const v2_without_priority =
+        \\{"version":"2.0.0","store":{"tasks":{"fields":{"title":{"type":"string"}},"required":["title"]}}}
+    ;
+    try h.setSchema(v2_without_priority);
+    try std.testing.expectError(error.MajorVersionBumpRequired, h.run(&.{ "new", "drop_priority" }));
+    try std.testing.expect(std.mem.indexOf(u8, h.out.written(), "--amend") == null);
+}
+
+test "migrate cli: --amend replays a batch from its first snapshot" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+    try h.seedTasks();
+
+    try h.setSchema(v2);
+    try h.runOk(&.{ "new", "priority_to_string" });
+    const first = try h.onlyMigration();
+    defer allocator.free(first);
+    try h.writeMigrationFile(first, "migration.sql", v1_to_v2_sql);
+
+    const v3 =
+        \\{"version":"3.0.0","store":{"tasks":{"fields":{
+        \\  "title":{"type":"string"},
+        \\  "priority":{"type":"string","enum":["low","medium","high"]},
+        \\  "notes":{"type":"string"}
+        \\},"required":["title"]}}}
+    ;
+    try h.setSchema(v3);
+    try h.runOk(&.{ "new", "zz_add_notes" });
+
+    // Both migrations run in one transaction, so the only snapshot is pre-first.
+    try h.runOk(&.{"apply"});
+    try h.expectAppliedVersion("3.0.0");
+
+    const v3_1 =
+        \\{"version":"3.1.0","store":{"tasks":{"fields":{
+        \\  "title":{"type":"string"},
+        \\  "priority":{"type":"string","enum":["low","medium","high"]},
+        \\  "notes":{"type":"string"},
+        \\  "extra":{"type":"string"}
+        \\},"required":["title"]}}}
+    ;
+    try h.setSchema(v3_1);
+    try h.runOk(&.{ "new", "zz_notes_again", "--amend" });
+    try h.expectOutput("Restored ");
+    try h.expectAppliedVersion("1.0.0");
+
+    try h.runOk(&.{"apply"});
+    try h.expectAppliedVersion("3.1.0");
+    try std.testing.expectEqual(@as(i64, 3), try h.int("SELECT count(*) FROM tasks"));
+}
+
 test "migrate cli: a database with an unknown layout is refused" {
     var h = try Harness.init(v1);
     defer h.deinit();
@@ -398,11 +540,18 @@ test "migrate cli: an interrupted amend is refused before the database is restor
     try h.writeMigrationFile(folder, "migration.sql", v1_to_v2_sql);
     try h.runOk(&.{"apply"});
 
-    // Simulate a crash after the old folder was moved to the backup.
-    const backup = try std.fmt.allocPrint(allocator, "{s}/.{s}.replaced", .{ h.migrations_dir, std.fs.path.basename(folder) });
-    defer allocator.free(backup);
+    // A crash after the restore but before the folder swap leaves the database
+    // at 1.0.0 and the old folder in `.replaced`.
+    const snapshot = try h.latestSnapshot(std.fs.path.basename(folder));
+    defer allocator.free(snapshot);
+    const data_dir = std.fs.path.dirname(h.db_path) orelse ".";
+    var restored = try backup.restore(std.testing.io, allocator, data_dir, snapshot, true);
+    defer restored.deinit(allocator);
+
+    const replaced = try std.fmt.allocPrint(allocator, "{s}/.{s}.replaced", .{ h.migrations_dir, std.fs.path.basename(folder) });
+    defer allocator.free(replaced);
     const cwd = std.Io.Dir.cwd();
-    try cwd.rename(folder, cwd, backup, std.testing.io);
+    try cwd.rename(folder, cwd, replaced, std.testing.io);
 
     const v2_without_priority =
         \\{"version":"2.0.0","store":{"tasks":{"fields":{"title":{"type":"string"}},"required":["title"]}}}
@@ -412,9 +561,16 @@ test "migrate cli: an interrupted amend is refused before the database is restor
     try h.expectOutput(".replaced");
 
     // The failure happens before the snapshot restore and even when no folder remains.
+    try h.setSchema(v1);
+    try h.expectAppliedVersion("1.0.0");
+    try std.Io.Dir.cwd().access(std.testing.io, replaced, .{});
+
+    // Recover by restoring the folder, then finish the migration normally.
+    try cwd.rename(replaced, cwd, folder, std.testing.io);
     try h.setSchema(v2);
+    try h.runOk(&.{"apply"});
     try h.expectAppliedVersion("2.0.0");
-    try std.Io.Dir.cwd().access(std.testing.io, backup, .{});
+    try h.expectOutput("_priority_to_string  applied");
 }
 
 test "migrate cli: reset needs --yes and moves the database aside" {

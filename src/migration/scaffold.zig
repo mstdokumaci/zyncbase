@@ -64,8 +64,9 @@ fn writeHeader(w: Writer, input: Input) !void {
     try w.line("--   after  {s}", .{input.after_hash});
     try w.line("--", .{});
     try w.line("-- Before this file runs:", .{});
-    try w.line("--   * Tables that change shape are empty and already have the new shape.", .{});
+    try w.line("--   * Rebuilt tables are empty and already have the new shape.", .{});
     try w.line("--     Their old rows are in \"_zync_prev_<table>\".", .{});
+    try w.line("--   * Altered tables keep their rows; new columns start as NULL.", .{});
     try w.line("--   * Removed tables exist only as \"_zync_prev_<table>\".", .{});
     try w.line("--   * Every other table is already up to date and can be read or updated.", .{});
     try w.line("--   * Foreign keys are off and cascades do not run; integrity is checked at the end.", .{});
@@ -172,7 +173,7 @@ fn writeRebuild(w: Writer, t: *const TableDiff) !void {
     try w.line("INSERT INTO \"{s}\" ({s})", .{ t.name, list.items });
     try w.line("SELECT", .{});
     for (columns, 0..) |column, i| {
-        const expression = try columnExpression(w.arena, t, column.name, renames);
+        const expression = try columnExpression(w.arena, t, column.name, prev, renames);
         try w.line("  {s}{s}", .{ expression, if (i + 1 < columns.len) "," else "" });
     }
     try w.line("FROM \"{s}\";", .{prev});
@@ -221,7 +222,7 @@ fn sameType(a: *const Field, b: *const Field) bool {
     return a.declared_type == b.declared_type and a.storage_type == b.storage_type and a.items_type == b.items_type;
 }
 
-fn columnExpression(arena: Allocator, t: *const TableDiff, column: []const u8, renames: []const Rename) ![]const u8 {
+fn columnExpression(arena: Allocator, t: *const TableDiff, column: []const u8, prev: []const u8, renames: []const Rename) ![]const u8 {
     const quoted = try std.fmt.allocPrint(arena, "\"{s}\"", .{column});
     const qualified = try std.fmt.allocPrint(arena, "{s}.{s}", .{ t.name, try dotted(arena, column) });
 
@@ -246,7 +247,7 @@ fn columnExpression(arena: Allocator, t: *const TableDiff, column: []const u8, r
                         suffix = " Rows where it is NULL also need a replacement value.";
                     }
                 }
-                return todo(arena, "{s}: {s} -> {s}. {s}{s}", .{ qualified, try typeName(arena, from), try typeName(arena, to), try suggestion(arena, quoted, from, to), suffix });
+                return todo(arena, "{s}: {s} -> {s}. {s}{s}", .{ qualified, try typeName(arena, from), try typeName(arena, to), try suggestion(arena, quoted, prev, from, to), suffix });
             },
             .added_required => {
                 if (renameOf(renames, column)) |old| {
@@ -285,25 +286,26 @@ fn typeName(arena: Allocator, field: *const Field) ![]const u8 {
 }
 
 /// A conversion the developer is likely to want; they must still decide.
-fn suggestion(arena: Allocator, column: []const u8, from: *const Field, to: *const Field) ![]const u8 {
+fn suggestion(arena: Allocator, column: []const u8, prev: []const u8, from: *const Field, to: *const Field) ![]const u8 {
     if (from.references != null or to.references != null) {
         return "SQL cannot convert between document-id strings and references. Expand and contract instead: keep the old field, add a new reference field, backfill it through the SDK, and remove the old field in a later migration.";
     }
     if (to.storage_type == .array) {
         const items = if (to.items_type) |it| it.schemaName() else "string";
         if (from.storage_type == .array) {
-            const item_expr = if (to.items_type == .boolean)
-                "CASE WHEN value THEN json('true') ELSE json('false') END"
-            else blk: {
+            const item_expr = if (to.items_type == .boolean) blk: {
+                const condition = try booleanCondition(arena, "value", from.items_type orelse .text);
+                break :blk try std.fmt.allocPrint(arena, "CASE WHEN {s} THEN json('true') ELSE json('false') END", .{condition});
+            } else blk: {
                 const sql_type = if (to.items_type) |it| it.toSqlType() else "TEXT";
                 break :blk try std.fmt.allocPrint(arena, "CAST(value AS {s})", .{sql_type});
             };
-            return std.fmt.allocPrint(arena, "Example: CASE WHEN {0s} IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array({1s}) FROM json_each({0s})), '{2s}')) END", .{ column, item_expr, items });
+            return std.fmt.allocPrint(arena, "Example: CASE WHEN {0s} IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array({1s}) FROM json_each(\"{2s}\".{0s})), '{3s}')) END", .{ column, item_expr, prev, items });
         }
-        const scalar_expr = if (to.items_type == .boolean)
-            try std.fmt.allocPrint(arena, "CASE WHEN {s} THEN json('true') ELSE json('false') END", .{column})
-        else
-            column;
+        const scalar_expr = if (to.items_type == .boolean) blk: {
+            const condition = try booleanCondition(arena, column, from.declared_type);
+            break :blk try std.fmt.allocPrint(arena, "CASE WHEN {s} THEN json('true') ELSE json('false') END", .{condition});
+        } else column;
         return std.fmt.allocPrint(arena, "Example: CASE WHEN {0s} IS NULL THEN NULL ELSE jsonb(zync_array(json_array({1s}), '{2s}')) END", .{ column, scalar_expr, items });
     }
     if (from.storage_type == .array) {
@@ -326,11 +328,16 @@ fn suggestion(arena: Allocator, column: []const u8, from: *const Field, to: *con
             .integer => std.fmt.allocPrint(arena, "Example: CAST({s} AS REAL) (integers above 2^53 lose precision)", .{column}),
             else => std.fmt.allocPrint(arena, "Example: CAST({s} AS REAL) (non-numeric text becomes 0.0)", .{column}),
         },
-        .boolean => switch (from.declared_type) {
-            .text => std.fmt.allocPrint(arena, "Example: {s} IN ('true', '1')", .{column}),
-            else => std.fmt.allocPrint(arena, "Example: {s} != 0", .{column}),
-        },
+        .boolean => std.fmt.allocPrint(arena, "Example: {s}", .{try booleanCondition(arena, column, from.declared_type)}),
         else => "Convert the value explicitly.",
+    };
+}
+
+/// The SQL condition that maps a source value to a boolean.
+fn booleanCondition(arena: Allocator, column: []const u8, from: schema_types.FieldType) ![]const u8 {
+    return switch (from) {
+        .text => std.fmt.allocPrint(arena, "{s} IN ('true', '1')", .{column}),
+        else => std.fmt.allocPrint(arena, "{s} != 0", .{column}),
     };
 }
 

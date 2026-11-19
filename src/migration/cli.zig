@@ -22,6 +22,7 @@ const state = @import("state.zig");
 const migration_target = @import("target.zig");
 const Config = @import("../config/state.zig").Config;
 const DataLock = @import("../data_lock.zig").DataLock;
+const Schema = @import("../schema/types.zig").Schema;
 const Version = @import("../schema/version.zig").Version;
 const Diagnostics = @import("diagnostics.zig").Diagnostics;
 
@@ -470,6 +471,8 @@ const Base = struct {
     label: []const u8,
     /// The database the version rule is checked against.
     db: DbState,
+    /// The database file behind an explicit or inferred database base.
+    db_path: ?[]const u8 = null,
 };
 
 fn new(ctx: Context, cmd: Command) !void {
@@ -489,12 +492,14 @@ fn new(ctx: Context, cmd: Command) !void {
         try ctx.out.print("Edit its migration.sql, or change schema.json first.\n", .{});
         return error.NothingToMigrate;
     }
+    if (cmd.from != null) try checkBaseReachable(ctx, arena, &project, &base_schema, base.label);
 
     var d = try schema_diff.diff(ctx.allocator, &base_schema, &project.target.schema);
     defer d.deinit();
-    try checkVersions(ctx, &project, base_schema.version, base.db, &d, .{
+    try checkVersions(ctx, arena, &project, base_schema.version, base.db, &d, .{
         .count_pending = base.kind != .file,
-        .offer_amend = true,
+        .offer_amend = cmd.from == null,
+        .snapshot_db_path = base.db_path,
     });
 
     var stamp_buf: [backup.utc_timestamp_len]u8 = undefined;
@@ -542,17 +547,17 @@ fn selectBase(ctx: Context, arena: Allocator, cmd: Command, project: *const Proj
             try ctx.out.print("{s} has no ZyncBase schema record.\n", .{from});
             return error.UnrecognizedDatabase;
         };
-        return .{ .json = applied.json, .kind = .database, .label = from, .db = db };
+        return .{ .json = applied.json, .kind = .database, .label = from, .db = db, .db_path = from };
     }
 
     const db_path = try backup.dbPath(arena, dataDir(ctx, cmd));
     const db = try readDbState(ctx, arena, db_path);
     if (project.newest()) |last| {
         if (db.ledgerIndex(last.id) == null) {
-            return .{ .json = last.after.json, .kind = .pending_migration, .label = last.id, .db = db };
+            return .{ .json = last.after.json, .kind = .pending_migration, .label = last.id, .db = db, .db_path = db_path };
         }
     }
-    if (db.applied) |applied| return .{ .json = applied.json, .kind = .database, .label = db_path, .db = db };
+    if (db.applied) |applied| return .{ .json = applied.json, .kind = .database, .label = db_path, .db = db, .db_path = db_path };
 
     try ctx.out.print("There is nothing to migrate from: {s} has no schema yet, and there are no migrations.\n", .{db_path});
     try ctx.out.print("The next start creates the database from schema.json directly.\n", .{});
@@ -566,12 +571,44 @@ const VersionCheck = struct {
     /// Skip this pending migration (the one being amended).
     exclude: ?[]const u8 = null,
     offer_amend: bool,
+    /// The database file whose pre-migration snapshots `--amend` can restore.
+    snapshot_db_path: ?[]const u8 = null,
 };
+
+/// Rejects an explicit `--from` base the existing migration chain cannot reach.
+fn checkBaseReachable(
+    ctx: Context,
+    arena: Allocator,
+    project: *const Project,
+    base_schema: *const Schema,
+    base_label: []const u8,
+) !void {
+    const head = project.newest() orelse return;
+    var diag = Diagnostics.init(ctx.allocator);
+    defer diag.deinit();
+    const base_version = try Version.parse(base_schema.version);
+    const head_version = try Version.parse(head.after.schema.version);
+    if (base_version.order(head_version) == .lt) {
+        diag.add("Schema version {s} is older than {s}; versions never go down.", .{ base_schema.version, head.after.schema.version });
+        try printLines(ctx.out, &diag, "  ");
+        return error.SchemaVersionDowngrade;
+    }
+    var bridge = try schema_diff.diff(ctx.allocator, &head.after.schema, base_schema);
+    defer bridge.deinit();
+    if (!bridge.hasMigrationRequired()) return;
+
+    diag.add("The new migration base {s} is not reachable from {s} automatically:", .{ base_label, head.id });
+    try startup.describeDiff(arena, &diag, &bridge, .migration_required);
+    diag.add("Use the after schema of {s} as the base, or create the intermediate migration first.", .{head.id});
+    try printLines(ctx.out, &diag, "  ");
+    return error.MigrationBaseMismatch;
+}
 
 /// Versions never go down, and the deployment rule against `db`: a
 /// migration-required change needs a higher major version than `db` is on.
 fn checkVersions(
     ctx: Context,
+    arena: Allocator,
     project: *const Project,
     base_version: []const u8,
     db: DbState,
@@ -610,7 +647,12 @@ fn checkVersions(
     if (options.offer_amend) {
         if (project.newest()) |last| {
             if (db.newestApplied(last.id)) {
-                try ctx.out.print("  Or fold this change into {s} with: zyncbase migrate new <name> --amend\n", .{last.id});
+                if (options.snapshot_db_path) |path| {
+                    const items = project.migrations.items;
+                    if (usablePreLastSnapshot(ctx, arena, path, items, items.len - 1) catch false) {
+                        try ctx.out.print("  Or fold this change into {s} with: zyncbase migrate new <name> --amend\n", .{last.id});
+                    }
+                }
             }
         }
     }
@@ -749,8 +791,8 @@ fn amend(ctx: Context, cmd: Command) !void {
             try out.print("{s} is not the newest migration applied to {s}; create a new migration instead.\n", .{ last.id, db_path });
             return error.CannotAmend;
         }
-        const path = try findSnapshot(ctx, arena, db_path, last.id) orelse {
-            try out.print("No pre-migration snapshot of {s} next to {s}; --amend needs it to undo the migration.\n", .{ last.id, db_path });
+        const path = try findAmendSnapshot(ctx, arena, db_path, items, items.len - 1) orelse {
+            try out.print("No usable pre-migration snapshot for {s} next to {s}; --amend needs one to undo the migration.\n", .{ last.id, db_path });
             try out.print("Create a new migration instead, or start over with: zyncbase reset --yes\n", .{});
             return error.SnapshotNotFound;
         };
@@ -764,7 +806,7 @@ fn amend(ctx: Context, cmd: Command) !void {
     }
     var d = try schema_diff.diff(ctx.allocator, &last.before.schema, &project.target.schema);
     defer d.deinit();
-    try checkVersions(ctx, &project, last.before.schema.version, rule_db, &d, .{
+    try checkVersions(ctx, arena, &project, last.before.schema.version, rule_db, &d, .{
         .count_pending = true,
         .exclude = last.id,
         .offer_amend = false,
@@ -779,15 +821,16 @@ fn amend(ctx: Context, cmd: Command) !void {
         }
     }
 
-    var sql = std.ArrayListUnmanaged(u8).empty;
-    try sql.appendSlice(arena, try scaffold.generate(arena, .{
+    const generated = try scaffold.generate(arena, .{
         .id = id,
         .before = &last.before.schema,
         .before_hash = &last.before.hash,
         .after = &project.target.schema,
         .after_hash = &project.target.identity.hash,
         .diff = &d,
-    }));
+    });
+    var sql = std.ArrayListUnmanaged(u8).empty;
+    try sql.appendSlice(arena, generated);
     try sql.print(arena, "\n-- Previous migration.sql of {s}, kept by --amend for reference:\n", .{last.id});
     var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, last.sql, "\n"), '\n');
     while (lines.next()) |line| try sql.print(arena, "-- {s}\n", .{line});
@@ -810,7 +853,7 @@ fn amend(ctx: Context, cmd: Command) !void {
     try out.print("Amended {s}\n", .{folder});
     try out.print("  from {s}  {s}\n", .{ last.before.schema.version, &last.before.hash });
     try out.print("  to   {s}  {s}\n", .{ project.target.schema.version, &project.target.identity.hash });
-    try reportScaffold(ctx, arena, &d, sql.items);
+    try reportScaffold(ctx, arena, &d, generated);
 }
 
 /// The newest `<db file>.pre-migration-<id>-<timestamp>` next to `db_path`.
@@ -849,6 +892,43 @@ fn findSnapshot(ctx: Context, arena: Allocator, db_path: []const u8, id: []const
     }
     const found = best orelse return null;
     return try std.fs.path.join(arena, &.{ dir_path, found.name });
+}
+
+/// True when the pre-`items[last_index]` snapshot exists and can restore it.
+fn usablePreLastSnapshot(ctx: Context, arena: Allocator, db_path: []const u8, items: []const source.Migration, last_index: usize) !bool {
+    const path = try findSnapshot(ctx, arena, db_path, items[last_index].id) orelse return false;
+    return snapshotPrecedes(ctx, arena, path, items, last_index);
+}
+
+/// The newest snapshot amend can restore. It may precede an earlier migration
+/// in the same batch; those migrations replay after the restore.
+fn findAmendSnapshot(ctx: Context, arena: Allocator, db_path: []const u8, items: []const source.Migration, last_index: usize) !?[]const u8 {
+    var i = last_index + 1;
+    while (i > 0) {
+        i -= 1;
+        const path = try findSnapshot(ctx, arena, db_path, items[i].id) orelse continue;
+        if (try snapshotPrecedes(ctx, arena, path, items, i)) return path;
+    }
+    return null;
+}
+
+/// True when `path` holds the state just before `items[before_index]`: the
+/// ledger is the exact prefix and the applied schema is that migration's before.
+fn snapshotPrecedes(
+    ctx: Context,
+    arena: Allocator,
+    path: []const u8,
+    items: []const source.Migration,
+    before_index: usize,
+) !bool {
+    const snap = try readDbState(ctx, arena, path);
+    const applied = snap.applied orelse return false;
+    if (snap.ledger.len != before_index) return false;
+    for (snap.ledger, items[0..before_index]) |entry, migration| {
+        if (!std.mem.eql(u8, entry.id, migration.id)) return false;
+        if (!std.mem.eql(u8, entry.after_hash, &migration.after.hash)) return false;
+    }
+    return std.mem.eql(u8, applied.hash, &items[before_index].before.hash);
 }
 
 // ─── reset ───────────────────────────────────────────────────────────────────

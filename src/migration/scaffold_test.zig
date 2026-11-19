@@ -168,7 +168,18 @@ test "scaffold: an array items change suggests a per-element conversion" {
     ,
         \\{"version":"2.0.0","store":{"posts":{"fields":{"tags":{"type":"array","items":"string"}}}}}
     );
-    try expectContains(text, "zync_todo('posts.tags: array of integer -> array of string. Example: CASE WHEN \"tags\" IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array(CAST(value AS TEXT)) FROM json_each(\"tags\")), ''string'')) END')");
+    try expectContains(text, "zync_todo('posts.tags: array of integer -> array of string. Example: CASE WHEN \"tags\" IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array(CAST(value AS TEXT)) FROM json_each(\"_zync_prev_posts\".\"tags\")), ''string'')) END')");
+}
+
+test "scaffold: an array of text items maps 'true' to a JSON boolean" {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const text = try generate(arena.allocator(),
+        \\{"version":"1.0.0","store":{"posts":{"fields":{"flags":{"type":"array","items":"string"}}}}}
+    ,
+        \\{"version":"2.0.0","store":{"posts":{"fields":{"flags":{"type":"array","items":"boolean"}}}}}
+    );
+    try expectContains(text, "CASE WHEN \"flags\" IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array(CASE WHEN value IN (''true'', ''1'') THEN json(''true'') ELSE json(''false'') END) FROM json_each(\"_zync_prev_posts\".\"flags\")), ''boolean'')) END");
 }
 
 test "scaffold: a string to reference change points to expand and contract" {
@@ -191,7 +202,7 @@ test "scaffold: an array of booleans maps integer items to JSON booleans" {
     ,
         \\{"version":"2.0.0","store":{"posts":{"fields":{"flags":{"type":"array","items":"boolean"}}}}}
     );
-    try expectContains(text, "CASE WHEN \"flags\" IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array(CASE WHEN value THEN json(''true'') ELSE json(''false'') END) FROM json_each(\"flags\")), ''boolean'')) END");
+    try expectContains(text, "CASE WHEN \"flags\" IS NULL THEN NULL ELSE jsonb(zync_array((SELECT json_group_array(CASE WHEN value != 0 THEN json(''true'') ELSE json(''false'') END) FROM json_each(\"_zync_prev_posts\".\"flags\")), ''boolean'')) END");
 }
 
 test "scaffold: bytes to string keeps NULL as NULL" {
@@ -214,6 +225,21 @@ test "scaffold: a type change that also became required mentions NULL replacemen
         \\{"version":"2.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"count":{"type":"integer"}},"required":["count"]}}}
     );
     try expectContains(text, "tasks.count: string -> integer. Example: CAST(\"count\" AS INTEGER) (non-numeric text becomes 0) Rows where it is NULL also need a replacement value.");
+}
+
+test "scaffold: the qualified json_each example runs on the pinned SQLite" {
+    var db = try sqlite.Db.init(.{ .mode = .Memory, .open_flags = .{ .write = true, .create = true } });
+    defer db.deinit();
+    try db.exec(
+        \\CREATE TABLE "_zync_prev_posts" ("tags" TEXT)
+    , .{}, .{});
+    try db.exec(
+        \\INSERT INTO "_zync_prev_posts" VALUES (json('["a","b"]'))
+    , .{}, .{});
+    const count = try db.one(i64,
+        \\SELECT (SELECT count(*) FROM json_each("_zync_prev_posts"."tags")) FROM "_zync_prev_posts"
+    , .{}, .{});
+    try std.testing.expectEqual(@as(?i64, 2), count);
 }
 
 // ─── Scaffolds through startup ───────────────────────────────────────────────

@@ -246,17 +246,17 @@ The server migrates the database at startup, before it listens. A release ships 
    zyncbase migrate apply --dry-run --db /tmp/prod-copy.db --config zyncbase-config.json
    ```
    The dry run executes every step and rolls back. The log shows rows before, after, and dropped per table, and how long it took. That duration is roughly the startup delay to expect.
-3. On the production host, confirm what the next start will do:
-   ```bash
-   zyncbase migrate status --config /etc/zyncbase/zyncbase-config.json
-   ```
-   It exits non-zero when planning finds a failure, such as schema drift or a missing migration. It does not check whether existing rows satisfy a migration. Run `zyncbase migrate apply --dry-run` against a copy of the database to check that.
 
 ### During the release
 
 1. Stop the server and install the new binary, `schema.json`, and migrations.
-2. Start the server. If a migration is pending, the server first writes a verified snapshot to `<dataDir>/zyncbase.db.pre-migration-<id>-<timestamp>`, then migrates.
-3. The port opens only after the migration commits. Give the start enough time: raise systemd's `TimeoutStartSec` and the liveness probe's initial delay to cover the rehearsed duration.
+2. With the server still stopped, confirm what the next start will do:
+   ```bash
+   zyncbase migrate status --config /etc/zyncbase/zyncbase-config.json
+   ```
+   This uses the installed release's `schema.json` and migrations. It exits non-zero when planning finds a failure, such as schema drift or a missing migration. It does not check whether existing rows satisfy a migration; the dry run against a copy of production data does that.
+3. Start the server. If a migration is pending, the server first writes a verified snapshot to `<dataDir>/zyncbase.db.pre-migration-<id>-<timestamp>`, then migrates.
+4. The port opens only after the migration commits. Give the start enough time: raise systemd's `TimeoutStartSec` and the liveness probe's initial delay to cover the rehearsed duration.
 
 To migrate without starting the server (for example, in a release job), run `zyncbase migrate apply --config …` while the server is stopped.
 

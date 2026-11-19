@@ -315,7 +315,7 @@ Every startup error carries diagnostic lines. The server logs them one record pe
 | `zyncbase migrate new <name> [--from <file.db\|schema.json>] [--amend] [--config <path>] [--data-dir <dir>]` | Writes a migration folder with a scaffold. | shared (exclusive with `--amend`) |
 | `zyncbase migrate check [--config <path>]` | Validates every migration without a database: folders, versions, the chain to `schema.json`, and a pre-pass against an in-memory database built at each `before`. | none |
 | `zyncbase migrate apply [--dry-run] [--config <path>] [--data-dir <dir>] [--db <file>]` | Runs the startup procedure without serving. `--dry-run` rolls back, skips the snapshot, and prints the report. | exclusive |
-| `zyncbase reset --yes [--config <path>] [--data-dir <dir>] [--no-safety-copy]` | Moves `zyncbase.db` and its sidecars to `zyncbase.db.pre-reset-<timestamp>`. The next start creates a fresh database. | exclusive |
+| `zyncbase reset --yes [--config <path>] [--data-dir <dir>] [--no-safety-copy]` | Moves `zyncbase.db` and its sidecars to `zyncbase.db.pre-reset-<timestamp>` and retains them by default. `--no-safety-copy` deletes them instead. The next start creates a fresh database. | exclusive |
 
 All commands read the configuration from `--config` (default `zyncbase-config.json`). `--data-dir` overrides `dataDir`. `--db` names a database file directly; locks are then taken in that file's directory, and `apply` writes the snapshot next to it. Reports go to stdout. A failing command, or a `status`/`check` that finds a blocker, exits non-zero.
 
@@ -328,7 +328,7 @@ All commands read the configuration from `--config` (default `zyncbase-config.js
 `migrate new` picks its base like this:
 - If the newest migration is not applied to the data directory's database (or there is no database), the base is that migration's `after.json`.
 - Otherwise the base is the database's applied snapshot.
-- `--from` overrides both: a `.json` file is the base schema; any other path is a database whose applied snapshot is the base.
+- `--from` overrides both: a `.json` file is the base schema; any other path is a database whose applied snapshot is the base. The chain must reach that base automatically: a version decrease or a migration-required bridge is refused.
 - With no database, no migrations, and no `--from`, it refuses: the next start creates the database from `schema.json` directly.
 
 It refuses to write anything when:
@@ -342,7 +342,7 @@ The folder is written under a dot-prefixed temporary name, which the loader igno
 
 `--amend` reworks the newest migration:
 - If it is pending, its folder is rewritten in place.
-- If it is the latest ledger entry (mode `applied`), the newest `<database file>.pre-migration-<id>-*` snapshot must exist. The version rule is checked against that snapshot. The snapshot is then restored with `backup.restore`, keeping a safety copy.
+- If it is the latest ledger entry (mode `applied`), a snapshot amend can restore must exist: either the pre-`<id>` snapshot `<database file>.pre-migration-<id>-*`, or the snapshot for the first migration of the batch that applied it. In the batch case the snapshot's ledger must be an exact prefix of the current chain and that first migration must replay from the snapshot; earlier migrations then replay before the amended one. The version rule is checked against that snapshot. The snapshot is restored with `backup.restore`, keeping a safety copy.
 - Otherwise it refuses.
 
 The migration keeps its timestamp and takes `<name>`. `after.json` and the scaffold are regenerated from `before.json` to `schema.json`, and the previous `migration.sql` is appended as a comment block. It refuses when the migration already produces `schema.json`. `--amend` cannot be combined with `--from`.

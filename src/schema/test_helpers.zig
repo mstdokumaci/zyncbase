@@ -294,6 +294,7 @@ pub const TestContext = struct {
             self.send_queue = null;
         }
         if (self.change_queue) |*cq| cq.deinit();
+        self.change_queue = null;
         if (self.test_dir.len > 0 and self.owns_dir) {
             std.Io.Dir.cwd().deleteTree(std.testing.io, self.test_dir) catch |err| {
                 // Log failure to delete test artifacts directory
@@ -361,9 +362,9 @@ pub fn schemaJsonForTest(allocator: std.mem.Allocator, schema: *const Schema) ![
     try w.objectField("presence");
     try w.beginObject();
     try w.objectField("user");
-    try writeTestPresence(&w, schema.presence_user_fields);
+    try writeTestPresence(&w, tmp, schema.presence_user_fields);
     try w.objectField("shared");
-    try writeTestPresence(&w, schema.presence_shared_fields);
+    try writeTestPresence(&w, tmp, schema.presence_shared_fields);
     try w.endObject();
     try w.endObject();
     return out.toOwnedSlice();
@@ -491,14 +492,63 @@ fn writeTestBound(w: *std.json.Stringify, bound: schema_types.Constraints.Bound)
     }
 }
 
-fn writeTestPresence(w: *std.json.Stringify, fields: []const schema_types.PresenceField) !void {
+fn writeTestPresence(w: *std.json.Stringify, arena: std.mem.Allocator, fields: []const schema_types.PresenceField) !void {
+    const root = try buildPresenceTree(arena, fields);
+    try writePresenceTree(w, root);
+}
+
+const PresenceNode = struct {
+    field: ?*const schema_types.PresenceField = null,
+    children: std.StringArrayHashMapUnmanaged(*PresenceNode) = .empty,
+};
+
+/// Presence names use the same `__` nesting as store fields; emit them nested.
+fn buildPresenceTree(arena: std.mem.Allocator, fields: []const schema_types.PresenceField) !*PresenceNode {
+    const root = try arena.create(PresenceNode);
+    root.* = .{};
+    for (fields) |*field| {
+        var node = root;
+        var rest = field.name;
+        while (true) {
+            const sep = std.mem.indexOf(u8, rest, "__");
+            const segment = if (sep) |s| rest[0..s] else rest;
+            const gop = try node.children.getOrPut(arena, segment);
+            if (!gop.found_existing) {
+                const child = try arena.create(PresenceNode);
+                child.* = .{};
+                gop.value_ptr.* = child;
+            }
+            const child = gop.value_ptr.*;
+            if (sep == null) {
+                child.field = field;
+                break;
+            }
+            node = child;
+            rest = rest[sep.? + 2 ..];
+        }
+    }
+    return root;
+}
+
+fn writePresenceTree(w: *std.json.Stringify, node: *const PresenceNode) !void {
     try w.beginObject();
-    for (fields) |field| {
-        try w.objectField(field.name);
-        try w.beginObject();
-        try w.objectField("type");
-        try w.write(field.declared_type.schemaName());
-        try w.endObject();
+    var it = node.children.iterator();
+    while (it.next()) |entry| {
+        try w.objectField(entry.key_ptr.*);
+        const child = entry.value_ptr.*;
+        if (child.field) |field| {
+            try w.beginObject();
+            try w.objectField("type");
+            try w.write(field.declared_type.schemaName());
+            try w.endObject();
+        } else {
+            try w.beginObject();
+            try w.objectField("type");
+            try w.write("object");
+            try w.objectField("fields");
+            try writePresenceTree(w, child);
+            try w.endObject();
+        }
     }
     try w.endObject();
 }
@@ -536,7 +586,10 @@ pub fn setupTestEngineWithJson(
     }
 
     context.change_queue = try ChangeQueue.init(std.testing.io, allocator, 1);
-    errdefer context.change_queue.?.deinit();
+    errdefer {
+        if (context.change_queue) |*cq| cq.deinit();
+        context.change_queue = null;
+    }
 
     try engine.start(&context.send_queue.?, &context.change_queue.?, null);
 }
