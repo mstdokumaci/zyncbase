@@ -9,6 +9,7 @@ const backup = @import("../backup.zig");
 const cli = @import("cli.zig");
 const ConfigLoader = @import("../config/loader.zig").ConfigLoader;
 const Config = @import("../config/state.zig").Config;
+const DataLock = @import("../data_lock.zig").DataLock;
 
 const allocator = std.testing.allocator;
 
@@ -627,6 +628,33 @@ test "migrate cli: status refuses a pending restore journal" {
     defer h.deinit();
     try h.runOk(&.{"apply"});
 
+    const journal_path = try std.fmt.allocPrint(allocator, "{s}.restore-journal", .{h.db_path});
+    defer allocator.free(journal_path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = journal_path, .data = "pending" });
+
+    try std.testing.expectError(error.RestoreInProgress, h.run(&.{"status"}));
+    try h.expectOutput("restore is pending");
+}
+
+test "migrate cli: status refuses a restore journal before the database exists" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    const data_dir = std.fs.path.dirname(h.db_path) orelse ".";
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, data_dir);
+    const journal_path = try std.fmt.allocPrint(allocator, "{s}.restore-journal", .{h.db_path});
+    defer allocator.free(journal_path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = journal_path, .data = "pending" });
+
+    try std.testing.expectError(error.RestoreInProgress, h.run(&.{"status"}));
+    try h.expectOutput("restore is pending");
+}
+
+test "migrate cli: status reports an active restore" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    const data_dir = std.fs.path.dirname(h.db_path) orelse ".";
+    var lock = try DataLock.acquire(std.testing.io, allocator, data_dir);
+    defer lock.release(std.testing.io);
     const journal_path = try std.fmt.allocPrint(allocator, "{s}.restore-journal", .{h.db_path});
     defer allocator.free(journal_path);
     try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = journal_path, .data = "pending" });

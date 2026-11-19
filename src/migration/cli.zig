@@ -293,14 +293,24 @@ fn status(ctx: Context, cmd: Command) !void {
     const arena = arena_state.allocator();
 
     const db_path = cmd.db orelse try backup.dbPath(arena, dataDir(ctx, cmd));
+    var lock = DataLock.acquireShared(ctx.io, ctx.allocator, dirOf(db_path)) catch |err| switch (err) {
+        error.DataDirLocked => {
+            if (try backup.restorePending(ctx.io, arena, db_path)) {
+                try out.print("Database:   {s}\n", .{db_path});
+                try out.print("A restore is pending or was interrupted; recover it before planning migrations.\n", .{});
+                return error.RestoreInProgress;
+            }
+            return err;
+        },
+        else => return err,
+    };
+    defer lock.release(ctx.io);
     if (try backup.restorePending(ctx.io, arena, db_path)) {
         try out.print("Database:   {s}\n", .{db_path});
         try out.print("A restore is pending or was interrupted; recover it before planning migrations.\n", .{});
         return error.RestoreInProgress;
     }
     const exists = try fileExists(ctx.io, db_path);
-    var lock: ?DataLock = if (exists) try DataLock.acquireShared(ctx.io, ctx.allocator, dirOf(db_path)) else null;
-    defer if (lock) |*held| held.release(ctx.io);
     var db = if (exists) try openFile(ctx.allocator, db_path, false, false) else try openMemory();
     defer db.deinit();
 
