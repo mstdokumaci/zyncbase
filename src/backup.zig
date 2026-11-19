@@ -707,6 +707,11 @@ pub fn recoveryPending(io: std.Io, allocator: std.mem.Allocator, db_path: []cons
     return (try restoreJournalExists(io, allocator, db_path)) or (try resetJournalExists(io, allocator, db_path));
 }
 
+/// True when an interrupted restore journal is waiting next to `db_path`.
+pub fn restorePending(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !bool {
+    return restoreJournalExists(io, allocator, db_path);
+}
+
 fn fileExists(io: std.Io, path: []const u8) !bool {
     std.Io.Dir.cwd().access(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,

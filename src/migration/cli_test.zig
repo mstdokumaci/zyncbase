@@ -622,6 +622,19 @@ test "migrate cli: apply rejects pending recovery for another explicit database"
     try std.testing.expectError(error.RecoveryPending, h.run(&.{ "apply", "--db", other_path }));
 }
 
+test "migrate cli: status refuses a pending restore journal" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+
+    const journal_path = try std.fmt.allocPrint(allocator, "{s}.restore-journal", .{h.db_path});
+    defer allocator.free(journal_path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = journal_path, .data = "pending" });
+
+    try std.testing.expectError(error.RestoreInProgress, h.run(&.{"status"}));
+    try h.expectOutput("restore is pending");
+}
+
 test "migrate cli: a max major version reports that it cannot be raised" {
     const vmax =
         \\{"version":"4294967295.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"priority":{"type":"integer"}},"required":["title"]}}}

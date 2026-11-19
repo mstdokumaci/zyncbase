@@ -311,7 +311,7 @@ Every startup error carries diagnostic lines. The server logs them one record pe
 
 | Command | Behavior | Lock |
 |---|---|---|
-| `zyncbase migrate status [--config <path>] [--data-dir <dir>] [--db <file>]` | Shows the applied and target schemas, the ledger, pending migrations, planned steps, the bucket of each change, and blockers. Exits 0 when planning succeeds; it does not execute steps or validate rows (use `migrate apply --dry-run` for that). | shared |
+| `zyncbase migrate status [--config <path>] [--data-dir <dir>] [--db <file>]` | Shows the applied and target schemas, the ledger, pending migrations, planned steps, the bucket of each change, and blockers. Exits 0 when planning succeeds; it does not execute steps or validate rows (use `migrate apply --dry-run` for that). Refuses with `RestoreInProgress` while a restore journal is pending. | shared |
 | `zyncbase migrate new <name> [--from <file.db\|schema.json>] [--amend] [--config <path>] [--data-dir <dir>]` | Writes a migration folder with a scaffold. | shared (exclusive with `--amend`) |
 | `zyncbase migrate check [--config <path>]` | Validates every migration without a database: folders, versions, the chain to `schema.json`, and a pre-pass against an in-memory database built at each `before`. | none |
 | `zyncbase migrate apply [--dry-run] [--config <path>] [--data-dir <dir>] [--db <file>]` | Runs the startup procedure without serving. `--dry-run` rolls back, skips the snapshot, and prints the report. | exclusive |

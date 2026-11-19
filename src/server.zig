@@ -611,6 +611,10 @@ pub const ZyncBaseServer = struct {
         if (report.migrations_applied > 0) {
             std.log.info("Applied {d} migration(s) from {s}", .{ report.migrations_applied, migrations_dir });
         }
+        if (report.post_commit_error) |err| {
+            std.log.err("Migrations committed, but restoring foreign-key enforcement failed: {}", .{err});
+            return err;
+        }
 
         // Lock the engine and start the runtime thread
         try self.storage_engine.start(&self.send_queue, &self.change_queue, &self.session_resolver);

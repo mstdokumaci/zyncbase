@@ -63,6 +63,9 @@ pub const Report = struct {
     migrations_baselined: usize = 0,
     /// Pre-migration snapshot path, owned by the run's allocator.
     snapshot_path: ?[]u8 = null,
+    /// A failure after the transaction committed. The schema and ledger are
+    /// already durable; callers must report the commit and then this error.
+    post_commit_error: ?anyerror = null,
 
     pub fn deinit(self: *Report, allocator: Allocator) void {
         if (self.snapshot_path) |path| allocator.free(path);
@@ -507,7 +510,10 @@ fn runTransaction(
     try db.exec("COMMIT", .{}, .{});
     open = false;
     if (restore_foreign_keys) {
-        _ = try db.pragma(void, .{}, "foreign_keys", "on");
+        _ = db.pragma(void, .{}, "foreign_keys", "on") catch |err| {
+            report.post_commit_error = err;
+            std.log.err("Migration committed, but restoring foreign-key enforcement failed: {}", .{err});
+        };
         restore_foreign_keys = false;
     }
     for (logs.items) |entry| logStep(entry.label, entry.result, false);
