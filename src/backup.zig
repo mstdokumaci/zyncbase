@@ -29,6 +29,12 @@ const SafetyCopy = struct {
 };
 
 const restore_journal_header = "zyncbase-restore-v1\n";
+const reset_journal_header = "zyncbase-reset-v1\n";
+
+const ResetJournal = struct {
+    stamp: []const u8,
+    keep_safety_copy: bool,
+};
 
 pub fn dbPath(allocator: std.mem.Allocator, data_dir: []const u8) ![]u8 {
     return std.fs.path.join(allocator, &.{ data_dir, db_file_name });
@@ -208,15 +214,19 @@ pub fn reset(
     var lock = try DataLock.acquire(io, allocator, data_dir);
     defer lock.release(io);
     try recoverInterruptedRestore(io, allocator, data_dir);
+    try recoverInterruptedReset(io, allocator, data_dir);
 
     const db_path = try dbPath(allocator, data_dir);
     defer allocator.free(db_path);
     if (!try fileExists(io, db_path)) return .{ .outcome = .absent, .moved_to = null };
 
     var stamp_buf: [utc_timestamp_len]u8 = undefined;
+    const stamp = utcTimestamp(io, &stamp_buf);
     var aside_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const aside = try std.fmt.bufPrint(&aside_buf, "{s}.pre-reset-{s}", .{ db_path, utcTimestamp(io, &stamp_buf) });
+    const aside = try std.fmt.bufPrint(&aside_buf, "{s}.pre-reset-{s}", .{ db_path, stamp });
     if (try fileExists(io, aside)) return error.OutputExists;
+
+    try writeResetJournal(io, allocator, db_path, stamp, keep_safety_copy);
 
     const sidecars = [_][]const u8{ "", "-wal", "-shm" };
     var from_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -232,8 +242,9 @@ pub fn reset(
         for (sidecars) |suffix| {
             try deleteOrFail(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
         }
-        return .{ .outcome = .deleted, .moved_to = null };
     }
+    try deleteResetJournal(io, allocator, db_path);
+    if (!keep_safety_copy) return .{ .outcome = .deleted, .moved_to = null };
     return .{ .outcome = .moved, .moved_to = try allocator.dupe(u8, aside) };
 }
 
@@ -264,7 +275,7 @@ pub fn restore(
     defer lock.release(io);
 
     try recoverInterruptedRestore(io, allocator, data_dir);
-
+    try recoverInterruptedReset(io, allocator, data_dir);
     try verifyFile(io, allocator, backup_path, true);
     try rejectWalSidecar(io, allocator, backup_path);
 
@@ -406,6 +417,64 @@ pub fn recoverInterruptedRestore(
     try clearRestoreArtifacts(io, allocator, db_path);
 }
 
+/// Complete or roll back a reset that was interrupted while moving the
+/// database and sidecars. Must run while holding the exclusive data lock and
+/// before the database is opened or replaced.
+pub fn recoverInterruptedReset(io: std.Io, allocator: std.mem.Allocator, data_dir: []const u8) !void {
+    const db_path = try dbPath(allocator, data_dir);
+    defer allocator.free(db_path);
+    var stamp_buf: [utc_timestamp_len]u8 = undefined;
+    const journal = try readResetJournal(io, allocator, db_path, &stamp_buf) orelse return;
+
+    var aside_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const aside = try std.fmt.bufPrint(&aside_buf, "{s}.pre-reset-{s}", .{ db_path, journal.stamp });
+    const live_db = try fileExists(io, db_path);
+    const aside_db = try fileExists(io, aside);
+
+    const sidecars = [_][]const u8{ "", "-wal", "-shm" };
+    var from_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var to_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+
+    if (live_db) {
+        // The move had not reached the database yet (or a rollback was itself
+        // interrupted). Put any sidecars back, then let reset start over.
+        if (aside_db) return error.ResetRecoveryFailed;
+        for (sidecars) |suffix| {
+            const from = try std.fmt.bufPrint(&from_buf, "{s}{s}", .{ aside, suffix });
+            const to = try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ db_path, suffix });
+            try moveIfExists(io, from, to);
+        }
+        try syncParentDir(io, db_path);
+        try deleteResetJournal(io, allocator, db_path);
+        return;
+    }
+    if (!aside_db) {
+        // Nothing is left at either path. A no-safety reset may have deleted
+        // the database before failing on a sidecar; finish that cleanup.
+        if (!journal.keep_safety_copy) {
+            for (sidecars) |suffix| {
+                try deleteOrFail(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
+            }
+        }
+        try deleteResetJournal(io, allocator, db_path);
+        return;
+    }
+
+    // The database reached the safety path; finish the remaining sidecars.
+    for (sidecars) |suffix| {
+        const from = try std.fmt.bufPrint(&from_buf, "{s}{s}", .{ db_path, suffix });
+        const to = try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix });
+        try moveIfExists(io, from, to);
+    }
+    try syncParentDir(io, db_path);
+    if (!journal.keep_safety_copy) {
+        for (sidecars) |suffix| {
+            try deleteOrFail(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
+        }
+    }
+    try deleteResetJournal(io, allocator, db_path);
+}
+
 fn clearRestoreArtifacts(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !void {
     const tmp_path = try std.fmt.allocPrint(allocator, "{s}.restore-tmp", .{db_path});
     defer allocator.free(tmp_path);
@@ -545,6 +614,70 @@ fn restoreJournalExists(io: std.Io, allocator: std.mem.Allocator, db_path: []con
     const journal_path = try restoreJournalPath(allocator, db_path);
     defer allocator.free(journal_path);
     return fileExists(io, journal_path);
+}
+
+fn writeResetJournal(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    db_path: []const u8,
+    stamp: []const u8,
+    keep_safety_copy: bool,
+) !void {
+    const journal_path = try resetJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+    errdefer deleteQuietly(io, journal_path);
+
+    const contents = try std.fmt.allocPrint(allocator, "{s}{s}\n{d}\n", .{ reset_journal_header, stamp, @intFromBool(keep_safety_copy) });
+    defer allocator.free(contents);
+
+    const file = try std.Io.Dir.cwd().createFile(io, journal_path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, contents);
+    try file.sync(io);
+    try syncParentDir(io, db_path);
+}
+
+fn readResetJournal(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    db_path: []const u8,
+    stamp_buf: *[utc_timestamp_len]u8,
+) !?ResetJournal {
+    const journal_path = try resetJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+
+    const contents = std.Io.Dir.cwd().readFileAlloc(io, journal_path, allocator, .limited(128)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        error.StreamTooLong => return error.CorruptResetJournal,
+        else => return err,
+    };
+    defer allocator.free(contents);
+
+    if (!std.mem.startsWith(u8, contents, reset_journal_header)) return error.CorruptResetJournal;
+    var lines = std.mem.splitScalar(u8, contents[reset_journal_header.len..], '\n');
+    const stamp_text = std.mem.trim(u8, lines.next() orelse return error.CorruptResetJournal, "\r ");
+    const keep_text = std.mem.trim(u8, lines.next() orelse return error.CorruptResetJournal, "\r ");
+    if (stamp_text.len != utc_timestamp_len) return error.CorruptResetJournal;
+    for (stamp_text) |char| {
+        if (!std.ascii.isAlphanumeric(char)) return error.CorruptResetJournal;
+    }
+    @memcpy(stamp_buf[0..], stamp_text);
+    const keep = std.fmt.parseInt(u8, keep_text, 10) catch return error.CorruptResetJournal;
+    if (keep > 1) return error.CorruptResetJournal;
+    return .{ .stamp = stamp_buf[0..], .keep_safety_copy = keep == 1 };
+}
+
+fn deleteResetJournal(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !void {
+    const journal_path = try resetJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+    std.Io.Dir.cwd().deleteFile(io, journal_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+fn resetJournalPath(allocator: std.mem.Allocator, db_path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}.reset-journal", .{db_path});
 }
 
 fn fileExists(io: std.Io, path: []const u8) !bool {

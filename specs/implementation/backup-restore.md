@@ -27,7 +27,7 @@ This document defines the operator-facing backup, restore, and durability contra
 | `zyncbase backup <out.db> [--config <path>] [--data-dir <dir>]` | Writes a consistent snapshot while the server is running. Refuses to overwrite an existing output. |
 | `zyncbase restore <in.db> [--config <path>] [--data-dir <dir>] [--no-safety-copy]` | Replaces `<dataDir>/zyncbase.db` with the snapshot. Requires the data lock, so the server must be stopped. |
 | `zyncbase verify <in.db>` | Runs `PRAGMA integrity_check` and the ZyncBase marker check. |
-| `zyncbase reset --yes [--config <path>] [--data-dir <dir>] [--no-safety-copy]` | Moves `zyncbase.db` and its sidecars to `zyncbase.db.pre-reset-<timestamp>` under the exclusive lock and retains them by default, so the next start creates a fresh database. `--no-safety-copy` deletes them instead. |
+| `zyncbase reset --yes [--config <path>] [--data-dir <dir>] [--no-safety-copy]` | Journals the move, then moves `zyncbase.db` and its sidecars to `zyncbase.db.pre-reset-<timestamp>` under the exclusive lock and retains them by default, so the next start creates a fresh database. `--no-safety-copy` deletes them instead. An interrupted move is completed or rolled back before the next reset, startup, restore, or `migrate apply` opens the database. |
 
 `--data-dir` allows a restore into a fresh directory for drills or disaster recovery without loading a full deployment config.
 

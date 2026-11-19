@@ -340,6 +340,11 @@ pub const ZyncBaseServer = struct {
             self.memory_strategy.generalAllocator(),
             config.data_dir,
         );
+        try backup.recoverInterruptedReset(
+            self.io,
+            self.memory_strategy.generalAllocator(),
+            config.data_dir,
+        );
 
         std.log.info("Storage durability: synchronous={s}", .{@tagName(config.storage.synchronous)});
         try self.storage_engine.init(

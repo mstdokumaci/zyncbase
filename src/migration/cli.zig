@@ -354,7 +354,10 @@ fn apply(ctx: Context, cmd: Command) !void {
         try out.print("No database at {s}.\n", .{db_path});
         return error.DatabaseNotFound;
     }
-    if (cmd.db == null) try backup.recoverInterruptedRestore(ctx.io, ctx.allocator, dataDir(ctx, cmd));
+    if (cmd.db == null) {
+        try backup.recoverInterruptedRestore(ctx.io, ctx.allocator, dataDir(ctx, cmd));
+        try backup.recoverInterruptedReset(ctx.io, ctx.allocator, dataDir(ctx, cmd));
+    }
 
     var db = try openFile(ctx.allocator, db_path, true, cmd.db == null);
     defer db.deinit();
@@ -649,7 +652,7 @@ fn checkVersions(
             if (db.newestApplied(last.id)) {
                 if (options.snapshot_db_path) |path| {
                     const items = project.migrations.items;
-                    if (usablePreLastSnapshot(ctx, arena, path, items, items.len - 1) catch false) {
+                    if (usablePreLastSnapshot(ctx, arena, path, items, db, items.len - 1) catch false) {
                         try ctx.out.print("  Or fold this change into {s} with: zyncbase migrate new <name> --amend\n", .{last.id});
                     }
                 }
@@ -791,7 +794,7 @@ fn amend(ctx: Context, cmd: Command) !void {
             try out.print("{s} is not the newest migration applied to {s}; create a new migration instead.\n", .{ last.id, db_path });
             return error.CannotAmend;
         }
-        const path = try findAmendSnapshot(ctx, arena, db_path, items, items.len - 1) orelse {
+        const path = try findAmendSnapshot(ctx, arena, db_path, items, db, items.len - 1) orelse {
             try out.print("No usable pre-migration snapshot for {s} next to {s}; --amend needs one to undo the migration.\n", .{ last.id, db_path });
             try out.print("Create a new migration instead, or start over with: zyncbase reset --yes\n", .{});
             return error.SnapshotNotFound;
@@ -894,22 +897,29 @@ fn findSnapshot(ctx: Context, arena: Allocator, db_path: []const u8, id: []const
     return try std.fs.path.join(arena, &.{ dir_path, found.name });
 }
 
-/// True when the pre-`items[last_index]` snapshot exists and can restore it.
-fn usablePreLastSnapshot(ctx: Context, arena: Allocator, db_path: []const u8, items: []const source.Migration, last_index: usize) !bool {
-    const path = try findSnapshot(ctx, arena, db_path, items[last_index].id) orelse return false;
-    return snapshotPrecedes(ctx, arena, path, items, last_index);
+/// True when the pre-`items[last_index]` batch snapshot exists and can restore it.
+fn usablePreLastSnapshot(ctx: Context, arena: Allocator, db_path: []const u8, items: []const source.Migration, db: DbState, last_index: usize) !bool {
+    return (try findAmendSnapshot(ctx, arena, db_path, items, db, last_index)) != null;
 }
 
-/// The newest snapshot amend can restore. It may precede an earlier migration
-/// in the same batch; those migrations replay after the restore.
-fn findAmendSnapshot(ctx: Context, arena: Allocator, db_path: []const u8, items: []const source.Migration, last_index: usize) !?[]const u8 {
-    var i = last_index + 1;
-    while (i > 0) {
-        i -= 1;
-        const path = try findSnapshot(ctx, arena, db_path, items[i].id) orelse continue;
-        if (try snapshotPrecedes(ctx, arena, path, items, i)) return path;
+/// The snapshot for the batch that applied `items[last_index]`. The ledger
+/// records the batch's first migration; only that snapshot can restore it.
+fn findAmendSnapshot(ctx: Context, arena: Allocator, db_path: []const u8, items: []const source.Migration, db: DbState, last_index: usize) !?[]const u8 {
+    const entry_index = findLedger(db.ledger, items[last_index].id) orelse return null;
+    const entry = db.ledger[entry_index];
+    const first_id = if (entry.batch_first.len > 0) entry.batch_first else entry.id;
+
+    var first_index: ?usize = null;
+    for (items, 0..) |migration, i| {
+        if (std.mem.eql(u8, migration.id, first_id)) {
+            first_index = i;
+            break;
+        }
     }
-    return null;
+    const i = first_index orelse return null;
+    const path = try findSnapshot(ctx, arena, db_path, first_id) orelse return null;
+    if (!try snapshotPrecedes(ctx, arena, path, items, i)) return null;
+    return path;
 }
 
 /// True when `path` holds the state just before `items[before_index]`: the

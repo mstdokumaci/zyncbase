@@ -35,6 +35,7 @@ const create_migrations_table_sql =
     \\  after_version TEXT NOT NULL,
     \\  after_hash TEXT NOT NULL,
     \\  sql_hash TEXT NOT NULL,
+    \\  batch_first TEXT NOT NULL DEFAULT '',
     \\  applied_at INTEGER NOT NULL
     \\) STRICT
 ;
@@ -97,6 +98,8 @@ pub const LedgerEntry = struct {
     after_version: []const u8,
     after_hash: []const u8,
     sql_hash: []const u8,
+    /// First migration applied by the run that inserted this row; empty when unknown.
+    batch_first: []const u8,
     applied_at: i64,
 };
 
@@ -111,10 +114,11 @@ pub fn readLedger(arena: Allocator, db: *sqlite.Db) ![]const LedgerEntry {
         after_version: []const u8,
         after_hash: []const u8,
         sql_hash: []const u8,
+        batch_first: []const u8,
         applied_at: i64,
     };
     var stmt = try db.prepare(
-        "SELECT id, mode, before_version, after_version, after_hash, sql_hash, applied_at FROM _zync_migrations ORDER BY id",
+        "SELECT id, mode, before_version, after_version, after_hash, sql_hash, batch_first, applied_at FROM _zync_migrations ORDER BY id",
     );
     defer stmt.deinit();
     var entries = std.ArrayListUnmanaged(LedgerEntry).empty;
@@ -127,6 +131,7 @@ pub fn readLedger(arena: Allocator, db: *sqlite.Db) ![]const LedgerEntry {
             .after_version = row.after_version,
             .after_hash = row.after_hash,
             .sql_hash = row.sql_hash,
+            .batch_first = row.batch_first,
             .applied_at = row.applied_at,
         });
     }
@@ -140,14 +145,15 @@ pub const NewLedgerEntry = struct {
     after_version: []const u8,
     after_hash: []const u8,
     sql_hash: []const u8,
+    batch_first: []const u8 = "",
 };
 
 pub fn insertLedger(io: std.Io, db: *sqlite.Db, entry: NewLedgerEntry) !void {
     const now = std.Io.Clock.real.now(io).toMicroseconds();
     try db.exec(
         \\INSERT INTO _zync_migrations
-        \\  (id, mode, before_version, after_version, after_hash, sql_hash, applied_at)
-        \\VALUES (?, ?, ?, ?, ?, ?, ?)
+        \\  (id, mode, before_version, after_version, after_hash, sql_hash, batch_first, applied_at)
+        \\VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ,
         .{},
         .{
@@ -157,6 +163,7 @@ pub fn insertLedger(io: std.Io, db: *sqlite.Db, entry: NewLedgerEntry) !void {
             entry.after_version,
             entry.after_hash,
             entry.sql_hash,
+            entry.batch_first,
             now,
         },
     );

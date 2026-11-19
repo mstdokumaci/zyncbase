@@ -435,6 +435,7 @@ fn runTransaction(
     };
 
     try state.ensureSystemTables(db);
+    const batch_first = plan.firstMigrationId() orelse "";
     const StepLog = struct { label: []const u8, result: step.StepReport };
     var logs = std.ArrayListUnmanaged(StepLog).empty;
     for (plan.steps.items, 0..) |*planned, i| {
@@ -462,6 +463,7 @@ fn runTransaction(
                 .after_version = m.after.schema.version,
                 .after_hash = &m.after.hash,
                 .sql_hash = &m.sql_hash,
+                .batch_first = batch_first,
             });
             report.migrations_applied += 1;
         }

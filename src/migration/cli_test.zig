@@ -165,6 +165,26 @@ const Harness = struct {
         return found orelse error.TestExpectedValue;
     }
 
+    /// The newest migration folder by id. Owned by the caller.
+    fn latestMigration(self: *Harness) ![]u8 {
+        var dir = try std.Io.Dir.cwd().openDir(std.testing.io, self.migrations_dir, .{ .iterate = true });
+        defer dir.close(std.testing.io);
+        var found: ?[]u8 = null;
+        errdefer if (found) |path| allocator.free(path);
+        var iter = dir.iterate();
+        while (try iter.next(std.testing.io)) |entry| {
+            if (entry.name[0] == '.' or entry.kind != .directory) continue;
+            if (found) |current| {
+                const keep_current = std.mem.order(u8, std.fs.path.basename(current), entry.name) == .gt;
+                if (keep_current) continue;
+                allocator.free(current);
+                found = null;
+            }
+            found = try std.fs.path.join(allocator, &.{ self.migrations_dir, entry.name });
+        }
+        return found orelse error.TestExpectedValue;
+    }
+
     /// The newest snapshot written for `id`. Owned by the caller.
     fn latestSnapshot(self: *Harness, id: []const u8) ![]u8 {
         const dir_path = std.fs.path.dirname(self.db_path) orelse ".";
@@ -456,6 +476,50 @@ test "migrate cli: --amend replays a batch from its first snapshot" {
     try h.runOk(&.{"apply"});
     try h.expectAppliedVersion("3.1.0");
     try std.testing.expectEqual(@as(i64, 3), try h.int("SELECT count(*) FROM tasks"));
+}
+
+test "migrate cli: --amend does not reuse another batch's snapshot" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    try h.runOk(&.{"apply"});
+    try h.seedTasks();
+
+    try h.setSchema(v2);
+    try h.runOk(&.{ "new", "priority_to_string" });
+    const first = try h.onlyMigration();
+    defer allocator.free(first);
+    try h.writeMigrationFile(first, "migration.sql", v1_to_v2_sql);
+    try h.runOk(&.{"apply"});
+
+    const v3 =
+        \\{"version":"3.0.0","store":{"tasks":{"fields":{
+        \\  "title":{"type":"string"},
+        \\  "priority":{"type":"string","enum":["low","medium","high"]},
+        \\  "notes":{"type":"string"}
+        \\},"required":["title"]}}}
+    ;
+    try h.setSchema(v3);
+    try h.runOk(&.{ "new", "zz_add_notes" });
+    const second = try h.latestMigration();
+    defer allocator.free(second);
+    try h.runOk(&.{"apply"});
+
+    // B has its own batch. Removing its snapshot must not fall back to A's.
+    const second_snapshot = try h.latestSnapshot(std.fs.path.basename(second));
+    defer allocator.free(second_snapshot);
+    try std.Io.Dir.cwd().deleteFile(std.testing.io, second_snapshot);
+
+    const v3_1 =
+        \\{"version":"3.1.0","store":{"tasks":{"fields":{
+        \\  "title":{"type":"string"},
+        \\  "priority":{"type":"string","enum":["low","medium","high"]},
+        \\  "notes":{"type":"string"},
+        \\  "extra":{"type":"string"}
+        \\},"required":["title"]}}}
+    ;
+    try h.setSchema(v3_1);
+    try std.testing.expectError(error.SnapshotNotFound, h.run(&.{ "new", "zz_notes_again", "--amend" }));
+    try h.expectAppliedVersion("3.0.0");
 }
 
 test "migrate cli: a database with an unknown layout is refused" {

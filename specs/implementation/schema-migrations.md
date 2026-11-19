@@ -59,7 +59,7 @@ System tables. All are STRICT, and all use the reserved `_zync_` prefix:
 |---|---|---|
 | `_zync_namespaces` | `id INTEGER PRIMARY KEY`, `name TEXT NOT NULL UNIQUE` | Created by `StorageEngine.init`. |
 | `_zync_schema` | `id` (always 1), `layout`, `version`, `hash`, `schema`, `applied_at` (µs) | One row. `schema` is the minified schema JSON. `layout` is the physical layout generation (1). |
-| `_zync_migrations` | `id`, `mode` (`applied`/`baseline`), `before_version`, `after_version`, `after_hash`, `sql_hash`, `applied_at` | One row per migration folder known to this database. |
+| `_zync_migrations` | `id`, `mode` (`applied`/`baseline`), `before_version`, `after_version`, `after_hash`, `sql_hash`, `batch_first`, `applied_at` | One row per migration folder known to this database. `batch_first` names the first migration applied in the same run. |
 
 Schema identity:
 - `minify(json)` parses the JSON and writes it back compactly. Object key order and array order are preserved, because table, field and action order define wire indexes (ADR-009).
