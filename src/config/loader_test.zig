@@ -921,3 +921,67 @@ test "config: load - complete config" {
 
     try std.testing.expectEqualStrings(context.test_dir, config.data_dir);
 }
+
+test "config: migrations directory defaults next to the schema file" {
+    const allocator = std.testing.allocator;
+    var context = try schema_helpers.TestContext.init(allocator, "config-migrations-default");
+    defer context.deinit();
+
+    const schema_file = try std.fs.path.join(allocator, &.{ context.test_dir, "app", "schema.json" });
+    defer allocator.free(schema_file);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, std.fs.path.dirname(schema_file) orelse return error.TestExpectedValue);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_file, .data = "{}" });
+
+    const path = try std.fs.path.join(allocator, &.{ context.test_dir, "config.json" });
+    defer allocator.free(path);
+    const content = try std.fmt.allocPrint(allocator, "{{\"schema\":\"{s}\"}}", .{schema_file});
+    defer allocator.free(content);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = content });
+
+    var config = try loadConfig(allocator, path);
+    defer config.deinit();
+    try std.testing.expect(config.migrations.snapshot);
+    const dir = try config.migrationsDir(allocator);
+    defer allocator.free(dir);
+    const expected = try std.fs.path.join(allocator, &.{ context.test_dir, "app", "migrations" });
+    defer allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, dir);
+}
+
+test "config: migrations settings are parsed" {
+    const allocator = std.testing.allocator;
+    var context = try schema_helpers.TestContext.init(allocator, "config-migrations");
+    defer context.deinit();
+
+    const path = try std.fs.path.join(allocator, &.{ context.test_dir, "config.json" });
+    defer allocator.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{
+        .sub_path = path,
+        .data =
+        \\{"schema":{"version":"1.0.0","store":{}},"migrations":{"dir":"db/migrations","snapshot":false}}
+        ,
+    });
+
+    var config = try loadConfig(allocator, path);
+    defer config.deinit();
+    try std.testing.expect(!config.migrations.snapshot);
+    const dir = try config.migrationsDir(allocator);
+    defer allocator.free(dir);
+    try std.testing.expectEqualStrings("db/migrations", dir);
+}
+
+test "config: inline schemas default to ./migrations" {
+    const allocator = std.testing.allocator;
+    var context = try schema_helpers.TestContext.init(allocator, "config-migrations-inline");
+    defer context.deinit();
+
+    const path = try std.fs.path.join(allocator, &.{ context.test_dir, "config.json" });
+    defer allocator.free(path);
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = "{\"schema\":{\"version\":\"1.0.0\",\"store\":{}}}" });
+
+    var config = try loadConfig(allocator, path);
+    defer config.deinit();
+    const dir = try config.migrationsDir(allocator);
+    defer allocator.free(dir);
+    try std.testing.expectEqualStrings("./migrations", dir);
+}

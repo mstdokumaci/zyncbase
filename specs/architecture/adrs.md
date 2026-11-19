@@ -865,7 +865,7 @@ The upsert conflict target remains `ON CONFLICT("id")`; a conflict on a user uni
 
 ### Migration Behavior
 
-Adding, removing, reordering, or changing a constraint is an index migration — non-destructive, transactional, and rolled back entirely on failure. Adding or changing a constraint over existing duplicate rows fails startup; ZyncBase does not pick winners, delete rows, or rewrite values. Removing a constraint drops its managed index and permits future duplicates.
+Adding, removing, reordering, or changing a constraint is an index migration. It is non-destructive, runs inside the startup transaction, and rolls back entirely on failure. Adding or changing a constraint over existing duplicate rows fails startup, and the developer must remove or merge the duplicates first. ZyncBase does not pick winners, delete rows, or rewrite values. Removing a constraint drops its managed index and permits future duplicates.
 
 ### Explicitly Rejected Alternatives
 
@@ -877,7 +877,7 @@ Adding, removing, reordering, or changing a constraint is an index migration —
 
 **Consequences**:
 - Uniqueness holds under any level of client concurrency with no application coordination.
-- Startup owns index lifecycle: migrations are the sole DDL owner, so index changes are atomic and version-persisted.
+- Startup owns index lifecycle: migrations are the sole DDL owner, so index changes are atomic and persisted together with the schema they belong to.
 - Duplicate rejection is observable only on committed confirmations; accepted writes give no delivery guarantee by design (ADR-018).
 
 **Principles**: P-SBD, P-TSF
@@ -1063,3 +1063,75 @@ Both require `confirm: "committed"` and a `writeId`. Both are reported as write-
 - A conditional write on a row the session cannot read fails with `PERMISSION_DENIED`; workers that can write but not read must use unconditional writes.
 
 **Principles**: P-RTF, P-POM, P-SAT, P-SBD, P-TSF, P-PPF, P-CIB
+
+---
+
+## ADR-024: Developer-Owned Schema Migrations
+
+Startup used to migrate by comparing `schema.json` with SQLite's catalog. That approach could not see renames, removed tables, `required` changes, `namespaced` changes, tightened constraints, or type changes between types that share a SQL storage class. Removing a field crashed detection, and adding a reference field was refused as destructive. Changes that do lose data had no supported path: they were either refused outright or rebuilt without converting values. Destructive changes need a decision about the data that only the application developer can make. A database cannot infer it.
+
+**Decision**: ZyncBase owns the shape and the developer owns the data. ZyncBase generates all DDL from `schema.json`. When a change can lose or reinterpret stored data, the developer writes a migration: a data-only SQL file that ZyncBase stages, constrains, runs, and verifies inside the startup transaction. Pending migrations apply automatically at server startup, before the server listens.
+
+### Applied Schema Snapshot
+
+- The database stores the schema it was last migrated to in `_zync_schema`. The stored form is the source schema JSON with whitespace removed and object key order preserved. Its SHA-256 hash identifies the schema.
+- Startup diffs the stored schema against `schema.json` logically, field by field and table by table, by name. The SQLite catalog is checked against the layout each schema implies, which detects drift. The catalog is no longer the source of the diff.
+- Every managed table is a SQLite `STRICT` table, so a value that cannot be stored losslessly in a column's declared type fails at the statement that wrote it.
+
+### Change Buckets
+
+The schemas alone determine the bucket. Data never does, so development and production make the same decision.
+
+- **Auto**: lossless changes, applied automatically. Examples: add a table, add an optional field, change an index, relax a constraint, make a field optional, change `onDelete`. Rebuilds needed for these changes are generated.
+- **Checked**: lossless in shape, but they can fail on existing data. Examples: add a unique constraint, add a required field, make a field required, retarget a reference, tighten a constraint. They apply automatically when the data complies. Otherwise startup fails with counts and sample ids, and the fix is a migration.
+- **Migration-required**: data would be lost or reinterpreted. Examples: remove a field or table, change any type including array `items`, flip `namespaced`. Startup refuses until a migration exists.
+
+### Migrations
+
+- A migration is a folder `migrations/<UTC timestamp>_<name>/` with generated `before.json` and `after.json` and the developer's `migration.sql`.
+- Migrations are one-time bridges for existing databases. Fresh databases are created from `schema.json`, and existing migrations are recorded as baseline. Applied migrations are recorded in `_zync_migrations`. History is linear, and applied migrations must not be modified.
+- Before the file runs:
+  - rebuilt and removed tables are renamed to `_zync_prev_<table>`
+  - target tables are created empty in the `after` shape
+  - foreign keys are disabled
+- The file may only read data and write managed tables, prev tables, and `_zync_namespaces`. DDL, `PRAGMA`, transaction control, and `ATTACH` are rejected by a SQLite authorizer before any statement runs.
+- Helper functions cover what plain SQL cannot produce without knowing ZyncBase's storage encoding: new document ids, canonical arrays, and unique monotonic timestamps. `zync_todo(...)` marks an unresolved decision in generated scaffolds, and any remaining use blocks the migration.
+- Converting between the SDK's document-id strings and stored ids is not offered in SQL. A string field becomes a reference by expand/contract: add a new reference field, backfill it through the SDK, then remove the old field in a later migration.
+- **Row guard**: after the file runs, every row still in `_zync_prev_<table>` must exist by `id` in `<table>`. A removed table's prev table must be empty. Rows are dropped on purpose only by deleting them from the prev table, so every intentional loss is a visible SQL statement and accidental loss still fails.
+- After the file, ZyncBase verifies the following before committing:
+  - unique indexes
+  - foreign keys
+  - STRICT types
+  - canonical arrays
+  - booleans
+  - schema constraints on every validated row
+  - the catalog layout
+
+### Versions
+
+`version` is strict `X.Y.Z`. Versions never decrease. A deployment that contains a migration-required change must raise the major version relative to the database's applied version, because the major version is the signal clients receive. `SchemaSync` carries the version.
+
+### Failure and Rollback
+
+- One startup run, covering all pending migrations and auto steps, is one transaction. The database reaches the target schema or stays exactly as it was.
+- When a developer migration is pending, a verified `VACUUM INTO` snapshot is written next to the database first. There are no down migrations: rollback is a restore of that snapshot.
+
+### Explicitly Rejected Alternatives
+
+- **Down migrations**: SQL cannot restore dropped data. The snapshot is the honest rollback.
+- **Replaying migration history on fresh databases**: history drifts from the schema and needs squashing. Fresh databases are built from `schema.json`.
+- **Row-count or table-level loss directives** (comments, manifests, SQL flags): they allow the accidental loss the guard exists to catch.
+- **Automatic type coercion**: guessing conversions is silent data corruption. Even integer → number rounds above 2^53.
+- **`allowDestructive`, `--force-schema`, environment modes**: a flag that drops data in production is a footgun. Discarding development data is an explicit `zyncbase reset`.
+- **Developer-written DDL**: the shape must match what ZyncBase generates, or runtime SQL, indexes, and validation drift.
+- **Data-dependent classification**: an empty development table would pass where production fails.
+- **Online or background migrations**: deferred. A single-node startup window is simpler and is already exclusive.
+
+**Consequences**:
+- Every schema change is detectable, and no supported path loses data without an explicit statement.
+- Startup can take time proportional to the affected tables: rebuilds, validation, and the snapshot. Operators must allow for it.
+- `migrate status`, `migrate new`, `migrate check`, `migrate apply`, and `reset` become part of the CLI.
+- Databases created before this decision are not migrated and must be recreated.
+- Future schema grammar changes must keep stored snapshots parseable, or ship a snapshot upgrade with a layout bump.
+
+**Principles**: P-SOT, P-SBD, P-POM, P-PPF, P-SHF, P-TSF

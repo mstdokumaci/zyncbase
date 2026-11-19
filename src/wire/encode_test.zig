@@ -460,7 +460,7 @@ test "encodeSharedStateBroadcast - compact tuple preserves patch order" {
     try testing.expectEqual(@as(u64, 9), patches.arr[1].arr[1].uint);
 }
 
-test "encodeSchemaSync: fieldFlags match bit encoding rules" {
+test "encodeSchemaSync: carries the schema version, and fieldFlags match bit encoding rules" {
     const allocator = std.heap.smp_allocator;
 
     const schema_json =
@@ -482,6 +482,10 @@ test "encodeSchemaSync: fieldFlags match bit encoding rules" {
     var reader: std.Io.Reader = .fixed(encoded);
     const parsed = try msgpack.decode(allocator, &reader);
     defer parsed.free(allocator);
+
+    try testing.expectEqual(@as(usize, 11), parsed.map.count());
+    const version_val = (try parsed.mapGet("version")) orelse return error.MissingVersion;
+    try testing.expectEqualStrings("1.0.0", version_val.str.value());
 
     const field_flags_val = (try parsed.mapGet("fieldFlags")) orelse {
         return error.MissingFieldFlags;

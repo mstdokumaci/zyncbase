@@ -468,11 +468,72 @@ export async function runE2ETest(
 	}
 }
 
-export async function withServer<T>(
+export type CliResult = {
+	code: number;
+	stdout: string;
+	stderr: string;
+};
+
+const CLI_TIMEOUT_MS = 30_000;
+
+/** Runs a `zyncbase <command>` CLI invocation to completion. */
+export function runCli(args: string[]): CliResult {
+	const result = Bun.spawnSync([SERVER_BIN, ...args], {
+		cwd: process.cwd(),
+		timeout: CLI_TIMEOUT_MS,
+	});
+	return {
+		code: result.exitCode ?? -1,
+		stdout: result.stdout.toString(),
+		stderr: result.stderr.toString(),
+	};
+}
+
+export function expectOk(result: CliResult, label: string): void {
+	if (result.code !== 0) {
+		throw new Error(
+			`${label} failed with exit ${result.code}\n${result.stdout}\n${result.stderr}`,
+		);
+	}
+}
+
+const STARTUP_FAILURE_TIMEOUT_MS = 30_000;
+
+/**
+ * Starts the server and expects it to exit with an error before serving,
+ * e.g. when the schema needs a migration. Returns its output.
+ */
+export async function startServerExpectFailure(
 	ctx: E2ETestContext,
 	options: ServerOptions,
-	callback: (server: ServerHandle) => Promise<T>,
-): Promise<T> {
+): Promise<CliResult> {
+	const configPath = writeServerConfig(ctx, options);
+	log(`Starting server with ${options.schemaPath}, expecting it to refuse...`);
+	const serverProcess = Bun.spawn([SERVER_BIN, "--config", configPath], {
+		stdio: ["ignore", "pipe", "pipe"],
+		cwd: process.cwd(),
+	});
+	const stdoutText = readStream(serverProcess.stdout);
+	const stderrText = readStream(serverProcess.stderr);
+	const timeout = setTimeout(
+		() => serverProcess.kill(),
+		STARTUP_FAILURE_TIMEOUT_MS,
+	);
+	const code = await serverProcess.exited.finally(() => clearTimeout(timeout));
+	const result = { code, stdout: await stdoutText, stderr: await stderrText };
+	if (code === 0 || serverProcess.signalCode !== null) {
+		throw new Error(
+			`server did not refuse to start (exit ${code}, signal ${serverProcess.signalCode})\n${result.stderr}`,
+		);
+	}
+	return result;
+}
+
+/** Writes the server config for `options` and returns its path. */
+function writeServerConfig(
+	ctx: E2ETestContext,
+	options: ServerOptions,
+): string {
 	ensureDir(options.dataDir);
 	const configPath = ctx.artifactPath(
 		options.configName ?? "zyncbase-config.json",
@@ -513,7 +574,15 @@ export async function withServer<T>(
 	if (Object.keys(security).length > 0) config.security = security;
 	if (options.performance) config.performance = options.performance;
 	fs.writeFileSync(configPath, JSON.stringify(config));
+	return configPath;
+}
 
+export async function withServer<T>(
+	ctx: E2ETestContext,
+	options: ServerOptions,
+	callback: (server: ServerHandle) => Promise<T>,
+): Promise<T> {
+	const configPath = writeServerConfig(ctx, options);
 	log(`Starting server with ${options.schemaPath} on port ${ctx.port}...`);
 	const server = await startServer(configPath, ctx.port);
 	try {

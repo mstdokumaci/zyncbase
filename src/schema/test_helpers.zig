@@ -1,20 +1,44 @@
 const std = @import("std");
 
+const sqlite = @import("sqlite");
+
 const config_state = @import("../config/state.zig");
 const send_queue_mod = @import("../connection/send_queue.zig");
-const migration_detector = @import("../migration_detector.zig");
-const migration_executor = @import("../migration_executor.zig");
-const ddl_generator = @import("../sql/ddl.zig");
+const migration_startup = @import("../migration/startup.zig");
+const ddl = @import("../sql/ddl.zig");
+const canonical = @import("canonical.zig");
+const field_path = @import("field_path.zig");
 const schema_index = @import("index.zig");
 const schema_parse = @import("parse.zig");
 const schema_types = @import("types.zig");
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
+const Diagnostics = @import("../migration/diagnostics.zig").Diagnostics;
 const StorageEngine = @import("../storage_engine.zig").StorageEngine;
 const ChangeQueue = @import("../subscription/change_queue.zig").ChangeQueue;
 
 const send_queue_type = send_queue_mod.send_queue;
-const MigrationExecutor = migration_executor.MigrationExecutor;
 const Schema = schema_types.Schema;
+
+/// Runs the production startup migration against `db`. Schemas built in code
+/// get a test-only JSON identity (`schemaJsonForTest`).
+pub fn runTestMigrations(allocator: std.mem.Allocator, db: *sqlite.Db, schema: *const Schema, schema_json: ?[]const u8) !void {
+    const source = schema_json orelse try schemaJsonForTest(allocator, schema);
+    defer if (schema_json == null) allocator.free(source);
+    const identity = try canonical.Identity.init(allocator, source);
+    defer identity.deinit(allocator);
+
+    var diag = Diagnostics.init(allocator);
+    defer diag.deinit();
+    _ = migration_startup.run(std.testing.io, allocator, db, .{
+        .schema = schema,
+        .json = identity.json,
+        .hash = identity.hash,
+    }, .{}, &diag) catch |err| {
+        std.log.err("Schema migration failed in test setup: {}", .{err});
+        diag.logErrors();
+        return err;
+    };
+}
 
 // ─── Low-level Field and Table builders ──────────────────────────────────────
 // These hide name_quoted — tests should never need to know about SQL quoting.
@@ -227,6 +251,8 @@ pub fn createTestSchema(allocator: std.mem.Allocator, tables_def: []const TableD
 pub const TestContext = struct {
     allocator: std.mem.Allocator,
     test_dir: []const u8,
+    /// False for a directory borrowed from the caller; deinit then keeps it.
+    owns_dir: bool = true,
     send_queue: ?send_queue_type = null,
     change_queue: ?ChangeQueue = null,
 
@@ -268,7 +294,8 @@ pub const TestContext = struct {
             self.send_queue = null;
         }
         if (self.change_queue) |*cq| cq.deinit();
-        if (self.test_dir.len > 0) {
+        self.change_queue = null;
+        if (self.test_dir.len > 0 and self.owns_dir) {
             std.Io.Dir.cwd().deleteTree(std.testing.io, self.test_dir) catch |err| {
                 // Log failure to delete test artifacts directory
                 std.log.warn("failed to delete test artifacts directory {s}: {}", .{ self.test_dir, err });
@@ -286,35 +313,271 @@ pub fn normalizeTestStorageOptions(options: StorageEngine.Options) StorageEngine
     return effective;
 }
 
+/// Test-only schema JSON for schemas built in code, which have no source
+/// text. Production always stores the source JSON. The output is
+/// deterministic and changes whenever a persisted attribute changes; it is
+/// only parsed back if a test restarts on the same database with a
+/// different schema, in which case it must follow the real grammar.
+pub fn schemaJsonForTest(allocator: std.mem.Allocator, schema: *const Schema) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    var w: std.json.Stringify = .{ .writer = &out.writer };
+
+    // Temporary tree for nested fields and dotted paths; the returned JSON is separate.
+    var tree_state = std.heap.ArenaAllocator.init(allocator);
+    defer tree_state.deinit();
+    const tmp = tree_state.allocator();
+
+    try w.beginObject();
+    try w.objectField("version");
+    try w.write(schema.version);
+    try w.objectField("store");
+    try w.beginObject();
+    for (schema.tables) |*table| {
+        try w.objectField(table.name);
+        try w.beginObject();
+        try w.objectField("namespaced");
+        try w.write(table.namespaced);
+        try w.objectField("fields");
+        try writeFieldTree(&w, try buildFieldTree(tmp, table));
+        if (!table.is_users_table) {
+            try w.objectField("required");
+            try w.beginArray();
+            for (table.userFields()) |field| {
+                if (field.required) try w.write(try field_path.toDotted(tmp, field.name));
+            }
+            try w.endArray();
+        }
+        try w.objectField("unique");
+        try w.beginArray();
+        for (table.unique_constraints) |constraint| {
+            try w.beginArray();
+            for (constraint.field_indexes) |i| try w.write(try field_path.toDotted(tmp, table.userFields()[i].name));
+            try w.endArray();
+        }
+        try w.endArray();
+        try w.endObject();
+    }
+    try w.endObject();
+    try w.objectField("presence");
+    try w.beginObject();
+    try w.objectField("user");
+    try writeTestPresence(&w, tmp, schema.presence_user_fields);
+    try w.objectField("shared");
+    try writeTestPresence(&w, tmp, schema.presence_shared_fields);
+    try w.endObject();
+    try w.endObject();
+    return out.toOwnedSlice();
+}
+
+const FieldNode = struct {
+    field: ?*const schema_types.Field = null,
+    children: std.StringArrayHashMapUnmanaged(*FieldNode) = .empty,
+};
+
+/// Builds the user-facing field tree: internal `__` paths become nested objects.
+fn buildFieldTree(arena: std.mem.Allocator, table: *const schema_types.Table) !*FieldNode {
+    const root = try arena.create(FieldNode);
+    root.* = .{};
+    for (table.userFields()) |*field| {
+        var node = root;
+        var rest = field.name;
+        while (true) {
+            const sep = std.mem.indexOf(u8, rest, "__");
+            const segment = if (sep) |s| rest[0..s] else rest;
+            const gop = try node.children.getOrPut(arena, segment);
+            if (!gop.found_existing) {
+                const child = try arena.create(FieldNode);
+                child.* = .{};
+                gop.value_ptr.* = child;
+            }
+            const child = gop.value_ptr.*;
+            if (sep == null) {
+                child.field = field;
+                break;
+            }
+            node = child;
+            rest = rest[sep.? + 2 ..];
+        }
+    }
+    return root;
+}
+
+fn writeFieldTree(w: *std.json.Stringify, node: *const FieldNode) !void {
+    try w.beginObject();
+    var it = node.children.iterator();
+    while (it.next()) |entry| {
+        try w.objectField(entry.key_ptr.*);
+        const child = entry.value_ptr.*;
+        if (child.field) |field| {
+            try writeTestField(w, field.*);
+        } else {
+            try w.beginObject();
+            try w.objectField("type");
+            try w.write("object");
+            try w.objectField("fields");
+            try writeFieldTree(w, child);
+            try w.endObject();
+        }
+    }
+    try w.endObject();
+}
+
+fn writeTestField(w: *std.json.Stringify, field: schema_types.Field) !void {
+    try w.beginObject();
+    try w.objectField("type");
+    try w.write(field.declared_type.schemaName());
+    if (field.storage_type != field.declared_type and field.references == null) {
+        try w.objectField("storage");
+        try w.write(@tagName(field.storage_type));
+    }
+    if (field.items_type) |items| {
+        try w.objectField("items");
+        try w.write(items.schemaName());
+    }
+    if (field.indexed) {
+        try w.objectField("indexed");
+        try w.write(true);
+    }
+    if (field.references) |ref| {
+        const on_delete: schema_types.OnDelete = field.on_delete orelse .restrict;
+        try w.objectField("references");
+        try w.write(ref);
+        try w.objectField("onDelete");
+        try w.write(on_delete.schemaName());
+    }
+    if (field.constraints) |constraints| {
+        if (constraints.enum_values) |values| {
+            try w.objectField("enum");
+            try w.beginArray();
+            for (values) |value| switch (value) {
+                .text => |t| try w.write(t),
+                .integer => |i| try w.write(i),
+                .real => |r| try w.write(r),
+            };
+            try w.endArray();
+        }
+        if (constraints.pattern_source) |pattern| {
+            try w.objectField("pattern");
+            try w.write(pattern);
+        }
+        if (constraints.format) |format| {
+            try w.objectField("format");
+            try w.write(format.schemaName());
+        }
+        if (constraints.min_length) |v| {
+            try w.objectField("minLength");
+            try w.write(v);
+        }
+        if (constraints.max_length) |v| {
+            try w.objectField("maxLength");
+            try w.write(v);
+        }
+        if (constraints.minimum) |b| {
+            try w.objectField("minimum");
+            try writeTestBound(w, b);
+        }
+        if (constraints.maximum) |b| {
+            try w.objectField("maximum");
+            try writeTestBound(w, b);
+        }
+    }
+    try w.endObject();
+}
+
+fn writeTestBound(w: *std.json.Stringify, bound: schema_types.Constraints.Bound) !void {
+    switch (bound) {
+        .integer => |i| try w.write(i),
+        .real => |r| try w.write(r),
+    }
+}
+
+fn writeTestPresence(w: *std.json.Stringify, arena: std.mem.Allocator, fields: []const schema_types.PresenceField) !void {
+    const root = try buildPresenceTree(arena, fields);
+    try writePresenceTree(w, root);
+}
+
+const PresenceNode = struct {
+    field: ?*const schema_types.PresenceField = null,
+    children: std.StringArrayHashMapUnmanaged(*PresenceNode) = .empty,
+};
+
+/// Presence names use the same `__` nesting as store fields; emit them nested.
+fn buildPresenceTree(arena: std.mem.Allocator, fields: []const schema_types.PresenceField) !*PresenceNode {
+    const root = try arena.create(PresenceNode);
+    root.* = .{};
+    for (fields) |*field| {
+        var node = root;
+        var rest = field.name;
+        while (true) {
+            const sep = std.mem.indexOf(u8, rest, "__");
+            const segment = if (sep) |s| rest[0..s] else rest;
+            const gop = try node.children.getOrPut(arena, segment);
+            if (!gop.found_existing) {
+                const child = try arena.create(PresenceNode);
+                child.* = .{};
+                gop.value_ptr.* = child;
+            }
+            const child = gop.value_ptr.*;
+            if (sep == null) {
+                child.field = field;
+                break;
+            }
+            node = child;
+            rest = rest[sep.? + 2 ..];
+        }
+    }
+    return root;
+}
+
+fn writePresenceTree(w: *std.json.Stringify, node: *const PresenceNode) !void {
+    try w.beginObject();
+    var it = node.children.iterator();
+    while (it.next()) |entry| {
+        try w.objectField(entry.key_ptr.*);
+        const child = entry.value_ptr.*;
+        if (child.field) |field| {
+            try w.beginObject();
+            try w.objectField("type");
+            try w.write(field.declared_type.schemaName());
+            try w.endObject();
+        } else {
+            try w.beginObject();
+            try w.objectField("type");
+            try w.write("object");
+            try w.objectField("fields");
+            try writePresenceTree(w, child);
+            try w.endObject();
+        }
+    }
+    try w.endObject();
+}
+
 pub fn setupTestEngine(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *TestContext, schema: *const Schema, options: StorageEngine.Options) !void {
     try setupTestEngineWithPerformance(engine, allocator, memory_strategy, context, schema, .{}, options);
 }
 
 pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem.Allocator, memory_strategy: *const MemoryStrategy, context: *TestContext, schema: *const Schema, performance_config: config_state.Config.PerformanceConfig, options: StorageEngine.Options) !void {
+    try setupTestEngineWithJson(engine, allocator, memory_strategy, context, schema, null, performance_config, options);
+}
+
+/// Like production startup: the migration run is the sole DDL owner.
+/// `schema_json` is the source text when the schema was parsed from JSON.
+pub fn setupTestEngineWithJson(
+    engine: *StorageEngine,
+    allocator: std.mem.Allocator,
+    memory_strategy: *const MemoryStrategy,
+    context: *TestContext,
+    schema: *const Schema,
+    schema_json: ?[]const u8,
+    performance_config: config_state.Config.PerformanceConfig,
+    options: StorageEngine.Options,
+) !void {
     const effective_options = normalizeTestStorageOptions(options);
     try engine.init(std.testing.io, allocator, @constCast(memory_strategy), context.test_dir, schema, performance_config, effective_options, null, null);
     errdefer engine.deinit();
 
-    // Migration execution is the sole DDL owner — same as server startup.
-    var gen = ddl_generator.DDLGenerator.init(allocator);
-
-    // Detect and execute migrations
-    const setup_conn = try engine.getSetupConn();
-    var detector = migration_detector.MigrationDetector.init(allocator, setup_conn, schema);
-    const plan = try detector.detectChanges(schema);
-    defer detector.deinit(plan);
-
-    var executor = MigrationExecutor.init(
-        std.testing.io,
-        allocator,
-        setup_conn,
-        &gen,
-        .{},
-    );
-    executor.execute(plan, schema.version) catch |err| {
-        std.log.err("Schema migration failed in test setup: {}", .{err});
-        return err;
-    };
+    try runTestMigrations(allocator, try engine.getSetupConn(), schema, schema_json);
 
     context.send_queue = try send_queue_type.init(allocator);
     errdefer {
@@ -323,7 +586,29 @@ pub fn setupTestEngineWithPerformance(engine: *StorageEngine, allocator: std.mem
     }
 
     context.change_queue = try ChangeQueue.init(std.testing.io, allocator, 1);
-    errdefer context.change_queue.?.deinit();
+    errdefer {
+        if (context.change_queue) |*cq| cq.deinit();
+        context.change_queue = null;
+    }
 
     try engine.start(&context.send_queue.?, &context.change_queue.?, null);
+}
+
+/// Test-only full DDL: the `CREATE TABLE ... STRICT;` statement followed by
+/// every managed index. Production creates tables and indexes as separate steps.
+pub fn fullDDL(allocator: std.mem.Allocator, table: schema_types.Table) ![]u8 {
+    var gen = ddl.DDLGenerator.init(allocator);
+    var out = std.ArrayListUnmanaged(u8).empty;
+    errdefer out.deinit(allocator);
+    const create = try gen.generateCreateTable(table);
+    defer allocator.free(create);
+    try out.appendSlice(allocator, create);
+    var iter = ddl.ManagedIndexIterator.init(&table);
+    while (iter.next()) |managed_index| {
+        const statement = try gen.generateIndexDDL(table, managed_index);
+        defer allocator.free(statement);
+        try out.appendSlice(allocator, "\n");
+        try out.appendSlice(allocator, statement);
+    }
+    return out.toOwnedSlice(allocator);
 }

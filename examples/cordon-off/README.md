@@ -27,7 +27,7 @@ The launch command builds the SDK and a ReleaseFast ZyncBase executable, then st
 bun run demo:game:dev
 ```
 
-Stop with Ctrl+C. Territory is stored in `data/cordon-off/`; generated history and assets live in `examples/cordon-off/dist/history/`. The world resets on its own every round; to force a fresh world at the next start, run `bun run demo:game:dev --reset`. The reset removes game chunks and countries and starts a fresh round. It does not touch other ZyncBase data directories or the history archive. Schema 0.7.0 splits the former `chunks` table into `country_chunks` and `user_chunks`; a data directory written by an earlier version must be discarded (or started once with `--reset`) before 0.7.0 can run.
+Stop with Ctrl+C. Territory is stored in `data/cordon-off/`; generated history and assets live in `examples/cordon-off/dist/history/`. The world resets on its own every round; to force a fresh world at the next start, run `bun run demo:game:dev --reset`. The reset removes game chunks and countries and starts a fresh round. It does not touch other ZyncBase data directories or the history archive. Schema 0.7.0 splits the former `chunks` table into `country_chunks` and `user_chunks`; a data directory written by an earlier version must be discarded (or started once with `--reset`) before 0.7.0 can run. A data directory written by a ZyncBase build from before schema migrations is refused at startup with `UnrecognizedDatabase`; discard its database once with `zig-out/bin/zyncbase reset --yes --data-dir data/cordon-off`, then start with `--reset` for a fresh round.
 
 ## Cloudflare and VPS
 

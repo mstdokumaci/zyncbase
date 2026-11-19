@@ -26,8 +26,6 @@ pub const StorageError = error{
     ImmutableField,
     /// NOT NULL column received null value
     NullNotAllowed,
-    /// Write blocked because migration is in progress
-    MigrationInProgress,
     /// Field value type does not match schema
     TypeMismatch,
     /// Array field contains non-literal elements (maps, nested arrays)

@@ -43,6 +43,7 @@ async function runMsgIdPropertyTest(n: number): Promise<boolean> {
 		await manager.connect();
 
 		manager.schemaDictionary.processSchemaSync({
+			version: "1.0.0",
 			tables: ["test", "users"],
 			fields: [
 				["id", "name"],

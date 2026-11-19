@@ -64,7 +64,6 @@ pub const StorageEngine = struct {
 
     state: std.atomic.Value(State),
     next_reader_idx: std.atomic.Value(usize),
-    migration_active: std.atomic.Value(bool),
     node_pool: MemoryStrategy.IndexPool(write_queue_type.Node),
     schema: *const Schema,
     document_cache: document_cache_type,
@@ -129,7 +128,6 @@ pub const StorageEngine = struct {
             .document_cache = undefined,
             .namespace_cache = storage_cache.namespace_cache_type.init(io),
             .identity_cache = storage_cache.identity_cache_type.init(io),
-            .migration_active = std.atomic.Value(bool).init(false),
             .write_worker = .{
                 .io = io,
                 .allocator = allocator,
@@ -350,7 +348,6 @@ pub const StorageEngine = struct {
     pub fn ensureMutationAllowed(self: *StorageEngine) !void {
         try self.ensureRunning();
         try self.ensureHealthy();
-        if (self.migration_active.load(.acquire)) return StorageError.MigrationInProgress;
     }
 
     pub fn documentExists(self: *StorageEngine, table_index: usize, id: DocId) bool {

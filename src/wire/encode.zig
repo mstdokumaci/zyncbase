@@ -45,6 +45,7 @@ const Keys = struct {
     pub const action_params = comptimeEncodeKey("actionParams");
     pub const action_returns = comptimeEncodeKey("actionReturns");
     pub const action_flags = comptimeEncodeKey("actionFlags");
+    pub const version = comptimeEncodeKey("version");
 };
 
 // Top-level message names encode as one-byte positive fixints; nested
@@ -487,10 +488,13 @@ pub fn encodeSchemaSync(allocator: Allocator, schema: *const schema_types.Schema
     errdefer output.deinit();
     const writer = &output.writer;
 
-    try msgpack.encodeMapHeader(writer, 10);
+    try msgpack.encodeMapHeader(writer, 11);
 
     try writer.writeAll(Keys.type);
     try writer.writeAll(Values.schema_sync);
+
+    try writer.writeAll(Keys.version);
+    try msgpack.writeMsgPackStr(writer, schema.version);
 
     const tables = schema.tables;
 

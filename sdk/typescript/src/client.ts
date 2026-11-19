@@ -102,6 +102,14 @@ export class ZyncBaseClient<
 	}
 
 	/**
+	 * The server's schema version (`schema.json` `version`) from the latest
+	 * SchemaSync, or null before the first connection.
+	 */
+	get schemaVersion(): string | null {
+		return this.conn.schemaVersion;
+	}
+
+	/**
 	 * Connect to the server. The promise resolves at `synced`, once replay has
 	 * restored subscriptions and registrations. It rejects when recovery can no
 	 * longer complete: a non-retryable handshake failure or a terminal

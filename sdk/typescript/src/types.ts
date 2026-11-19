@@ -198,7 +198,7 @@ export interface ClientEvents {
 	synced: () => void;
 	disconnected: (detail: DisconnectDetail) => void;
 	reconnecting: (attempt: number, delayMs: number) => void;
-	schemaChange: () => void;
+	schemaChange: (detail: SchemaChangeDetail) => void;
 	error: (error: ZyncBaseError) => void;
 	tokenExpired: () => void;
 	statusChange: (status: ConnectionStatus, detail: StatusDetail) => void;
@@ -242,6 +242,14 @@ export interface ClientOptions {
 	retryServerErrors?: boolean; // default: true — auto-retry INTERNAL_ERROR, ENGINE_UNHEALTHY
 	maxServerRetries?: number; // default: 3 — max attempts for server errors
 	debug?: boolean; // default: false
+}
+
+/** Detail of a `schemaChange` event: the server's schema changed between connections. */
+export interface SchemaChangeDetail {
+	/** Schema version of the previous connection. */
+	previousVersion: string;
+	/** Schema version the server sent now. A higher major version means stored data changed shape. */
+	version: string;
 }
 
 export interface StatusDetail {
@@ -707,6 +715,8 @@ export interface StoreDelta {
 
 export interface SchemaSync {
 	type: "SchemaSync";
+	/** The server's `schema.json` version (`X.Y.Z`). */
+	version: string;
 	tables: string[];
 	fields: string[][];
 	fieldFlags: number[][];

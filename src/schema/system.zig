@@ -11,7 +11,8 @@ pub const implicit_users_schema_json =
 pub const quoted_id = "\"id\"";
 pub const quoted_namespace_id = "\"namespace_id\"";
 pub const quoted_owner_id = "\"owner_id\"";
-pub const quoted_external_id = "\"external_id\"";
+pub const external_id_column = "external_id";
+pub const quoted_external_id = "\"" ++ external_id_column ++ "\"";
 pub const quoted_created_at = "\"created_at\"";
 pub const quoted_updated_at = "\"updated_at\"";
 

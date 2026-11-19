@@ -6,6 +6,7 @@ describe("SchemaDictionary performance", () => {
 	test("250k representative records decode within budget", async () => {
 		const schema = new SchemaDictionary();
 		await schema.processSchemaSync({
+			version: "1.0.0",
 			tables: ["items"],
 			fields: [["id", "name", "priority", "active", "metrics__rank", "tags"]],
 			fieldFlags: [[0b11, 0, 0, 0, 0, 0]],

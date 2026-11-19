@@ -15,7 +15,25 @@ pub const Config = struct {
     schema_file: []const u8,
     schema_content: ?[]const u8 = null,
     authorization_file: ?[]const u8,
+    migrations: MigrationsConfig = .{},
     allocator: Allocator,
+
+    pub const MigrationsConfig = struct {
+        /// Migration folders. `null` resolves to `<schema file dir>/migrations`
+        /// (or `./migrations` for an inline schema); see `migrationsDir`.
+        dir: ?[]const u8 = null,
+        /// Write a verified pre-migration snapshot before a developer migration runs.
+        snapshot: bool = true,
+    };
+
+    /// The configured migrations directory, or the default next to the schema file.
+    /// Caller owns the result.
+    pub fn migrationsDir(self: *const Config, allocator: Allocator) ![]u8 {
+        if (self.migrations.dir) |dir| return allocator.dupe(u8, dir);
+        if (self.schema_content != null) return allocator.dupe(u8, "./migrations");
+        const schema_dir = std.fs.path.dirname(self.schema_file) orelse ".";
+        return std.fs.path.join(allocator, &.{ schema_dir, "migrations" });
+    }
 
     const ServerConfig = struct {
         port: u16 = 3000,
@@ -133,5 +151,6 @@ pub const Config = struct {
         if (self.authorization_file) |file| {
             self.allocator.free(file);
         }
+        if (self.migrations.dir) |dir| self.allocator.free(dir);
     }
 };

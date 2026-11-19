@@ -21,6 +21,7 @@ import { run as runConditional } from "./test-conditional";
 import { run as runCrash } from "./test-crash";
 import { run as runErrors } from "./test-errors";
 import { run as runFilters } from "./test-filters";
+import { run as runMigrations } from "./test-migrations";
 import { run as runObservability } from "./test-observability";
 import { run as runPersistence } from "./test-persistence";
 import { run as runPresence } from "./test-presence";
@@ -240,6 +241,12 @@ describe("ZyncBase E2E", () => {
 	test("backup, verify, and restore", async () => {
 		await runE2ETest("Backup and restore", async (ctx) => {
 			await runBackup(ctx);
+		});
+	});
+
+	test("schema migrations: refuse, scaffold, check, and apply at startup", async () => {
+		await runE2ETest("Schema migrations", async (ctx) => {
+			await runMigrations(ctx);
 		});
 	});
 

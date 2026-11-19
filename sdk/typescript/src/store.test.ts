@@ -116,6 +116,7 @@ async function flushTimers(): Promise<void> {
 async function makeReadySchema(): Promise<SchemaDictionary> {
 	const schema = new SchemaDictionary();
 	await schema.processSchemaSync({
+		version: "1.0.0",
 		tables: ["users"],
 		fields: [["id", "name"]],
 		fieldFlags: [[0, 0]],
@@ -705,6 +706,7 @@ describe("StoreImpl", () => {
 		async function setupSchemaWithRequiredFields() {
 			const schema = new SchemaDictionary();
 			await schema.processSchemaSync({
+				version: "1.0.0",
 				tables: ["posts"],
 				fields: [
 					[

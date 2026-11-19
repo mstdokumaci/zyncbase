@@ -29,6 +29,12 @@ const SafetyCopy = struct {
 };
 
 const restore_journal_header = "zyncbase-restore-v1\n";
+const reset_journal_header = "zyncbase-reset-v1\n";
+
+const ResetJournal = struct {
+    stamp: []const u8,
+    keep_safety_copy: bool,
+};
 
 pub fn dbPath(allocator: std.mem.Allocator, data_dir: []const u8) ![]u8 {
     return std.fs.path.join(allocator, &.{ data_dir, db_file_name });
@@ -60,7 +66,6 @@ pub fn create(
         .{ out_path, std.Io.Clock.real.now(io).toNanoseconds() },
     );
     defer allocator.free(partial_path);
-    errdefer deleteQuietly(io, partial_path);
 
     // zwanzig-disable-next-line: sentinel-alloc
     const db_path_z = try allocator.dupeZ(u8, db_path);
@@ -75,6 +80,19 @@ pub fn create(
 
     _ = try db.pragma(void, .{}, "busy_timeout", "5000");
 
+    return publishSnapshot(io, allocator, &db, partial_path, out_path);
+}
+
+/// `VACUUM INTO` a partial file, verify, fsync, then publish with a
+/// non-replacing rename. A failed snapshot never appears at `out_path`.
+fn publishSnapshot(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    db: *sqlite.Db,
+    partial_path: []const u8,
+    out_path: []const u8,
+) !CreateInfo {
+    errdefer deleteQuietly(io, partial_path);
     const started_at = std.Io.Clock.real.now(io).toMilliseconds();
     try db.execDynamic("VACUUM INTO ?", .{}, .{partial_path});
 
@@ -94,6 +112,145 @@ pub fn create(
         .bytes = stat.size,
         .duration_ms = std.Io.Clock.real.now(io).toMilliseconds() - started_at,
     };
+}
+
+/// Writes the pre-migration snapshot of `db` (the database file at `db_path`)
+/// to `<db_path>.pre-migration-<label>-<utc timestamp>`.
+/// The caller already holds the exclusive data lock, so none is taken here
+/// (a second lock on the same file would conflict within this process).
+/// Must run outside a transaction. Returns the owned snapshot path.
+pub fn snapshotHeld(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    db: *sqlite.Db,
+    db_path: []const u8,
+    label: []const u8,
+) ![]u8 {
+    var stamp_buf: [utc_timestamp_len]u8 = undefined;
+    const stamp = utcTimestamp(io, &stamp_buf);
+    var out_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var out_path = try std.fmt.bufPrint(&out_buf, "{s}{s}{s}-{s}", .{ db_path, pre_migration_infix, label, stamp });
+    // The same migration snapshotted twice within a second (e.g. after a
+    // restore) gets a `-<n>` suffix instead of failing.
+    var attempt: usize = 1;
+    while (try fileExists(io, out_path)) : (attempt += 1) {
+        if (attempt > 99) return error.OutputExists;
+        out_path = try std.fmt.bufPrint(&out_buf, "{s}{s}{s}-{s}-{d}", .{ db_path, pre_migration_infix, label, stamp, attempt });
+    }
+    var partial_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const partial_path = try std.fmt.bufPrint(&partial_buf, "{s}.partial-{d}", .{ out_path, std.Io.Clock.real.now(io).toNanoseconds() });
+
+    _ = try publishSnapshot(io, allocator, db, partial_path, out_path);
+    return allocator.dupe(u8, out_path);
+}
+
+/// Pre-migration snapshots are named `<db file><infix><migration id>-<utc timestamp>`.
+pub const pre_migration_infix = ".pre-migration-";
+
+pub const utc_timestamp_len = "20261117T140500Z".len;
+
+/// UTC `YYYYMMDDTHHMMSSZ`, used for migration ids and snapshot names.
+pub fn utcTimestamp(io: std.Io, buf: *[utc_timestamp_len]u8) []const u8 {
+    const seconds: u64 = @intCast(@max(std.Io.Clock.real.now(io).toSeconds(), 0));
+    return formatUtcTimestamp(seconds, buf);
+}
+
+pub fn formatUtcTimestamp(seconds: u64, buf: *[utc_timestamp_len]u8) []const u8 {
+    const epoch: std.time.epoch.EpochSeconds = .{ .secs = seconds };
+    const year_day = epoch.getEpochDay().calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+    const day = epoch.getDaySeconds();
+    const parts = [_]struct { value: u32, width: usize }{
+        .{ .value = year_day.year, .width = 4 },
+        .{ .value = month_day.month.numeric(), .width = 2 },
+        .{ .value = @as(u32, month_day.day_index) + 1, .width = 2 },
+        .{ .value = day.getHoursIntoDay(), .width = 2 },
+        .{ .value = day.getMinutesIntoHour(), .width = 2 },
+        .{ .value = day.getSecondsIntoMinute(), .width = 2 },
+    };
+    // Fixed-width digits; years past 9999 wrap, which the 4-digit format cannot express anyway.
+    var pos: usize = 0;
+    for (parts, 0..) |part, i| {
+        if (i == 3) {
+            buf[pos] = 'T';
+            pos += 1;
+        }
+        var value = part.value;
+        var digit = part.width;
+        while (digit > 0) {
+            digit -= 1;
+            buf[pos + digit] = '0' + @as(u8, @intCast(value % 10));
+            value /= 10;
+        }
+        pos += part.width;
+    }
+    buf[pos] = 'Z';
+    return buf[0 .. pos + 1];
+}
+
+pub const ResetOutcome = enum { absent, moved, deleted };
+
+pub const ResetInfo = struct {
+    /// What `reset` found under the lock.
+    outcome: ResetOutcome,
+    /// Where the previous database was moved, when one existed and a safety
+    /// copy was kept. Owned by the caller.
+    moved_to: ?[]u8,
+
+    pub fn deinit(self: *ResetInfo, allocator: std.mem.Allocator) void {
+        if (self.moved_to) |path| allocator.free(path);
+        self.moved_to = null;
+    }
+};
+
+/// Moves `zyncbase.db` and its sidecars aside so the next start creates a
+/// fresh database. Requires the exclusive data lock (server stopped).
+pub fn reset(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    data_dir: []const u8,
+    keep_safety_copy: bool,
+) !ResetInfo {
+    var lock = try DataLock.acquire(io, allocator, data_dir);
+    defer lock.release(io);
+    try recoverInterruptedRestore(io, allocator, data_dir);
+    if (try recoverInterruptedReset(io, allocator, data_dir)) |recovered| return recovered;
+
+    const db_path = try dbPath(allocator, data_dir);
+    defer allocator.free(db_path);
+    if (!try fileExists(io, db_path)) return .{ .outcome = .absent, .moved_to = null };
+
+    var stamp_buf: [utc_timestamp_len]u8 = undefined;
+    const stamp = utcTimestamp(io, &stamp_buf);
+    var aside_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const aside = try std.fmt.bufPrint(&aside_buf, "{s}.pre-reset-{s}", .{ db_path, stamp });
+    if (try fileExists(io, aside)) return error.OutputExists;
+
+    try writeResetJournal(io, allocator, db_path, stamp, keep_safety_copy);
+
+    const sidecars = [_][]const u8{ "", "-wal", "-shm" };
+    var from_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var to_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    for (sidecars) |suffix| {
+        const from = try std.fmt.bufPrint(&from_buf, "{s}{s}", .{ db_path, suffix });
+        const to = try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix });
+        try moveIfExists(io, from, to);
+    }
+    try syncParentDir(io, db_path);
+
+    if (!keep_safety_copy) {
+        for (sidecars) |suffix| {
+            try deleteOrFail(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
+        }
+        try deleteResetJournal(io, allocator, db_path);
+        return .{ .outcome = .deleted, .moved_to = null };
+    }
+    const owned = try allocator.dupe(u8, aside);
+    deleteResetJournal(io, allocator, db_path) catch |err| {
+        allocator.free(owned);
+        return err;
+    };
+    return .{ .outcome = .moved, .moved_to = owned };
 }
 
 /// Validate a snapshot. `full` runs `PRAGMA integrity_check`; otherwise
@@ -123,7 +280,10 @@ pub fn restore(
     defer lock.release(io);
 
     try recoverInterruptedRestore(io, allocator, data_dir);
-
+    if (try recoverInterruptedReset(io, allocator, data_dir)) |recovered| {
+        var info = recovered;
+        info.deinit(allocator);
+    }
     try verifyFile(io, allocator, backup_path, true);
     try rejectWalSidecar(io, allocator, backup_path);
 
@@ -263,6 +423,72 @@ pub fn recoverInterruptedRestore(
     if (!try fileExists(io, db_path)) return error.RestoreRecoveryFailed;
 
     try clearRestoreArtifacts(io, allocator, db_path);
+}
+
+/// Complete or roll back a reset that was interrupted while moving the
+/// database and sidecars. Must run while holding the exclusive data lock and
+/// before the database is opened or replaced. Returns the completed reset when
+/// recovery finished one; null when it rolled back or found nothing to do.
+pub fn recoverInterruptedReset(io: std.Io, allocator: std.mem.Allocator, data_dir: []const u8) !?ResetInfo {
+    const db_path = try dbPath(allocator, data_dir);
+    defer allocator.free(db_path);
+    var stamp_buf: [utc_timestamp_len]u8 = undefined;
+    const journal = try readResetJournal(io, allocator, db_path, &stamp_buf) orelse return null;
+
+    var aside_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const aside = try std.fmt.bufPrint(&aside_buf, "{s}.pre-reset-{s}", .{ db_path, journal.stamp });
+    const live_db = try fileExists(io, db_path);
+    const aside_db = try fileExists(io, aside);
+
+    const sidecars = [_][]const u8{ "", "-wal", "-shm" };
+    var from_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var to_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+
+    if (live_db) {
+        // The move had not reached the database yet (or a rollback was itself
+        // interrupted). Put any sidecars back, then let reset start over.
+        if (aside_db) return error.ResetRecoveryFailed;
+        for (sidecars) |suffix| {
+            const from = try std.fmt.bufPrint(&from_buf, "{s}{s}", .{ aside, suffix });
+            const to = try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ db_path, suffix });
+            try moveIfExists(io, from, to);
+        }
+        try syncParentDir(io, db_path);
+        try deleteResetJournal(io, allocator, db_path);
+        return null;
+    }
+    if (!aside_db) {
+        // Nothing is left at either path. A no-safety reset may have deleted
+        // the database before failing on a sidecar; finish that cleanup.
+        if (!journal.keep_safety_copy) {
+            for (sidecars) |suffix| {
+                try deleteOrFail(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
+            }
+        }
+        try deleteResetJournal(io, allocator, db_path);
+        return null;
+    }
+
+    // The database reached the safety path; finish the remaining sidecars.
+    for (sidecars) |suffix| {
+        const from = try std.fmt.bufPrint(&from_buf, "{s}{s}", .{ db_path, suffix });
+        const to = try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix });
+        try moveIfExists(io, from, to);
+    }
+    try syncParentDir(io, db_path);
+    if (!journal.keep_safety_copy) {
+        for (sidecars) |suffix| {
+            try deleteOrFail(io, try std.fmt.bufPrint(&to_buf, "{s}{s}", .{ aside, suffix }));
+        }
+        try deleteResetJournal(io, allocator, db_path);
+        return .{ .outcome = .deleted, .moved_to = null };
+    }
+    const owned = try allocator.dupe(u8, aside);
+    deleteResetJournal(io, allocator, db_path) catch |err| {
+        allocator.free(owned);
+        return err;
+    };
+    return .{ .outcome = .moved, .moved_to = owned };
 }
 
 fn clearRestoreArtifacts(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !void {
@@ -406,6 +632,86 @@ fn restoreJournalExists(io: std.Io, allocator: std.mem.Allocator, db_path: []con
     return fileExists(io, journal_path);
 }
 
+fn writeResetJournal(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    db_path: []const u8,
+    stamp: []const u8,
+    keep_safety_copy: bool,
+) !void {
+    const journal_path = try resetJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+    errdefer deleteQuietly(io, journal_path);
+
+    const contents = try std.fmt.allocPrint(allocator, "{s}{s}\n{d}\n", .{ reset_journal_header, stamp, @intFromBool(keep_safety_copy) });
+    defer allocator.free(contents);
+
+    const file = try std.Io.Dir.cwd().createFile(io, journal_path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, contents);
+    try file.sync(io);
+    try syncParentDir(io, db_path);
+}
+
+fn readResetJournal(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    db_path: []const u8,
+    stamp_buf: *[utc_timestamp_len]u8,
+) !?ResetJournal {
+    const journal_path = try resetJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+
+    const contents = std.Io.Dir.cwd().readFileAlloc(io, journal_path, allocator, .limited(128)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        error.StreamTooLong => return error.CorruptResetJournal,
+        else => return err,
+    };
+    defer allocator.free(contents);
+
+    if (!std.mem.startsWith(u8, contents, reset_journal_header)) return error.CorruptResetJournal;
+    var lines = std.mem.splitScalar(u8, contents[reset_journal_header.len..], '\n');
+    const stamp_text = std.mem.trim(u8, lines.next() orelse return error.CorruptResetJournal, "\r ");
+    const keep_text = std.mem.trim(u8, lines.next() orelse return error.CorruptResetJournal, "\r ");
+    if (stamp_text.len != utc_timestamp_len) return error.CorruptResetJournal;
+    for (stamp_text) |char| {
+        if (!std.ascii.isAlphanumeric(char)) return error.CorruptResetJournal;
+    }
+    @memcpy(stamp_buf[0..], stamp_text);
+    const keep = std.fmt.parseInt(u8, keep_text, 10) catch return error.CorruptResetJournal;
+    if (keep > 1) return error.CorruptResetJournal;
+    return .{ .stamp = stamp_buf[0..], .keep_safety_copy = keep == 1 };
+}
+
+fn deleteResetJournal(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !void {
+    const journal_path = try resetJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+    std.Io.Dir.cwd().deleteFile(io, journal_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+fn resetJournalPath(allocator: std.mem.Allocator, db_path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}.reset-journal", .{db_path});
+}
+
+fn resetJournalExists(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !bool {
+    const journal_path = try resetJournalPath(allocator, db_path);
+    defer allocator.free(journal_path);
+    return fileExists(io, journal_path);
+}
+
+/// True when a restore or reset journal is waiting next to `db_path`.
+pub fn recoveryPending(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !bool {
+    return (try restoreJournalExists(io, allocator, db_path)) or (try resetJournalExists(io, allocator, db_path));
+}
+
+/// True when an interrupted restore journal is waiting next to `db_path`.
+pub fn restorePending(io: std.Io, allocator: std.mem.Allocator, db_path: []const u8) !bool {
+    return restoreJournalExists(io, allocator, db_path);
+}
+
 fn fileExists(io: std.Io, path: []const u8) !bool {
     std.Io.Dir.cwd().access(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
@@ -442,5 +748,16 @@ fn deleteQuietly(io: std.Io, path: []const u8) void {
     std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => std.log.debug("could not remove {s}: {}", .{ path, err }),
+    };
+}
+
+/// Deletes a file that reset must not leave behind. Reports which path failed.
+fn deleteOrFail(io: std.Io, path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => {
+            std.log.err("reset could not remove {s}: {}", .{ path, err });
+            return err;
+        },
     };
 }

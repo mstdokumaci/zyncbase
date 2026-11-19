@@ -7,6 +7,7 @@ const field_path = @import("field_path.zig");
 const index = @import("index.zig");
 const system = @import("system.zig");
 const types = @import("types.zig");
+const Version = @import("version.zig").Version;
 
 const Allocator = std.mem.Allocator;
 
@@ -676,6 +677,7 @@ pub fn initFromTables(
     presence_user_fields_names: []const []const u8,
     presence_shared_fields_names: []const []const u8,
 ) !types.Schema {
+    _ = try Version.parse(version);
     const version_owned = try allocator.dupe(u8, version);
     var version_owned_by_schema = false;
     errdefer if (!version_owned_by_schema) allocator.free(version_owned);

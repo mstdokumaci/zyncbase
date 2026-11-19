@@ -71,6 +71,7 @@ Each owner file documents the full flow; other files link rather than duplicate.
 ## Engine Internals
 
 - [Storage](./storage.md) - SQLite WAL setup, connection roles, schema-to-SQL generation, write queue, and query execution.
+- [Schema Migrations](./schema-migrations.md) - Applied schema snapshot, change classification, developer migrations, startup procedure, and migration CLI.
 - [Lock-Free Cache](./lock-free-cache.md) - Read-mostly cache contract and handle lifetime.
 - [Query Engine](./query-engine.md) - Query AST, parser, SQL lowering, pagination, and subscription filtering.
 - [Presence Internals](./presence-internals.md) - Typed two-tier presence state, subscriptions, snapshots, and broadcasts.

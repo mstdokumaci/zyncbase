@@ -85,14 +85,14 @@ const sampleSchema: SchemaFile = {
 };
 
 function generateSample(): string {
-	return generateTypes(
-		sampleSchema.store,
-		sampleSchema.actions,
-		sampleSchema.presence,
-	);
+	return generateTypes(sampleSchema);
 }
 
 describe("generateTypes", () => {
+	test("exports the schema version", () => {
+		expect(generateSample()).toContain('export const schemaVersion = "1.0.0";');
+	});
+
 	test("emits required, optional, nested, bytes, array, and enum fields", () => {
 		const output = generateSample();
 
@@ -239,6 +239,38 @@ describe("validateSchema", () => {
 		const schema = { store: {} } as SchemaFile;
 		expect(validateSchema(schema)).toContain('non-empty "version"');
 	});
+
+	test("rejects versions that are not strict X.Y.Z", () => {
+		for (const version of [
+			"1.0",
+			"v1.0.0",
+			"1.0.0-beta",
+			"01.0.0",
+			"1.0.0.0",
+		]) {
+			expect(validateSchema({ version, store: {} })).toContain("must be X.Y.Z");
+		}
+		expect(validateSchema({ version: "10.0.3", store: {} })).toBeNull();
+	});
+
+	test("accepts version components up to the server's u32 maximum", () => {
+		expect(
+			validateSchema({
+				version: "4294967295.4294967295.4294967295",
+				store: {},
+			}),
+		).toBeNull();
+	});
+
+	test("rejects version components above the server's u32 maximum", () => {
+		for (const version of [
+			"4294967296.0.0",
+			"0.4294967296.0",
+			"0.0.4294967296",
+		]) {
+			expect(validateSchema({ version, store: {} })).toContain("must be <=");
+		}
+	});
 });
 
 describe("generated schema compiles against the typed API", () => {
@@ -253,12 +285,14 @@ describe("generated schema compiles against the typed API", () => {
 			.replace(/\\/g, "/");
 
 		const consumer = `import type { Actions, Presence, Store } from "@zyncbase/client";
-import type {
-	ZyncBaseActions,
-	ZyncBasePresence,
-	ZyncBaseSchema,
+import {
+	schemaVersion,
+	type ZyncBaseActions,
+	type ZyncBasePresence,
+	type ZyncBaseSchema,
 } from "./zync-types";
 
+const version: "1.0.0" = schemaVersion;
 declare const store: Store<ZyncBaseSchema>;
 declare const actions: Actions<ZyncBaseActions>;
 declare const presence: Presence<ZyncBasePresence>;
@@ -324,6 +358,7 @@ await presence.set({ status: "active" });
 // @ts-expect-error invalid presence enum value
 await presence.set({ status: "busy" });
 
+void version;
 void name;
 void bytes;
 void city;

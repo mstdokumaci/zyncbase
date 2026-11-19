@@ -131,14 +131,103 @@ test "server: fresh startup creates schema through migration execution and persi
         try testing.expect(found_uidx);
     }
 
-    // Schema version persisted through the executor's empty/non-empty plan path.
-    const VersionRow = struct { version: []const u8 };
-    {
-        var stmt = try db.prepare("SELECT version FROM schema_meta LIMIT 1");
-        defer stmt.deinit();
-        var iter = try stmt.iteratorAlloc(VersionRow, allocator, .{});
-        const row = (try iter.nextAlloc(allocator, .{})) orelse return error.TestExpectedValue;
-        defer allocator.free(row.version);
-        try testing.expectEqualStrings("1.1.0", row.version);
+    // The applied-schema snapshot is the minified source JSON.
+    const SnapshotRow = struct { version: []const u8, hash: []const u8, schema: []const u8, applied_at: i64 };
+    const snapshot = (try db.oneAlloc(SnapshotRow, allocator, "SELECT version, hash, schema, applied_at FROM _zync_schema", .{}, .{})) orelse return error.TestExpectedValue;
+    defer {
+        allocator.free(snapshot.version);
+        allocator.free(snapshot.hash);
+        allocator.free(snapshot.schema);
     }
+    try testing.expectEqualStrings("1.1.0", snapshot.version);
+    try testing.expect(std.mem.startsWith(u8, snapshot.hash, "sha256:"));
+    try testing.expect(std.mem.startsWith(u8, snapshot.schema, "{\"version\":\"1.1.0\",\"store\":{\"projects\":{\"required\":[\"slug\"]"));
+    try testing.expect(std.mem.indexOf(u8, snapshot.schema, "\n") == null);
+
+    // A restart with the same schema writes nothing.
+    {
+        const server = try ZyncBaseServer.initDetailed(std.testing.io, std.testing.environ, allocator, null, data_dir, schema_file_path, null);
+        server.deinit();
+    }
+    const applied_at = try db.one(i64, "SELECT applied_at FROM _zync_schema", .{}, .{});
+    try testing.expectEqual(@as(?i64, snapshot.applied_at), applied_at);
+}
+
+test "server: startup applies a pending migration next to the schema and snapshots first" {
+    const allocator = std.testing.allocator;
+
+    var context = try schema_helpers.TestContext.init(allocator, "server-migration");
+    defer context.deinit();
+
+    const data_dir = try std.fs.path.join(allocator, &.{ context.test_dir, "data" });
+    defer allocator.free(data_dir);
+    const schema_path = try std.fs.path.join(allocator, &.{ context.test_dir, "schema.json" });
+    defer allocator.free(schema_path);
+
+    const v1 =
+        \\{"version":"1.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"priority":{"type":"integer"}}}}}
+    ;
+    const v2 =
+        \\{"version":"2.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"priority":{"type":"string"}}}}}
+    ;
+
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_path, .data = v1 });
+    {
+        const server = try ZyncBaseServer.initDetailed(std.testing.io, std.testing.environ, allocator, null, data_dir, schema_path, null);
+        server.deinit();
+    }
+
+    const db_path = try std.fmt.allocPrintSentinel(allocator, "{s}/zyncbase.db", .{data_dir}, 0);
+    defer allocator.free(db_path);
+    {
+        var db = try sqlite.Db.init(.{ .mode = .{ .File = db_path }, .open_flags = .{ .write = true } });
+        defer db.deinit();
+        try db.exec("INSERT INTO tasks (id, namespace_id, owner_id, title, priority, created_at, updated_at) VALUES (randomblob(16), 1, zeroblob(16), 'a', 3, 1, 1)", .{}, .{});
+    }
+
+    // Refusal without a migration is covered in migration/startup_test.zig;
+    // here the server logs it as an error, which fails the test runner.
+    try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = schema_path, .data = v2 });
+
+    // The default migrations directory sits next to the schema file.
+    const folder = try std.fs.path.join(allocator, &.{ context.test_dir, "migrations", "20261117T120000Z_priority_text" });
+    defer allocator.free(folder);
+    try std.Io.Dir.cwd().createDirPath(std.testing.io, folder);
+    const files = [_]struct { name: []const u8, data: []const u8 }{
+        .{ .name = "before.json", .data = v1 },
+        .{ .name = "after.json", .data = v2 },
+        .{ .name = "migration.sql", .data =
+        \\INSERT INTO "tasks" ("id", "namespace_id", "owner_id", "title", "priority", "created_at", "updated_at")
+        \\SELECT "id", "namespace_id", "owner_id", "title", 'p' || "priority", "created_at", "updated_at" FROM "_zync_prev_tasks";
+        },
+    };
+    for (files) |file| {
+        const path = try std.fs.path.join(allocator, &.{ folder, file.name });
+        defer allocator.free(path);
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = path, .data = file.data });
+    }
+
+    {
+        const server = try ZyncBaseServer.initDetailed(std.testing.io, std.testing.environ, allocator, null, data_dir, schema_path, null);
+        server.deinit();
+    }
+
+    var db = try sqlite.Db.init(.{ .mode = .{ .File = db_path }, .open_flags = .{ .write = true } });
+    defer db.deinit();
+    const priority = (try db.oneAlloc([]const u8, allocator, "SELECT priority FROM tasks", .{}, .{})) orelse return error.TestExpectedValue;
+    defer allocator.free(priority);
+    try testing.expectEqualStrings("p3", priority);
+    const mode = (try db.oneAlloc([]const u8, allocator, "SELECT mode FROM _zync_migrations", .{}, .{})) orelse return error.TestExpectedValue;
+    defer allocator.free(mode);
+    try testing.expectEqualStrings("applied", mode);
+
+    // A verified snapshot of the 1.0.0 database was written before the migration.
+    var dir = try std.Io.Dir.cwd().openDir(std.testing.io, data_dir, .{ .iterate = true });
+    defer dir.close(std.testing.io);
+    var iter = dir.iterate();
+    var snapshots: usize = 0;
+    while (try iter.next(std.testing.io)) |entry| {
+        if (std.mem.startsWith(u8, entry.name, "zyncbase.db.pre-migration-20261117T120000Z_priority_text-")) snapshots += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), snapshots);
 }

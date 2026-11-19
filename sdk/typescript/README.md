@@ -23,7 +23,7 @@ const name = await client.store.get("users.alice.name");
 
 ## Typed schema
 
-Generate types from the same `schema.json` the server boots with:
+Generate types from the same `schema.json` the server boots with. Besides the types, the file exports `schemaVersion`, the schema version it was generated from; compare it with `client.schemaVersion` (or the `schemaChange` event's `{ previousVersion, version }`) to notice a server on a newer major version:
 
 ```bash
 # in a project that has @zyncbase/client installed (bunx resolves its local bin)
@@ -70,7 +70,7 @@ Generic helpers should be parameterized (`Store<S>`, `ZyncBaseClient<S>`) rather
 
 | When | Command |
 |---|---|
-| Schema changed | `bunx generate --schema ... --out ...` (same moment you restart the server to apply the migration) |
+| Schema changed | `bunx generate --schema ... --out ...`. Commit the generated file together with `schema.json` and any migration folder (`zyncbase migrate new`); the server applies the change at its next start |
 | Local development | add `--watch` to regenerate on save |
 | CI | add `--check` — exits non-zero when the checked-in file is stale |
 

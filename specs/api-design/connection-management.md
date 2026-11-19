@@ -220,7 +220,7 @@ client.on('tokenExpired', async () => {
 | `synced` | `() => void` | Subscriptions and action registrations fully replayed; the client is safe to use |
 | `disconnected` | `(detail: DisconnectDetail) => void` | Connection closed. `detail` says why and whether reconnecting is worthwhile |
 | `reconnecting` | `(attempt: number, delayMs: number) => void` | Attempting to reconnect after unexpected disconnect |
-| `schemaChange` | `() => void` | The server pushed a schema whose hash differs from the active dictionary; the SDK re-applied `SchemaSync` in place. Subscriptions and requests continue against the new dictionary without interruption |
+| `schemaChange` | `(detail: SchemaChangeDetail) => void` | The server pushed a schema whose dictionaries or version differ from the active ones; the SDK re-applied `SchemaSync` in place. Subscriptions and requests continue against the new dictionary without interruption. `detail` is `{ previousVersion, version }`; a higher major version means the data shape broke, so an app built against the old schema should reload |
 | `error` | `(error: ZyncBaseError) => void` | Connection, subscription, systemic writer/storage, or tracked write error |
 | `tokenExpired` | `() => void` | Session token expired. Emitted while the connection is still open, so the token can be refreshed in place. Rejects no pending request |
 | `statusChange` | `(status, detail) => void` | Fired on any state transition (see below) |
@@ -277,6 +277,81 @@ client.status // 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 `status` is the value; `statusChange` is the transition. Reading `client.status` on first render produces an accurate connection indicator before any event has fired — no invented initial state — and `statusChange` keeps it current from there.
 
 **Type:** `ConnectionStatus` (exported), also used by `StatusDetail.previousStatus`.
+
+### `client.schemaVersion`
+
+The server's `schema.json` version from the latest `SchemaSync`, or `null` before the first connection:
+
+```typescript
+import { schemaVersion } from "./zyncbase-schema"; // generated
+
+// Stable and unique per application; scopes the marker on a shared origin.
+const appId = "my-zyncbase-app";
+const reloadKey = `zyncbase-schema-major:${appId}`;
+
+function readMarker(): { available: boolean; value: string | null } {
+  try {
+    return { available: true, value: sessionStorage.getItem(reloadKey) };
+  } catch {
+    return { available: false, value: null };
+  }
+}
+
+function writeMarker(major: string): boolean {
+  try {
+    sessionStorage.setItem(reloadKey, major);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearMarker(): void {
+  try {
+    sessionStorage.removeItem(reloadKey);
+  } catch {
+    // Storage is unavailable; nothing to clear.
+  }
+}
+
+function showDeploymentMessage(): void {
+  document.body.textContent =
+    "This app build does not match the server schema. Deploy the matching build.";
+}
+
+function handleMajorMismatch(major: string | undefined): void {
+  if (!major) return;
+  if (major === schemaVersion.split(".")[0]) {
+    clearMarker();
+    return;
+  }
+  const marker = readMarker();
+  if (!marker.available) {
+    // Without readable storage, a reload could loop.
+    showDeploymentMessage();
+    return;
+  }
+  if (marker.value !== major) {
+    if (!writeMarker(major)) {
+      showDeploymentMessage();
+      return;
+    }
+    location.reload();
+    return;
+  }
+  showDeploymentMessage();
+}
+
+await client.connect();
+client.on("schemaChange", ({ version }) => {
+  handleMajorMismatch(version.split(".")[0]);
+});
+handleMajorMismatch(client.schemaVersion?.split(".")[0]);
+```
+
+Generated type files export the `schemaVersion` they were built from, so an app can compare it with `client.schemaVersion` to detect a server that has moved to a new major version.
+
+**Type:** `string | null`. The event detail type `SchemaChangeDetail` is exported.
 
 ---
 

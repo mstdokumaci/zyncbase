@@ -536,6 +536,7 @@ pub const EngineTestContext = struct {
             self.test_context.deinit();
         } else {
             if (self.test_context.change_queue) |*cq| cq.deinit();
+            self.test_context.change_queue = null;
             self.allocator.free(self.test_context.test_dir);
         }
     }
@@ -612,6 +613,29 @@ pub fn setupEngineMultiTableWithDir(ctx: *EngineTestContext, allocator: Allocato
         .test_dir = try allocator.dupe(u8, test_dir),
     };
     try setupEngineMultiTableWithTestContext(ctx, allocator, tc, tables, options);
+}
+
+/// Setup a storage engine from schema JSON in an existing directory. Use this
+/// when a test restarts on the same database with a changed schema: the
+/// startup migration then diffs real schema JSON, exactly like the server.
+pub fn setupEngineFromJsonWithDir(ctx: *EngineTestContext, allocator: Allocator, test_dir: []const u8, schema_json: []const u8, options: StorageEngine.Options) !void {
+    const effective_options = schema_helpers.normalizeTestStorageOptions(options);
+    ctx.allocator = allocator;
+    ctx.test_context = .{
+        .allocator = allocator,
+        .test_dir = try allocator.dupe(u8, test_dir),
+        .owns_dir = false,
+    };
+    errdefer ctx.test_context.deinit();
+
+    try ctx.memory_strategy.init();
+    errdefer ctx.memory_strategy.deinit();
+
+    ctx.schema = try schema_parse.initFromJson(allocator, schema_json);
+    errdefer ctx.schema.deinit();
+
+    try schema_helpers.setupTestEngineWithJson(&ctx.engine, allocator, &ctx.memory_strategy, &ctx.test_context, &ctx.schema, schema_json, .{}, effective_options);
+    errdefer ctx.engine.deinit();
 }
 
 fn setupEngineMultiTableWithTestContext(ctx: *EngineTestContext, allocator: Allocator, tc: TestContext, tables: []const Table, options: StorageEngine.Options) !void {

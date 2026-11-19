@@ -24,6 +24,9 @@ test {
     _ = @import("schema/system_test.zig");
     _ = @import("schema/field_path_test.zig");
     _ = @import("schema/constraints_test.zig");
+    _ = @import("schema/version_test.zig");
+    _ = @import("schema/canonical_test.zig");
+    _ = @import("sqlite_contract_test.zig");
     _ = @import("authorization/parse_test.zig");
     _ = @import("authorization/pattern_test.zig");
     _ = @import("authorization/evaluate_test.zig");
@@ -79,7 +82,6 @@ test {
     _ = @import("checkpoint_worker_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("store_service_test.zig");
-    _ = @import("migration_executor_test.zig");
     _ = @import("msgpack_utils_test.zig");
     _ = @import("thread_budget_test.zig");
     _ = @import("storage_engine_stability_test.zig");
@@ -87,7 +89,13 @@ test {
     _ = @import("signal_test.zig");
     _ = @import("storage_engine_error_test.zig");
     _ = @import("logging_test.zig");
-    _ = @import("migration_detector_test.zig");
+    _ = @import("schema/diff_test.zig");
+    _ = @import("migration/catalog_test.zig");
+    _ = @import("migration/startup_test.zig");
+    _ = @import("migration/source_test.zig");
+    _ = @import("migration/migrate_test.zig");
+    _ = @import("migration/scaffold_test.zig");
+    _ = @import("migration/cli_test.zig");
     _ = @import("contains_array_equivalence_test.zig");
     _ = @import("observability/log_test.zig");
     _ = @import("observability/metrics_test.zig");

@@ -10,8 +10,8 @@ This document defines the operator-facing backup, restore, and durability contra
 
 | File | Responsibility |
 |------|----------------|
-| `src/backup.zig` | Snapshot creation (`VACUUM INTO`), integrity verification, restore and rollback, safety copy. |
-| `src/cli.zig` | `backup`, `restore`, and `verify` commands; config/data-dir resolution. |
+| `src/backup.zig` | Snapshot creation (`VACUUM INTO`), pre-migration snapshots under a held lock, integrity verification, restore and rollback, reset, safety copy. |
+| `src/cli.zig` | `backup`, `restore`, `verify`, `reset`, and `migrate` dispatch; config/data-dir resolution. |
 | `src/data_lock.zig` | Advisory lock on `<dataDir>/zyncbase.lock`; shared for backups, exclusive for restore and server startup. |
 | `src/fs_utils.zig` | Bounded directory creation shared by locks and storage initialization. |
 | `src/server.zig` | Acquires the data lock for the server's lifetime. |
@@ -27,6 +27,7 @@ This document defines the operator-facing backup, restore, and durability contra
 | `zyncbase backup <out.db> [--config <path>] [--data-dir <dir>]` | Writes a consistent snapshot while the server is running. Refuses to overwrite an existing output. |
 | `zyncbase restore <in.db> [--config <path>] [--data-dir <dir>] [--no-safety-copy]` | Replaces `<dataDir>/zyncbase.db` with the snapshot. Requires the data lock, so the server must be stopped. |
 | `zyncbase verify <in.db>` | Runs `PRAGMA integrity_check` and the ZyncBase marker check. |
+| `zyncbase reset --yes [--config <path>] [--data-dir <dir>] [--no-safety-copy]` | Journals the move, then moves `zyncbase.db` and its sidecars to `zyncbase.db.pre-reset-<timestamp>` under the exclusive lock and retains them by default, so the next start creates a fresh database. `--no-safety-copy` deletes them instead. An interrupted move is completed or rolled back before the next reset, startup, restore, or `migrate apply` opens the database. |
 
 `--data-dir` allows a restore into a fresh directory for drills or disaster recovery without loading a full deployment config.
 
@@ -95,7 +96,7 @@ The backup schedule determines a separate recovery point: a restore loses everyt
 - **Continuous RPO**: seconds when using Litestream as a sidecar against the same WAL database.
 - **RTO**: server stop + restore + start, bounded by database size and disk throughput.
 - **Retention and offsite copies** are owned by the operator's scheduler and storage tools, not the server.
-- **Backups are not automatic**. The server does not write snapshots on its own.
+- **Backups are not automatic**. The server writes a snapshot on its own only right before applying a pending developer migration: `<dataDir>/zyncbase.db.pre-migration-<id>-<timestamp>` ([Schema Migrations](./schema-migrations.md#snapshot-and-rollback)). These snapshots are never pruned automatically.
 
 See [OPERATIONS.md](../../OPERATIONS.md) for the runbook, cron/systemd examples, Litestream recipe, and restore drill.
 
@@ -113,5 +114,6 @@ See [OPERATIONS.md](../../OPERATIONS.md) for the runbook, cron/systemd examples,
 ## Related Specifications
 
 - [Storage](./storage.md)
+- [Schema Migrations](./schema-migrations.md)
 - [Config Grammar](./config-grammar.md)
 - [Security](./security.md)

@@ -228,6 +228,11 @@ pub const ConfigLoader = struct {
         }
 
         try json_read.setString(allocator, &config.authorization_file, obj, "authorization");
+
+        if (try json_read.getObject(obj, "migrations")) |migrations_obj| {
+            try json_read.setString(allocator, &config.migrations.dir, migrations_obj, "dir");
+            try json_read.setBool(&config.migrations.snapshot, migrations_obj, "snapshot");
+        }
     }
 
     fn parseSecurity(allocator: Allocator, config: *Config, obj: std.json.ObjectMap) !void {

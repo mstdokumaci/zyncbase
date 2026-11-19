@@ -90,6 +90,11 @@ export class ZyncBaseClient {
 		return this.client.status;
 	}
 
+	/** The server's schema version from SchemaSync. */
+	get schemaVersion(): string | null {
+		return this.client.schemaVersion;
+	}
+
 	/** Subscribe to a lifecycle event (`connected`, `synced`, `reconnected`, …). */
 	on<E extends LifecycleEvent>(event: E, callback: ClientEvents[E]): void {
 		this.client.on(event, callback);

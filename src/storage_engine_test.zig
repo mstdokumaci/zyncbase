@@ -15,7 +15,6 @@ const sth = @import("storage_engine_test_helpers.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const tth = @import("typed/test_helpers.zig");
 const typed = @import("typed/types.zig");
-const DDLGenerator = @import("sql/ddl.zig").DDLGenerator;
 const MessageType = @import("wire/message_type.zig").MessageType;
 
 const testing = std.testing;
@@ -418,25 +417,6 @@ test "StorageEngine: all pending writes are flushed before deinit returns" {
         defer if (record) |r| r.deinit(allocator);
         try testing.expect(record != null);
     }
-}
-test "StorageEngine: client writes blocked during migration" {
-    const allocator = std.heap.smp_allocator;
-    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .integer)};
-    const table = schema_helpers.makeTable("items", &fields_arr);
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "engine-migration-block", table);
-    defer ctx.deinit();
-    const engine = &ctx.engine;
-
-    // Simulate migration in progress
-    engine.migration_active.store(true, .release);
-    defer engine.migration_active.store(false, .release);
-    // enqueueWriteOp should be blocked
-    const err1 = ctx.insertField("items", 1, 1, "val", tth.valInt(1));
-    try testing.expectError(sth.StorageError.MigrationInProgress, err1);
-    // delete should be blocked
-    const err3 = (try ctx.table("items")).deleteDocument(1, 1);
-    try testing.expectError(sth.StorageError.MigrationInProgress, err3);
 }
 test "StorageEngine: engine healthy after start" {
     const allocator = std.heap.smp_allocator;
@@ -1962,13 +1942,12 @@ test "storage: schema update integrity" {
     defer context.deinit();
     const test_dir = context.test_dir;
 
-    var fields_v1 = [_]sth.Field{schema_helpers.makeField("val1", .text)};
-    const table_v1 = schema_helpers.makeTable("test", &fields_v1);
-
     // Run 1: Version 1 schema - insert data
     {
         var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngineWithDir(&ctx, allocator, test_dir, table_v1, .{ .in_memory = false });
+        try sth.setupEngineFromJsonWithDir(&ctx, allocator, test_dir,
+            \\{"version":"1.0.0","store":{"test":{"fields":{"val1":{"type":"string"}}}}}
+        , .{ .in_memory = false });
         defer ctx.deinitNoCleanup();
 
         try ctx.insertText("test", 1, 1, "val1", "value1");
@@ -1977,14 +1956,10 @@ test "storage: schema update integrity" {
 
     // Run 2: Version 2 schema (added field) - verify existing data is still readable
     {
-        var fields_v2 = [_]sth.Field{
-            schema_helpers.makeField("val1", .text),
-            schema_helpers.makeField("val2", .integer),
-        };
-        const table_v2 = schema_helpers.makeTable("test", &fields_v2);
-
         var ctx: sth.EngineTestContext = undefined;
-        try sth.setupEngineWithDir(&ctx, allocator, test_dir, table_v2, .{ .in_memory = false });
+        try sth.setupEngineFromJsonWithDir(&ctx, allocator, test_dir,
+            \\{"version":"1.1.0","store":{"test":{"fields":{"val1":{"type":"string"},"val2":{"type":"integer"}}}}}
+        , .{ .in_memory = false });
         defer ctx.deinitNoCleanup();
 
         const test_table = try ctx.table("test");
@@ -2003,6 +1978,46 @@ test "storage: schema update integrity" {
         defer if (record2) |r| r.deinit(allocator);
         try testing.expect(record2 != null);
         _ = try sth.expectFieldInt(record2.?, test_table.metadata, "val2", 42);
+    }
+}
+
+// Property: a schema snapshot written for a code-built schema reparses on restart
+test "storage: nested presence survives a serialized snapshot restart" {
+    const allocator = std.heap.smp_allocator;
+    var context = try sth.TestContext.init(allocator, "storage-presence-restart");
+    defer context.deinit();
+    const test_dir = context.test_dir;
+
+    const v1 =
+        \\{"version":"1.0.0","presence":{"user":{"profile":{"type":"object","fields":{"status":{"type":"string"}}}}},"store":{"test":{"fields":{"val":{"type":"string"}}}}}
+    ;
+    var parsed = try schema_parse.initFromJson(allocator, v1);
+    defer parsed.deinit();
+    const snapshot = try schema_helpers.schemaJsonForTest(allocator, &parsed);
+    defer allocator.free(snapshot);
+    try testing.expect(std.mem.indexOf(u8, snapshot, "__") == null);
+
+    {
+        var ctx: sth.EngineTestContext = undefined;
+        try sth.setupEngineFromJsonWithDir(&ctx, allocator, test_dir, snapshot, .{ .in_memory = false });
+        defer ctx.deinitNoCleanup();
+
+        try ctx.insertText("test", 1, 1, "val", "kept");
+        try ctx.engine.flushPendingWrites();
+    }
+
+    const v2 =
+        \\{"version":"1.1.0","presence":{"user":{"profile":{"type":"object","fields":{"status":{"type":"string"}}}}},"store":{"test":{"fields":{"val":{"type":"string"},"extra":{"type":"integer"}}}}}
+    ;
+    {
+        var ctx: sth.EngineTestContext = undefined;
+        try sth.setupEngineFromJsonWithDir(&ctx, allocator, test_dir, v2, .{ .in_memory = false });
+        defer ctx.deinitNoCleanup();
+
+        const test_table = try ctx.table("test");
+        const record = (try test_table.readDoc(allocator, 1, 1)) orelse return error.TestExpectedValue;
+        defer record.deinit(allocator);
+        _ = try sth.expectFieldString(record, test_table.metadata, "val", "kept");
     }
 }
 
@@ -2296,9 +2311,8 @@ test "foreign key startup rejects legacy orphaned rows" {
     );
     defer engine.deinit();
 
-    var gen = DDLGenerator.init(allocator);
     for (schema.tables) |table| {
-        const ddl = try gen.generateDDL(table);
+        const ddl = try schema_helpers.fullDDL(allocator, table);
         defer allocator.free(ddl);
         const ddl_z = try allocator.dupeZ(u8, ddl);
         defer allocator.free(ddl_z);

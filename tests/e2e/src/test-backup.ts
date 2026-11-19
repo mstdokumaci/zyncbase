@@ -2,35 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { ZyncBaseClient } from "./client";
-import { type E2ETestContext, SERVER_BIN, withServer } from "./harness";
-
-type CliResult = {
-	code: number;
-	stdout: string;
-	stderr: string;
-};
-
-const CLI_TIMEOUT_MS = 30_000;
-
-function runCli(args: string[]): CliResult {
-	const result = Bun.spawnSync([SERVER_BIN, ...args], {
-		cwd: process.cwd(),
-		timeout: CLI_TIMEOUT_MS,
-	});
-	return {
-		code: result.exitCode ?? -1,
-		stdout: result.stdout.toString(),
-		stderr: result.stderr.toString(),
-	};
-}
-
-function expectOk(result: CliResult, label: string): void {
-	if (result.code !== 0) {
-		throw new Error(
-			`${label} failed with exit ${result.code}\n${result.stdout}\n${result.stderr}`,
-		);
-	}
-}
+import { type E2ETestContext, expectOk, runCli, withServer } from "./harness";
 
 export async function run(ctx: E2ETestContext): Promise<void> {
 	const configName = "zyncbase-config-backup.json";

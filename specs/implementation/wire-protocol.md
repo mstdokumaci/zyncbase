@@ -227,7 +227,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 
 | Push | Fields | Meaning |
 |------|--------|---------|
-| `SchemaSync` | `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields`, `actions`, `actionParams`, `actionReturns`, `actionFlags` | Integer dictionaries used by store, query, presence, and action messages. Action arrays are parallel: `actions[i]` is the action name, `actionParams[i]`/`actionReturns[i]` are its flattened param/return field names (empty for no params / async), and `actionFlags[i]` bit 0 marks sync (has `returns`), bit 1 marks presence scope. |
+| `SchemaSync` | `version`, `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields`, `actions`, `actionParams`, `actionReturns`, `actionFlags` | `version` is the `schema.json` version string (`X.Y.Z`); a higher major version means stored data changed shape in a migration. The rest are integer dictionaries used by store, query, presence, and action messages. Action arrays are parallel: `actions[i]` is the action name, `actionParams[i]`/`actionReturns[i]` are its flattened param/return field names (empty for no params / async), and `actionFlags[i]` bit 0 marks sync (has `returns`), bit 1 marks presence scope. |
 | `StoreDelta` | Fixed tuple (below) | Committed record-level subscription change. |
 | `WriteCommitted` | `writeId` | Tracked write committed. |
 | `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |

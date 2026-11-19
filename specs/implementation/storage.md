@@ -2,7 +2,7 @@
 
 **Drivers**: [ADR-005](../architecture/adrs.md#adr-005-sqlite-as-the-storage-engine), [ADR-010](../architecture/adrs.md#adr-010-conflict-resolution--last-write-wins), [ADR-018](../architecture/adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics), [Threading](./threading.md), [Query Engine](./query-engine.md)
 
-The storage layer persists store data in SQLite with WAL mode. It owns schema-to-DDL generation, migration execution, reader/writer connection roles, typed value encoding, write serialization, query execution, and committed change production.
+The storage layer persists store data in SQLite with WAL mode. It owns schema-to-DDL generation, reader/writer connection roles, typed value encoding, write serialization, query execution, and committed change production. Migration execution runs on the storage engine's setup connection. Its contract lives in [Schema Migrations](./schema-migrations.md).
 
 ## Source Files
 
@@ -24,7 +24,7 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 | `src/storage_engine/pk_set.zig` | Primary-key set helpers for write/delete/query support. |
 | `src/typed/types.zig`, `src/typed/codec.zig`, `src/typed/doc_id.zig` | Runtime typed values, binary codecs, and 16-byte document id support. |
 | `src/checkpoint_worker.zig` | Background WAL checkpoint scheduling and execution. |
-| `src/migration_detector.zig`, `src/migration_executor.zig` | Schema change detection and migration execution. |
+| `src/migration/*.zig` | Schema snapshot, change classification, and migration execution. See [Schema Migrations](./schema-migrations.md). |
 | `src/store_service.zig` | Application-facing store API on top of storage. |
 
 ## Important Types
@@ -39,7 +39,6 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 | `pk_set_type` | typed doc ids | Tracks primary keys for set/delete/query helper paths. |
 | `ColumnValue` | typed values | Represents values bound into SQLite statements. |
 | `DDLGenerator` | `Schema` | Produces table/index DDL from loaded schema. |
-| `MigrationPlan` | old/new schema metadata | Describes required schema changes before execution. |
 
 ## SQLite Contract
 
@@ -47,16 +46,17 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 - Durable mutations enter through the write queue; bypassing it breaks acknowledgement ordering.
 - Tables include system columns needed for namespace, identity, timestamps, and LWW semantics.
 - Store record values are encoded/decoded through typed value helpers; docs should not duplicate codec internals.
-- Schema changes must go through migration detection/execution rather than ad hoc DDL.
+- Every ZyncBase-managed table, including `_zync_*` system tables, is a SQLite `STRICT` table. A value that cannot be stored losslessly in a column's declared type fails the statement.
+- Schema changes go through the migration run ([Schema Migrations](./schema-migrations.md)), never through ad hoc DDL.
 - SQLite error details remain internal unless they map to a public code in [Error Taxonomy](./error-taxonomy.md).
 - Every writer and reader connection enables `PRAGMA foreign_keys`. `StorageEngine.start()` runs `foreign_key_check` after DDL/migrations and rejects startup when legacy orphaned rows exist.
 - Reference fields target the referenced table's `id`, use immediate constraints, and always receive a child-key index.
-- Foreign-key migrations compare `PRAGMA foreign_key_list` with the target schema. Table rebuilds disable enforcement before the migration transaction, restore it after commit/rollback, and rely on the startup integrity check rather than silently repairing orphaned data.
+- Migration runs disable foreign-key enforcement and enable `legacy_alter_table` before the run transaction, then restore both on every path. A run verifies `foreign_key_check` before commit; it never repairs orphaned data silently.
 - User-defined unique constraints compile to managed SQLite unique indexes whose first column is always `namespace_id`. Managed names are globally unambiguous: ordinary indexes use `"idx__<table>__<kind>..."`, the users identity index is `"uidx__users__identity"`, and user constraints use `"uidx__<table>__constraint__<ordinal>"` (zero-based, schema order). Both prefixes are reserved per table.
 - Upserts target only `ON CONFLICT("id")`. A conflict on a user unique index aborts the write (classified as `UniqueConstraintViolation` via SQLite extended result codes) and rolls back the containing batch transaction; it never updates or overwrites another row. There is no application-side uniqueness preflight or cache — SQLite is the sole authority.
-- Migration detection reconciles all managed indexes (namespace, owner, users identity, indexed/reference fields, user unique indexes) against the target schema through `PRAGMA index_list` + `PRAGMA index_info`: name, unique flag, non-partial status, and exact ordered column list must match. Any drift schedules one `change_indexes` entry per table.
-- Migration execution reconciles indexes inside the migration transaction: drop all current reserved-prefix managed indexes for the table, then create the full target set one statement at a time. A failed unique-index creation logs the table and dotted field list and returns the classified error so the rollback restores the previous index set. Index changes remain non-destructive. When a table is already scheduled for a rebuild (`change_type`, `remove_column`, `change_foreign_keys`), no separate index change is scheduled because recreated-table DDL installs the complete target index set.
-- Startup applies schema DDL only through migration detection/execution — never as a pre-migration pass — so fresh databases are created transactionally and empty plans still persist the target version.
+- The catalog check compares every managed index with the target schema through `PRAGMA index_list` and `PRAGMA index_info`. Managed indexes are namespace, owner, users identity, indexed and reference fields, and user unique indexes. The name, unique flag, non-partial status, and exact ordered column list must all match. Drift is repaired by reconciling that table's indexes.
+- Index reconciliation runs inside the run transaction. It drops every reserved-prefix managed index on the table, then creates the full target set one statement at a time. A failed unique-index creation reports the table, the dotted field list, and sample duplicates, and the rollback restores the previous index set. Rebuilt and created tables receive their complete index set after their data is loaded.
+- Startup applies schema DDL only through the migration run. Fresh databases are created inside a transaction. A run with no changes writes nothing.
 
 ## Read Path
 
