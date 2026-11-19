@@ -287,28 +287,64 @@ import { schemaVersion } from "./zyncbase-schema"; // generated
 
 const reloadKey = "zyncbase-schema-major";
 
-function handleMajorMismatch(major: string | undefined) {
-  if (!major) return;
-  if (major === schemaVersion.split(".")[0]) {
-    sessionStorage.removeItem(reloadKey);
-    return;
+function readMarker(): { available: boolean; value: string | null } {
+  try {
+    return { available: true, value: sessionStorage.getItem(reloadKey) };
+  } catch {
+    return { available: false, value: null };
   }
-  if (sessionStorage.getItem(reloadKey) !== major) {
+}
+
+function writeMarker(major: string): boolean {
+  try {
     sessionStorage.setItem(reloadKey, major);
-    location.reload();
-    return;
+    return true;
+  } catch {
+    return false;
   }
-  // Reloading did not produce a matching build: stop looping and explain.
+}
+
+function clearMarker(): void {
+  try {
+    sessionStorage.removeItem(reloadKey);
+  } catch {
+    // Storage is unavailable; nothing to clear.
+  }
+}
+
+function showDeploymentMessage(): void {
   document.body.textContent =
     "This app build does not match the server schema. Deploy the matching build.";
 }
 
-await client.connect();
-handleMajorMismatch(client.schemaVersion?.split(".")[0]);
+function handleMajorMismatch(major: string | undefined): void {
+  if (!major) return;
+  if (major === schemaVersion.split(".")[0]) {
+    clearMarker();
+    return;
+  }
+  const marker = readMarker();
+  if (!marker.available) {
+    // Without readable storage, a reload could loop.
+    showDeploymentMessage();
+    return;
+  }
+  if (marker.value !== major) {
+    if (!writeMarker(major)) {
+      showDeploymentMessage();
+      return;
+    }
+    location.reload();
+    return;
+  }
+  showDeploymentMessage();
+}
 
+await client.connect();
 client.on("schemaChange", ({ version }) => {
   handleMajorMismatch(version.split(".")[0]);
 });
+handleMajorMismatch(client.schemaVersion?.split(".")[0]);
 ```
 
 Generated type files export the `schemaVersion` they were built from, so an app can compare it with `client.schemaVersion` to detect a server that has moved to a new major version.
