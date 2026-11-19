@@ -285,7 +285,9 @@ The server's `schema.json` version from the latest `SchemaSync`, or `null` befor
 ```typescript
 import { schemaVersion } from "./zyncbase-schema"; // generated
 
-const reloadKey = "zyncbase-schema-major";
+// Stable and unique per application; scopes the marker on a shared origin.
+const appId = "my-zyncbase-app";
+const reloadKey = `zyncbase-schema-major:${appId}`;
 
 function readMarker(): { available: boolean; value: string | null } {
   try {
