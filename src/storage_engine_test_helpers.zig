@@ -119,7 +119,7 @@ pub fn flushUpsertsNow(engine: *StorageEngine, namespace_id: i64, upserts: []con
     for (upserts, 0..) |pending, i| {
         const columns = try cloneColumns(allocator, pending.columns);
         var write_id = pending.write_id;
-        if (write_id == null and pending.conn_id != null) write_id = [_]u8{@intCast(i + 1)} ** 16;
+        if (write_id == null and pending.conn_id != null) write_id = std.mem.toBytes(@as(u128, i + 1));
         batch.append(allocator, .{ .upsert = .{
             .table_index = pending.table_index,
             .id = pending.id,
