@@ -2,9 +2,9 @@
 
 The Store API handles durable, synchronized data. Everything in this namespace is validated against your [Schema](./configuration.md#schemajson), persisted to SQLite, and synchronized across all connected clients.
 
-Store methods require a ready store scope. `client.connect()` and `client.setStoreNamespace(namespace)` resolve only after the server has resolved the namespace and internal `users.id`. Data operations (`get`, `set`, `remove`, `create`, `query`, `batch`) issued before that point fail with `SESSION_NOT_READY`. Subscription registrations (`listen`, `subscribe`) are the exception: they are queued and dispatched when the session becomes ready — see [Subscription Lifecycle](#subscription-lifecycle).
+Store methods require a ready store scope. `client.connect()` and `client.setStoreNamespace(namespace)` resolve only after the server has resolved the namespace and internal `users.id`. Data operations (`get`, `set`, `remove`, `increment`, `create`, `query`, `batch`) issued before that point fail with `SESSION_NOT_READY`. Subscription registrations (`listen`, `subscribe`) are the exception: they are queued and dispatched when the session becomes ready — see [Subscription Lifecycle](#subscription-lifecycle).
 
-Mutating methods use subscription-first eventual state propagation (ADR-018). By default, `store.set`, `store.remove`, and `store.batch` resolve when the server accepts the mutation into the write pipeline. They do not optimistically update local subscription state, and they do not wait for writer commit unless `confirm: "committed"` is requested. Subscription callbacks are the authoritative source of committed observable state.
+Mutating methods (`set`, `remove`, `increment`, `create`, `batch`) resolve when the writer commits the write and reject on any failure (ADR-018). A read issued after a write resolves observes it. Mutations do not optimistically update local subscription state; subscription callbacks are the authoritative source of committed observable state.
 
 ## Table of Contents
 
@@ -37,7 +37,7 @@ const id = await client.store.create('elements', { type: 'rect', x: 10 })
 
 **Required Field Validation**: The SDK performs early validation before sending the request. If any required fields (as defined in the schema) are missing from `value`, the call throws `SCHEMA_VALIDATION_FAILED` with `details: { missingFields: [...] }`. Field names in the error use dot notation (e.g., `address.city`) for readability. Note: `store.set` does not perform this validation since it supports partial updates.
 
-**Returns**: `Promise<string>` resolving to the generated ID after the create is accepted. Use `confirm: "committed"` when the caller needs writer-thread confirmation.
+**Returns**: `Promise<string>` resolving to the generated ID after the create commits.
 
 Custom document IDs are also supported when supplied in the path directly, but they must match the strict short-ID grammar: `[a-z0-9_-]{1,24}`.
 
@@ -76,31 +76,25 @@ await client.store.set('users.u1.address', null)
 // Typed array field is canonicalized as sorted set
 await client.store.set('tasks.t1.tags', ['backend', 'urgent', 'backend'])
 // Stored/read as: ['backend', 'urgent']
-
-// UI-critical write that needs writer-thread confirmation
-await client.store.set('tasks.t1.status', 'done', { confirm: 'committed' })
 ```
 
 **Conflict Resolution**: Server-Time Last-Write-Wins (LWW) at the field level.
 
-**Conditional Writes**: Pass `if` to make the write a compare-and-set on the existing row. `if` uses the query `where` grammar and is evaluated against the pre-update value. A conditional `set` is **update-only**: on a missing row it rejects with `PRECONDITION_FAILED` and does not create. It requires `confirm: "committed"`, and the session must be able to read the row.
+**Conditional Writes**: Pass `if` to make the write a compare-and-set on the existing row. `if` uses the query `where` grammar and is evaluated against the pre-update value. A conditional `set` is **update-only**: on a missing row it rejects with `PRECONDITION_FAILED` and does not create. The session must be able to read the row.
 
 ```typescript
 await client.store.set('accounts.a1.balance', 900, {
-  confirm: 'committed',
   if: { balance: { eq: 1000 } },
 })
 ```
 
-**Confirmation**:
-- `confirm: "accepted"` (default): resolves when the server accepts the mutation into the write pipeline.
-- `confirm: "committed"`: resolves when the writer commits the mutation or an accepted no-op; rejects if the writer reports failure.
+**Outcome**: Resolves when the writer commits the write, including a no-op. Rejects with `ZyncBaseError` when the server refuses the write (`details.phase: "accept"`) or the writer rejects it (`details.phase: "write"`). If no outcome arrives within `writeTimeoutMs` (default 30 s), it rejects with `TIMEOUT`; the write may still commit.
 
-**State Propagation**: Local subscription data changes only when the server emits subscription updates. A successful mutation promise is not a substitute for subscription state.
+**State Propagation**: Local subscription data changes only when the server emits subscription updates. A resolved write promise is not a substitute for subscription state.
 
-**Error Handling**: Immediate request errors reject the promise. Confirmed write failures reject the promise with `ZyncBaseError`. Default accepted writes do not receive guaranteed per-operation async error delivery after acceptance. See [Error Handling](./error-handling.md#error-propagation). A failed `if` rejects with `PRECONDITION_FAILED` (`state`, non-retryable); the application may retry after re-reading.
+**Error Handling**: Every failure rejects the promise and is also emitted on `client.on('error')`; an un-awaited write does not raise an unhandled rejection. Writes are never retried automatically. See [Error Handling](./error-handling.md#error-propagation). A failed `if` rejects with `PRECONDITION_FAILED` (`state`, non-retryable); the application may retry after re-reading.
 
-**Uniqueness**: Writes that collide with a schema-declared unique constraint (see [Configuration](./configuration.md#unique-constraints)) are rejected by storage with `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Because default accepted writes give no writer-failure guarantee, duplicate detection requires `confirm: "committed"`.
+**Uniqueness**: Writes that collide with a schema-declared unique constraint (see [Configuration](./configuration.md#unique-constraints)) are rejected by storage with `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable).
 
 **Returns**: `Promise<void>`
 
@@ -114,19 +108,18 @@ await client.store.remove('elements.rect-1')
 
 // Delete only if the stored row still matches.
 await client.store.remove('locks.l1', {
-  confirm: 'committed',
   if: { owner_id: { eq: 'u1' } },
 })
 ```
 
-**Confirmation**: Same as `store.set`. Deleting a missing document without `if` is success/no-op; with `if`, a missing document rejects with `PRECONDITION_FAILED`.
+**Outcome**: Same as `store.set`. Deleting a missing document without `if` is success/no-op; with `if`, a missing document rejects with `PRECONDITION_FAILED`.
 
 **Error Handling**: Same as `store.set`.
 
 **Returns**: `Promise<void>`
 
 ### `store.increment(path, by, options?)`
-Atomically add `by` to an integer field. Always waits for commit.
+Atomically add `by` to an integer field. Resolves when the increment commits.
 
 **Path Constraints**: Must target a **Field** (depth 3). The field must be an integer, must not be a system field, must not have an `enum` constraint, and must not participate in a unique constraint.
 
@@ -142,7 +135,7 @@ await client.store.increment('accounts.a1.coins', -100, {
 **Returns**: `Promise<void>`. The new value is delivered by the subscription; perform a `get` if the caller needs to report the value now.
 
 > [!WARNING]
-> Increments are not idempotent. A manual retry after an ambiguous connection failure may apply twice. The SDK does not auto-retry increments; callers must decide whether a retry is safe.
+> Increments are not idempotent. A manual retry after an ambiguous connection failure or `TIMEOUT` may apply twice. The SDK never auto-retries writes; callers must decide whether a retry is safe.
 
 ### `store.listen(path, callback)`
 Listen to real-time updates at a specific path.
@@ -246,7 +239,7 @@ Initial and subsequent results are delivered through the callback.
 
 Perform multiple write operations (`set`, `remove`, and `increment`) atomically.
 
-### `store.batch(operations, options?)`
+### `store.batch(operations)`
 Performs all operations atomically.
 ```typescript
 await client.store.batch([
@@ -255,9 +248,9 @@ await client.store.batch([
 ])
 ```
 
-With default confirmation, the promise resolves when the batch is accepted into the write pipeline. With `confirm: "committed"`, the promise resolves only if the full batch commits or produces accepted no-op outcomes. If any operation fails, the entire confirmed batch rejects and no partial writes are committed.
+The promise resolves only if the full batch commits. If any operation fails, the batch rejects and no partial writes are committed. An empty batch resolves without writing.
 
-A batch containing `if` or an increment requires `confirm: "committed"`. Operations execute in declaration order; a later operation sees the uncommitted effects of earlier operations. This makes a batch a multi-document compare-and-set:
+Operations execute in declaration order; a later operation sees the uncommitted effects of earlier operations. This makes a batch a multi-document compare-and-set:
 
 ```typescript
 await client.store.batch([
@@ -268,7 +261,7 @@ await client.store.batch([
     if: { balance: { gte: 100 } },
   },
   { op: 'increment', path: 'accounts.a2.balance', by: 100 },
-], { confirm: 'committed' })
+])
 ```
 
 If the first operation's precondition fails, the whole batch rolls back and rejects with `PRECONDITION_FAILED`; the destination is not credited.
@@ -277,7 +270,7 @@ If the first operation's precondition fails, the whole batch rolls back and reje
 - Max 500 operations per batch.
 - Only `set`, `remove`, and `increment` are allowed.
 
-**Error Details**: Confirmed batch failures include `details.batchIndex` when the failing operation can be identified.
+**Error Details**: Batch failures include `details.batchIndex` when the failing operation can be identified.
 
 ---
 

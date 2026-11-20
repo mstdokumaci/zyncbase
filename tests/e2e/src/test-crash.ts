@@ -77,11 +77,10 @@ export async function run(ctx: E2ETestContext): Promise<void> {
 	try {
 		await firstClient.connect();
 		for (let i = 0; i < recordCount; i += 1) {
-			await firstClient.store.set(
-				["persistence", `crash-${i}`],
-				{ status: `ok-${i}`, timestamp: i },
-				{ confirm: "committed" },
-			);
+			await firstClient.store.set(["persistence", `crash-${i}`], {
+				status: `ok-${i}`,
+				timestamp: i,
+			});
 		}
 	} finally {
 		firstClient.close();

@@ -34,6 +34,7 @@ pub const IncrementValue = sql.IncrementValue;
 pub const CheckpointLatch = write_queue.CheckpointLatch;
 pub const CheckpointMode = write_queue.CheckpointMode;
 const CheckpointStats = write_queue.CheckpointStats;
+pub const WriteAck = write_queue.WriteAck;
 pub const WriteOp = write_queue.WriteOp;
 pub const getOpTarget = write_queue.getOpTarget;
 pub const write_queue_type = write_queue.write_queue_type;

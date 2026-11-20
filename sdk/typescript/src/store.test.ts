@@ -3,45 +3,7 @@ import type { OutboundRequest } from "./connection_wire.js";
 import { SchemaDictionary } from "./schema_dictionary.js";
 import { type StoreConnection, StoreImpl } from "./store.js";
 import { SubscriptionTracker } from "./subscriptions.js";
-import type {
-	InboundMessage,
-	JsonValue,
-	LifecycleEvent,
-	ListenHandle,
-	OkResponse,
-} from "./types.js";
-
-/** Extract writeId from a write message. Only StoreSet/StoreRemove/StoreBatch carry it. */
-function writeIdOf(msg: OutboundRequest): string | undefined {
-	if (
-		msg.type === "StoreSet" ||
-		msg.type === "StoreRemove" ||
-		msg.type === "StoreBatch"
-	) {
-		return msg.writeId;
-	}
-	return undefined;
-}
-
-/**
- * Overrides conn.dispatch to capture the writeId from the outgoing message,
- * then pushes `serverResponse(writeId)` asynchronously after `delayMs`.
- * Throws if the message carries no writeId (test misconfiguration).
- */
-function makeCommittedDispatch(
-	conn: StoreConnection,
-	push: (msg: InboundMessage) => void,
-	serverResponse: (writeId: string) => InboundMessage,
-	delayMs = 0,
-): void {
-	conn.dispatch = async (msg) => {
-		const writeId = writeIdOf(msg);
-		if (!writeId)
-			throw new Error("makeCommittedDispatch: message has no writeId");
-		setTimeout(() => push(serverResponse(writeId)), delayMs);
-		return { type: "ok", id: 1 };
-	};
-}
+import type { JsonValue, ListenHandle, OkResponse } from "./types.js";
 
 function makeStore(
 	responses: Array<OkResponse | Error> = [],
@@ -52,8 +14,6 @@ function makeStore(
 	const responseTableIndexes: Array<number | undefined> = [];
 	const errors: unknown[] = [];
 	const pendingResponses = [...responses];
-	let messageHandler: ((msg: InboundMessage) => void) | null = null;
-	const disconnectHandlers: Array<() => void> = [];
 
 	const schema = schemaDictionary ?? new SchemaDictionary();
 
@@ -68,27 +28,18 @@ function makeStore(
 			if (response instanceof Error) throw response;
 			return response ?? { type: "ok", id: messages.length };
 		},
-		onMessage: (handler) => {
-			messageHandler = handler;
+		dispatchWrite: async (msg: OutboundRequest): Promise<void> => {
+			messages.push(msg);
+			const response = pendingResponses.shift();
+			if (response instanceof Error) throw response;
 		},
-		on: (event: LifecycleEvent, handler: (...args: unknown[]) => void) => {
-			if (event === "disconnected")
-				disconnectHandlers.push(handler as () => void);
-		},
-		isSchemaReady: () => schema.isReady(),
+		on: () => {},
 		schemaDictionary: schema,
 	};
 
 	const tracker = new SubscriptionTracker();
 	const store = new StoreImpl(conn, tracker, (err) => errors.push(err));
 	if (options.ready !== false) void store.markSessionReady();
-
-	/** Simulate a server push arriving on the WebSocket. */
-	const push = (msg: InboundMessage) => messageHandler?.(msg);
-	/** Simulate a disconnect event. */
-	const disconnect = () => {
-		for (const h of disconnectHandlers) h();
-	};
 
 	return {
 		store,
@@ -97,8 +48,6 @@ function makeStore(
 		responseTableIndexes,
 		errors,
 		conn,
-		push,
-		disconnect,
 		schema,
 	};
 }
@@ -561,145 +510,56 @@ describe("StoreImpl", () => {
 		expect(tracker.get(12)?.materializedView?.records.has("late")).toBe(false);
 	});
 
-	test("set with confirm committed returns a promise that resolves on WriteCommitted event", async () => {
-		const { store, conn, push } = makeStore();
-		let capturedWriteId: string | undefined;
+	test("every write kind goes through dispatchWrite", async () => {
+		const { store, messages, conn } = makeStore();
+		conn.dispatch = () => Promise.reject(new Error("writes must not dispatch"));
 
-		conn.dispatch = async (msg) => {
-			capturedWriteId = writeIdOf(msg);
-			if (!capturedWriteId) throw new Error("missing writeId");
-			const wid = capturedWriteId;
-			setTimeout(() => push({ type: "WriteCommitted", writeId: wid }), 10);
-			return { type: "ok", id: 1 };
-		};
+		await store.set("users.u1", { name: "Ada" });
+		await store.remove("users.u1");
+		await store.increment("users.u1.age", 1);
+		await store.create("users", { name: "Bo" });
+		await store.batch([{ op: "remove", path: "users.u2" }]);
 
-		const start = Date.now();
-		await store.set("users.u1", { name: "Ada" }, { confirm: "committed" });
-
-		expect(Date.now() - start).toBeGreaterThanOrEqual(10);
-		expect(capturedWriteId).toBeDefined();
-		expect(capturedWriteId?.length).toBe(32);
+		expect(messages.map((m) => m.type)).toEqual([
+			"StoreSet",
+			"StoreRemove",
+			"StoreBatch",
+			"StoreSet",
+			"StoreBatch",
+		]);
 	});
 
-	test("set with confirm committed rejects on WriteError event", async () => {
-		const { store, conn, push } = makeStore();
-		makeCommittedDispatch(
-			conn,
-			push,
-			(writeId) => ({
-				type: "WriteError",
-				writeId,
-				code: "ACCESS_DENIED",
-				message: "auth predicate failed",
-				phase: "write",
-			}),
-			10,
-		);
-
-		await expect(
-			store.set("users.u1", { name: "Ada" }, { confirm: "committed" }),
-		).rejects.toThrow("auth predicate failed");
-	});
-
-	test("WriteError carries phase and derives retryability from code", async () => {
-		const { store, conn, push } = makeStore();
-		makeCommittedDispatch(conn, push, (writeId) => ({
-			type: "WriteError",
-			writeId,
-			code: "INTERNAL_ERROR",
-			message: "storage failure",
-			phase: "write",
-		}));
-
-		let capturedError: unknown;
+	test("an un-awaited failing write emits on error without an unhandled rejection", async () => {
+		const { store, errors } = makeStore([
+			new Error("set failed"),
+			new Error("create failed"),
+		]);
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown) => unhandled.push(reason);
+		process.on("unhandledRejection", onUnhandled);
 		try {
-			await store.set("users.u1", { name: "Ada" }, { confirm: "committed" });
-		} catch (e) {
-			capturedError = e;
+			void store.set("users.u1", { name: "Ada" });
+			void store.create("users", { name: "Bo" });
+			await flushTimers();
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
 		}
 
-		expect((capturedError as { code?: string })?.code).toBe("INTERNAL_ERROR");
-		expect((capturedError as { retryable?: boolean })?.retryable).toBe(true);
-		expect(
-			(capturedError as { details?: { phase?: string } })?.details?.phase,
-		).toBe("write");
+		expect(unhandled).toEqual([]);
+		expect(errors).toMatchObject([
+			{ message: "set failed" },
+			{ message: "create failed" },
+		]);
 	});
 
-	test("WriteError with batchIndex surfaces it in error details", async () => {
-		const { store, conn, push } = makeStore();
-		makeCommittedDispatch(conn, push, (writeId) => ({
-			type: "WriteError",
-			writeId,
-			code: "PERMISSION_DENIED",
-			message: "denied",
-			phase: "write",
-			batchIndex: 2,
-		}));
+	test("a write that fails to build rejects and emits on error", async () => {
+		const { store, messages, errors } = makeStore();
 
-		let capturedError: unknown;
-		try {
-			await store.batch(
-				[
-					{ op: "set", path: "users.u1", value: { name: "A" } },
-					{ op: "set", path: "users.u2", value: { name: "B" } },
-					{ op: "set", path: "users.u3", value: { name: "C" } },
-				],
-				{ confirm: "committed" },
-			);
-		} catch (e) {
-			capturedError = e;
-		}
-
-		expect((capturedError as { code?: string })?.code).toBe(
-			"PERMISSION_DENIED",
-		);
-		expect(
-			(capturedError as { details?: { batchIndex?: number } })?.details
-				?.batchIndex,
-		).toBe(2);
-	});
-
-	test("remove with confirm committed resolves on WriteCommitted", async () => {
-		const { store, conn, push } = makeStore();
-		makeCommittedDispatch(conn, push, (writeId) => ({
-			type: "WriteCommitted",
-			writeId,
-		}));
-
-		await expect(
-			store.remove("users.u1", { confirm: "committed" }),
-		).resolves.toBeUndefined();
-	});
-
-	test("batch with confirm committed resolves on WriteCommitted", async () => {
-		const { store, conn, push } = makeStore();
-		makeCommittedDispatch(conn, push, (writeId) => ({
-			type: "WriteCommitted",
-			writeId,
-		}));
-
-		await expect(
-			store.batch([{ op: "set", path: "users.u1", value: { name: "Ada" } }], {
-				confirm: "committed",
-			}),
-		).resolves.toBeUndefined();
-	});
-
-	test("inFlightWrites are rejected with CONNECTION_FAILED on disconnect", async () => {
-		const { store, disconnect } = makeStore();
-
-		// Start a committed write — dispatch accepts it but WriteCommitted never arrives
-		const writePromise = store.set(
-			"users.u1",
-			{ name: "Ada" },
-			{ confirm: "committed" },
-		);
-
-		disconnect();
-
-		await expect(writePromise).rejects.toMatchObject({
-			code: "CONNECTION_FAILED",
+		await expect(store.set("users", { name: "Ada" })).rejects.toMatchObject({
+			code: "INVALID_PATH",
 		});
+		expect(messages).toEqual([]);
+		expect(errors).toHaveLength(1);
 	});
 
 	describe("required field validation", () => {

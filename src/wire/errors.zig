@@ -77,7 +77,6 @@ const wire_error_map = std.StaticStringMap(WireError).initComptime(.{
     .{ "RateLimited", wireError("RATE_LIMITED", "Too many requests") },
     .{ "RequestSuperseded", wireError("REQUEST_SUPERSEDED", "Scope superseded by newer request") },
     .{ "BatchTooLarge", wireError("BATCH_TOO_LARGE", "Batch exceeds 500 operations") },
-    .{ "InvalidWriteAck", wireError("INVALID_MESSAGE", "writeId requires confirm: committed") },
     .{ "EngineUnhealthy", wireError("ENGINE_UNHEALTHY", "Write engine is in a degraded state") },
     .{ "NoActionWorker", wireError("NO_ACTION_WORKER", "No worker is registered for this action") },
     .{ "ActionTimeout", wireError("ACTION_TIMEOUT", "Worker did not reply before the deadline; the action may still execute") },

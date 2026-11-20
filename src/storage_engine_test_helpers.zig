@@ -29,6 +29,7 @@ pub const TableMetadata = schema_types.Table;
 pub const ColumnValue = storage_engine.ColumnValue;
 pub const StorageEngine = storage_engine.StorageEngine;
 pub const StorageError = storage_engine.StorageError;
+pub const WriteAck = storage_engine.WriteAck;
 
 pub const NamedColumn = struct {
     field: []const u8,
@@ -73,8 +74,7 @@ pub fn enqueueUpsert(
     owner_doc_id: typed_doc_id.DocId,
     columns: []const ColumnValue,
     guard: ?query_ast.FilterPredicate,
-    conn_id: ?u64,
-    write_id: ?[16]u8,
+    ack: ?WriteAck,
 ) !void {
     const allocator = engine.allocator;
     const owned_columns = try cloneColumns(allocator, columns);
@@ -93,8 +93,7 @@ pub fn enqueueUpsert(
         .columns = owned_columns,
         .guard_predicate = owned_guard,
         .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
-        .conn_id = conn_id,
-        .write_id = write_id,
+        .ack = ack,
     } });
 }
 
@@ -102,8 +101,8 @@ pub const PendingUpsert = struct {
     table_index: usize,
     id: typed_doc_id.DocId,
     columns: []const ColumnValue,
+    /// Tracked when set; the outcome's request id is the upsert's 1-based position.
     conn_id: ?u64 = null,
-    write_id: ?[16]u8 = null,
 };
 
 /// Flush `upserts` in one transaction on the calling thread. Bypasses the write
@@ -118,8 +117,7 @@ pub fn flushUpsertsNow(engine: *StorageEngine, namespace_id: i64, upserts: []con
     }
     for (upserts, 0..) |pending, i| {
         const columns = try cloneColumns(allocator, pending.columns);
-        var write_id = pending.write_id;
-        if (write_id == null and pending.conn_id != null) write_id = std.mem.toBytes(@as(u128, i + 1));
+        const ack: ?WriteAck = if (pending.conn_id) |conn_id| .{ .conn_id = conn_id, .msg_id = i + 1 } else null;
         batch.append(allocator, .{ .upsert = .{
             .table_index = pending.table_index,
             .id = pending.id,
@@ -127,8 +125,7 @@ pub fn flushUpsertsNow(engine: *StorageEngine, namespace_id: i64, upserts: []con
             .owner_doc_id = typed_doc_id.zero,
             .columns = columns,
             .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
-            .conn_id = pending.conn_id,
-            .write_id = write_id,
+            .ack = ack,
         } }) catch |err| {
             for (columns) |col| col.value.deinit(allocator);
             allocator.free(columns);
@@ -149,8 +146,7 @@ pub fn enqueueUpdate(
     namespace_id: i64,
     columns: []const ColumnValue,
     guard: ?query_ast.FilterPredicate,
-    conn_id: ?u64,
-    write_id: ?[16]u8,
+    ack: ?WriteAck,
 ) !void {
     const allocator = engine.allocator;
     const owned_columns = try cloneColumns(allocator, columns);
@@ -168,8 +164,7 @@ pub fn enqueueUpdate(
         .columns = owned_columns,
         .guard_predicate = owned_guard,
         .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
-        .conn_id = conn_id,
-        .write_id = write_id,
+        .ack = ack,
     } });
 }
 
@@ -181,8 +176,7 @@ pub fn enqueueUpdateConditional(
     columns: []const ColumnValue,
     guard: ?query_ast.FilterPredicate,
     precondition: ?query_ast.FilterPredicate,
-    conn_id: ?u64,
-    write_id: ?[16]u8,
+    ack: ?WriteAck,
 ) !void {
     const allocator = engine.allocator;
     const owned_columns = try cloneColumns(allocator, columns);
@@ -203,8 +197,7 @@ pub fn enqueueUpdateConditional(
         .guard_predicate = owned_guard,
         .precondition_predicate = owned_precondition,
         .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
-        .conn_id = conn_id,
-        .write_id = write_id,
+        .ack = ack,
     } });
 }
 
@@ -216,8 +209,7 @@ pub fn enqueueIncrement(
     field_index: usize,
     delta: i64,
     precondition: ?query_ast.FilterPredicate,
-    conn_id: ?u64,
-    write_id: ?[16]u8,
+    ack: ?WriteAck,
 ) !void {
     const allocator = engine.allocator;
     const owned_columns = try allocator.alloc(ColumnValue, 0);
@@ -236,8 +228,7 @@ pub fn enqueueIncrement(
         .increments = increments,
         .precondition_predicate = owned_precondition,
         .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
-        .conn_id = conn_id,
-        .write_id = write_id,
+        .ack = ack,
     } });
 }
 
@@ -247,8 +238,7 @@ pub fn enqueueDelete(
     id: typed_doc_id.DocId,
     namespace_id: i64,
     guard: ?query_ast.FilterPredicate,
-    conn_id: ?u64,
-    write_id: ?[16]u8,
+    ack: ?WriteAck,
 ) !void {
     const allocator = engine.allocator;
     const owned_guard = try cloneGuardPredicate(allocator, guard);
@@ -259,8 +249,7 @@ pub fn enqueueDelete(
         .id = id,
         .namespace_id = namespace_id,
         .guard_predicate = owned_guard,
-        .conn_id = conn_id,
-        .write_id = write_id,
+        .ack = ack,
     } });
 }
 
@@ -406,7 +395,7 @@ pub const TableFixture = struct {
         id: typed_doc_id.DocId,
         namespace_id: i64,
     ) !void {
-        return enqueueDelete(self.engine, self.metadata.index, id, namespace_id, null, null, null);
+        return enqueueDelete(self.engine, self.metadata.index, id, namespace_id, null, null);
     }
 
     pub fn getOne(
@@ -739,7 +728,7 @@ fn insertNamedWithMetadata(
 ) !void {
     var resolved: [columns.len]ColumnValue = undefined;
     try fillNamedColumns(table_metadata, &resolved, columns);
-    try enqueueUpsert(engine, table_metadata.index, id, namespace_id, typed_doc_id.zero, &resolved, null, null, null);
+    try enqueueUpsert(engine, table_metadata.index, id, namespace_id, typed_doc_id.zero, &resolved, null, null);
 }
 
 // ─── Record field accessors (module-level, for callers with raw Record + metadata) ───

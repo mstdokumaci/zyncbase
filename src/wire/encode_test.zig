@@ -243,26 +243,25 @@ test "encodeRecord: preserves nil positions and rejects wrong field count" {
     try testing.expectError(error.InternalError, wire_encode.encodeRecord(&output.writer, .{ .values = &no_values }, table_metadata));
 }
 
-test "encodeWriteCommitted: produces valid MsgPack with type and writeId" {
+test "encodeWriteCommitted: 19-byte map with type and request id" {
     const allocator = std.heap.smp_allocator;
-    const write_id = [16]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
-    const msg = try wire_encode.encodeWriteCommitted(allocator, write_id);
+    const msg = try wire_encode.encodeWriteCommitted(allocator, 0x0102030405060708);
     defer allocator.free(msg);
+    try testing.expectEqual(@as(usize, 19), msg.len);
 
     var reader: std.Io.Reader = .fixed(msg);
     const p = try msgpack.decode(allocator, &reader);
     defer p.free(allocator);
 
     try expectType(msg, p, .write_committed);
-    const wid_val = (try p.mapGet("writeId")) orelse return error.MissingWriteId;
-    try testing.expectEqualStrings("0102030405060708090a0b0c0d0e0f10", wid_val.str.value());
+    const id_val = (try p.mapGet("id")) orelse return error.MissingId;
+    try testing.expectEqual(@as(u64, 0x0102030405060708), id_val.uint);
 }
 
 test "encodeWriteError: 5-field map with phase=write, no batchIndex" {
     const allocator = std.heap.smp_allocator;
-    const write_id = [_]u8{0} ** 16;
     const wire_err = wire_errors.getWireError(error.PermissionDenied);
-    const msg = try wire_encode.encodeWriteError(allocator, write_id, wire_err, null);
+    const msg = try wire_encode.encodeWriteError(allocator, 42, wire_err, null);
     defer allocator.free(msg);
 
     var reader: std.Io.Reader = .fixed(msg);
@@ -270,6 +269,8 @@ test "encodeWriteError: 5-field map with phase=write, no batchIndex" {
     defer p.free(allocator);
 
     try expectType(msg, p, .write_error);
+    const id_val = (try p.mapGet("id")) orelse return error.MissingId;
+    try testing.expectEqual(@as(u64, 42), id_val.uint);
     const phase_val = (try p.mapGet("phase")) orelse return error.MissingPhase;
     try testing.expectEqualStrings("write", phase_val.str.value());
     try testing.expect((try p.mapGet("batchIndex")) == null);
@@ -277,9 +278,8 @@ test "encodeWriteError: 5-field map with phase=write, no batchIndex" {
 
 test "encodeWriteError: 6-field map includes batchIndex when set" {
     const allocator = std.heap.smp_allocator;
-    const write_id = [_]u8{0} ** 16;
     const wire_err = wire_errors.getWireError(error.PermissionDenied);
-    const msg = try wire_encode.encodeWriteError(allocator, write_id, wire_err, 2);
+    const msg = try wire_encode.encodeWriteError(allocator, 42, wire_err, 2);
     defer allocator.free(msg);
 
     var reader: std.Io.Reader = .fixed(msg);

@@ -1,6 +1,6 @@
 # Threading
 
-**Drivers**: [Threading Model Architecture](../architecture/threading-model.md), [ADR-006](../architecture/adrs.md#adr-006-deterministic-thread-budget-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics)
+**Drivers**: [Threading Model Architecture](../architecture/threading-model.md), [ADR-006](../architecture/adrs.md#adr-006-deterministic-thread-budget-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes)
 
 ZyncBase uses a deterministic thread budget architecture with six thread domains computed from CPU core count. Thread counts are hardcoded via formula — no configuration overrides. The server refuses to start on machines with fewer than 2 CPU cores.
 
@@ -96,7 +96,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 - uWS `.backpressure` means the frame was accepted and buffered; `Connection.send()` returns `error.Dropped` without closing the WebSocket, and `ConnectionManager.sendOrClose()` closes the connection after receiving that error.
 - Background producers encode into general-allocator-owned byte slices before enqueue. After a successful `SendQueue.push()`, the queue owns the bytes and the event loop frees them after send.
 - Background producers call `Notifier.notify()` after a successful enqueue, not before, so a notify always observes queued work or later work.
-- No request may publish subscription or write acknowledgements before the corresponding storage commit.
+- No request may publish subscription deltas or write outcomes before the corresponding storage commit.
 - StoreSubscribe registration happens synchronously in `MessageHandler` before the initial read request is enqueued, so committed changes cannot be missed while the snapshot is being read.
 - Read response records are allocated by reader threads; after encoding to MessagePack bytes, reader threads free records and push owned bytes to `SendQueue`. The event loop frees encoded bytes after sending.
 - Namespace resolution results must be ignored when superseded by a newer namespace request.

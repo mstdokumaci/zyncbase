@@ -44,31 +44,30 @@ export async function run(port: number = 3000): Promise<void> {
 	try {
 		await client.connect();
 		await Promise.all([
-			client.store.set(
-				["items", IDS[0]],
-				{ priority: 2, metrics: { rank: 1 }, tags: ["sort-proof"] },
-				{ confirm: "committed" },
-			),
-			client.store.set(
-				["items", IDS[1]],
-				{ priority: 2, metrics: { rank: 1 }, tags: ["sort-proof"] },
-				{ confirm: "committed" },
-			),
-			client.store.set(
-				["items", IDS[2]],
-				{ priority: 2, metrics: { rank: 2 }, tags: ["sort-proof"] },
-				{ confirm: "committed" },
-			),
-			client.store.set(
-				["items", IDS[3]],
-				{ priority: 1, metrics: { rank: 0 }, tags: ["sort-proof"] },
-				{ confirm: "committed" },
-			),
-			client.store.set(
-				["items", IDS[4]],
-				{ priority: 1, tags: ["sort-proof"] },
-				{ confirm: "committed" },
-			),
+			client.store.set(["items", IDS[0]], {
+				priority: 2,
+				metrics: { rank: 1 },
+				tags: ["sort-proof"],
+			}),
+			client.store.set(["items", IDS[1]], {
+				priority: 2,
+				metrics: { rank: 1 },
+				tags: ["sort-proof"],
+			}),
+			client.store.set(["items", IDS[2]], {
+				priority: 2,
+				metrics: { rank: 2 },
+				tags: ["sort-proof"],
+			}),
+			client.store.set(["items", IDS[3]], {
+				priority: 1,
+				metrics: { rank: 0 },
+				tags: ["sort-proof"],
+			}),
+			client.store.set(["items", IDS[4]], {
+				priority: 1,
+				tags: ["sort-proof"],
+			}),
 		]);
 
 		const first = await client.store.query("items", { ...OPTIONS, limit: 2 });
@@ -118,11 +117,11 @@ export async function run(port: number = 3000): Promise<void> {
 		await waitUntil(() => liveRows.length === 5, "full sorted subscription");
 		expectIds(liveRows, IDS);
 
-		await client.store.set(
-			["items", IDS[2]],
-			{ priority: 3, metrics: { rank: 2 }, tags: ["sort-proof"] },
-			{ confirm: "committed" },
-		);
+		await client.store.set(["items", IDS[2]], {
+			priority: 3,
+			metrics: { rank: 2 },
+			tags: ["sort-proof"],
+		});
 		await waitUntil(
 			() => recordIds(liveRows)[0] === IDS[2],
 			"live sort-field reorder",

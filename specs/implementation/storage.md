@@ -1,6 +1,6 @@
 # Storage
 
-**Drivers**: [ADR-005](../architecture/adrs.md#adr-005-sqlite-as-the-storage-engine), [ADR-010](../architecture/adrs.md#adr-010-conflict-resolution--last-write-wins), [ADR-018](../architecture/adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics), [Threading](./threading.md), [Query Engine](./query-engine.md)
+**Drivers**: [ADR-005](../architecture/adrs.md#adr-005-sqlite-as-the-storage-engine), [ADR-010](../architecture/adrs.md#adr-010-conflict-resolution--last-write-wins), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes), [Threading](./threading.md), [Query Engine](./query-engine.md)
 
 The storage layer persists store data in SQLite with WAL mode. It owns schema-to-DDL generation, reader/writer connection roles, typed value encoding, write serialization, query execution, and committed change production. Migration execution runs on the storage engine's setup connection. Its contract lives in [Schema Migrations](./schema-migrations.md).
 
@@ -43,7 +43,7 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 ## SQLite Contract
 
 - WAL mode is mandatory so readers are not blocked by the writer in normal operation.
-- Durable mutations enter through the write queue; bypassing it breaks acknowledgement ordering.
+- Durable mutations enter through the write queue; bypassing it breaks write ordering.
 - Tables include system columns needed for namespace, identity, timestamps, and LWW semantics.
 - Store record values are encoded/decoded through typed value helpers; docs should not duplicate codec internals.
 - Every ZyncBase-managed table, including `_zync_*` system tables, is a SQLite `STRICT` table. A value that cannot be stored losslessly in a column's declared type fails the statement.
@@ -76,8 +76,7 @@ Document timestamps are server-generated Unix microseconds. Before worker thread
 4. SQLite enforces referenced-row existence and `restrict`, `cascade`, or `set_null` actions. Cascades are database integrity operations and do not run child authorization checks.
 5. Before a parent delete, `WriteWorker` snapshots rows reachable through cascade/set-null edges. After SQLite applies the actions, those rows flow through the normal pending cache, primary-key-set, and `ChangeJob` bookkeeping; all effects remain invisible until commit. SQLite-driven `set_null` does not modify `updated_at`.
 6. During the transaction, successful row effects accumulate by canonical `(namespace_id, table_index, doc_id)`, retaining the first old record and last new record. After commit, the writer pushes at most one endpoint `ChangeJob` per key to `ChangeQueue`; an absent-to-absent endpoint is suppressed.
-7. Write acknowledgement/error encoding happens on the writer thread after the transaction outcome is known; the writer encodes `WriteCommitted` or `WriteError`, pushes owned bytes to `SendQueue`, and wakes the event loop.
-8. Immediate and committed acknowledgements follow ADR-018 semantics.
+7. Every client write carries a `WriteAck` (`conn_id`, request `msg_id`); internal writes carry none. Outcome encoding happens on the writer thread after the transaction outcome is known; the writer encodes `WriteCommitted` or `WriteError` with the request id, pushes owned bytes to `SendQueue`, and wakes the event loop (ADR-018).
 
 ### Conditional Writes and Increments
 
@@ -89,7 +88,7 @@ Conditional writes and atomic increments reuse the writer transaction and the sa
 - Increment guards are `typeof(field) = 'integer' AND typeof(field + delta) = 'integer'` plus the declared `minimum`/`maximum`. SQLite integer addition overflows to REAL, which the `typeof` check rejects. A NULL field fails the first check.
 - Delete SQL shape: `DELETE ... WHERE id = ? AND namespace_id = ? [AND auth] [AND if] RETURNING <cols>`.
 - A zero-row write is classified by probing the writer's own SQL view (never the lock-free cache), in this order: existence, auth/read guard, client precondition, then increment bounds. Auth is classified first so a client cannot use `if` as a value oracle.
-- A rejected operation affects no row, pushes no cache or change-queue entry, and is reported per operation. In the coalesced flush path the transaction continues and other operations commit; in a confirmed batch the first rejection aborts the transaction and `batchIndex` identifies it.
+- A rejected operation affects no row, pushes no cache or change-queue entry, and is reported per operation. In the coalesced flush path the transaction continues and other operations commit; in an explicit batch the first rejection aborts the transaction and `batchIndex` identifies it.
 - Increment eligibility is validated before enqueue: integer storage, no `enum`, not in a unique constraint, non-zero delta. Unique constraint indexes are relative to `userFields()`, not global field indexes.
 - Conditional writes do not add a version column and do not change last-write-wins for unconditional writes.
 
@@ -98,8 +97,8 @@ Conditional writes and atomic increments reuse the writer transaction and the sa
 - `users.namespaced` and namespace ownership rules must match authorization/session decisions.
 - Same-row authorization guards should be expressed in the write SQL path when possible.
 - Reader statements/results are owned by their reader connection and allocator.
-- Batch writes are atomic at the storage boundary: either the accepted batch commits consistently or returns a failure.
-- Guard, precondition, increment, and constraint rejections are per-operation in the coalesced flush path and abort the whole transaction in a confirmed batch. A constraint failure (unique, foreign key, check, not null) undoes only its own statement under SQLite's ABORT resolution and is raised before any cache, primary-key-set, or change-queue bookkeeping, so the flush transaction stays open for the remaining operations. Failures that are not statement-local (I/O, disk full, allocation, `BEGIN`/`COMMIT`, or an auto-rolled-back transaction) fail every operation in the flush. A rejection never drops an unrelated write.
+- Batch writes are atomic at the storage boundary: either the batch commits consistently or returns a failure.
+- Guard, precondition, increment, and constraint rejections are per-operation in the coalesced flush path and abort the whole transaction in an explicit batch. A constraint failure (unique, foreign key, check, not null) undoes only its own statement under SQLite's ABORT resolution and is raised before any cache, primary-key-set, or change-queue bookkeeping, so the flush transaction stays open for the remaining operations. Failures that are not statement-local (I/O, disk full, allocation, `BEGIN`/`COMMIT`, or an auto-rolled-back transaction) fail every operation in the flush. A rejection never drops an unrelated write.
 - `created_at` is required, immutable, JavaScript-safe, strictly increasing in writer order within one table, and enforced unique by SQLite.
 - Startup rejects persisted `created_at` values outside `0..Number.MAX_SAFE_INTEGER`; no global cross-table clock exists.
 - Transaction-local delta coalescing changes only subscription publication. Every SQL operation, guard, referential action, and write outcome still executes in its original order.
@@ -132,8 +131,8 @@ Conditional writes and atomic increments reuse the writer transaction and the sa
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Batch size | 200 ops | Maximum writes per transaction. |
-| Batch timeout | 10 ms | Maximum time to wait before flushing an incomplete batch. |
+| Batch size | 500 ops | Maximum writes per transaction. |
+| Batch timeout | 8 ms | Maximum time to wait before flushing an incomplete batch. |
 | Statement cache | 100 per connection | LRU eviction for prepared statements. |
 
 ### Reader Pool
@@ -177,8 +176,8 @@ Actual reader OS threads consuming from an SPMC blocking work queue. Each reader
 | `SendQueue` drain | uWS event loop (consumer) | Event loop drains `SendQueue` and delivers encoded messages to connections via `ConnectionManager.drainSendQueue()`. | Runs in post-handler on event loop. |
 
 **Key invariants**:
-- All durable writes enter through the single-writer path; bypassing it breaks acknowledgement ordering.
-- Write acknowledgement/error encoding happens on the writer thread after the transaction outcome is known. The writer pushes owned byte slices to `SendQueue` and wakes the event loop.
+- All durable writes enter through the single-writer path; bypassing it breaks write ordering.
+- Write outcome encoding happens on the writer thread after the transaction outcome is known. The writer pushes owned byte slices to `SendQueue` and wakes the event loop.
 - Background producers call `us_wakeup_loop()` after successful enqueue so the event loop processes queued work promptly.
 - Reader threads execute SQLite queries on dedicated connections; no contention with the event loop or writer thread.
 - StoreSubscribe registration happens in `MessageHandler` before the read request is enqueued to the reader pool.

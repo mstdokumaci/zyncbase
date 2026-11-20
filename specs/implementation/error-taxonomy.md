@@ -18,7 +18,7 @@ All server errors are encoded as a normal wire error response or a write-error p
 | `code` | Stable uppercase public code from this catalog. |
 | `message` | Human-readable diagnostic. Not a stable parsing target. |
 | `retryAfter` | Optional retry delay in milliseconds, currently used by rate limiting. |
-| `phase` | Present on `WriteError` pushes; currently `"write"`. |
+| `phase` | Always `"write"` on `WriteError` pushes. The SDK tags write request errors with `"accept"`. |
 | `batchIndex` | Optional on `WriteError` pushes when a failing batch operation can be identified. |
 
 SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `retryable`, optional `retryAfter`, optional `requestId`, and optional SDK-local `details`.
@@ -46,7 +46,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `NAMESPACE_UNAUTHORIZED` | `authorization` | Server | Namespace-level authorization denied access. |
 | `PERMISSION_DENIED` | `authorization` | Server | Store, presence, or action rule denied the operation. |
 | `SESSION_NOT_READY` | `state` | Server | Store/presence operation arrived before the required scoped session was ready. |
-| `PRECONDITION_FAILED` | `state` | Server | A conditional write's `if` predicate did not hold, or an atomic increment's result was NULL, out of range, or would overflow. The write was not applied. Non-retryable automatically; the application may retry after re-reading. Observable only on `confirm: "committed"` writes (ADR-023). |
+| `PRECONDITION_FAILED` | `state` | Server | A conditional write's `if` predicate did not hold, or an atomic increment's result was NULL, out of range, or would overflow. The write was not applied. Non-retryable automatically; the application may retry after re-reading (ADR-023). |
 | `REQUEST_SUPERSEDED` | `state` | Server | A newer scope request superseded in-flight work (scope resolution or a pending action call). |
 | `NAMESPACE_SWITCH_REJECTED` | `state` | Server | Namespace switching is forbidden for the active `users.namespaced` model. |
 | `SUBSCRIPTION_NOT_FOUND` | `state` | Server | Requested subscription id is not known for the connection. |
@@ -55,7 +55,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `FIELD_NOT_FOUND` | `validation` | Server | Referenced field is not present in the table schema. |
 | `IMMUTABLE_FIELD` | `validation` | Server | Request attempted to write a protected system field. |
 | `SCHEMA_VALIDATION_FAILED` | `validation` | Server | Value failed type, constraint, or required-field validation. |
-| `UNIQUE_CONSTRAINT_VIOLATED` | `validation` | Server | Write collided with a schema-declared unique constraint in the row's effective namespace. Non-retryable; the client must change the value. Observable only on `confirm: "committed"` writes — default accepted writes give no writer-failure guarantee (see ADR-018). Constraint names are not included in the payload. |
+| `UNIQUE_CONSTRAINT_VIOLATED` | `validation` | Server | Write collided with a schema-declared unique constraint in the row's effective namespace. Non-retryable; the client must change the value. Constraint names are not included in the payload. |
 | `INVALID_FIELD_NAME` | `validation` | Server | Field name contains a forbidden sequence or identifier shape. |
 | `INVALID_ARRAY_ELEMENT` | `validation` | Server | Array field contains a nested array/object or other unsupported element. |
 | `INVALID_MESSAGE` | `validation` | Server | Request payload is malformed for the selected message type. |
@@ -74,7 +74,7 @@ SDK errors are surfaced as `ZyncBaseError` with `code`, `message`, `category`, `
 | `SERVER_SHUTDOWN` | `server` | Server | Server is draining or restarting and closed the connection. |
 | `CONNECTION_FAILED` | `network` | SDK | WebSocket connection failed or closed unexpectedly. |
 | `BACKPRESSURE_LIMIT` | `network` | Server | Outbound buffer exceeded the per-connection limit; the peer is not consuming fast enough. |
-| `TIMEOUT` | `network` | SDK | Pending request exceeded the SDK timeout. |
+| `TIMEOUT` | `network` | SDK | A store write's outcome did not arrive within `writeTimeoutMs`. The write may still commit. |
 
 ## Disconnect Codes
 
@@ -100,14 +100,14 @@ Any other `ServerDisconnect` code is treated as `INTERNAL_ERROR`: not retryable,
 - Parser limit failures currently map to `MESSAGE_TOO_LARGE` or `INVALID_MESSAGE_FORMAT`; do not document separate public MessagePack limit codes unless they are added to `src/wire/errors.zig` and the SDK.
 - SQLite, cache, checkpoint, and allocator failures are operational/internal details. They should map to `ENGINE_UNHEALTHY` or `INTERNAL_ERROR` unless a user-facing public error code is intentionally added.
 - Authorization failures map to `NAMESPACE_UNAUTHORIZED` only for namespace admission. Store, presence, and action operation denials map to `PERMISSION_DENIED`.
-- Write acknowledgement failures use the same code catalog inside `WriteError` pushes; top-level `phase` and optional `batchIndex` fields explain where the failure happened.
+- Writer failures use the same code catalog inside `WriteError` pushes; top-level `phase` and optional `batchIndex` fields explain where the failure happened.
 
 ## Propagation
 
 - Synchronous request failures: `MessageHandler.handleMessage` catches the Zig error, converts it with `wire.getWireError`, and sends an error response with the request id.
 - Asynchronous scope resolution failures: background resolution checks `scope_seq`; superseded work reports `REQUEST_SUPERSEDED` or is dropped if no longer relevant.
-- Deferred write failures: the write path emits `WriteError` when the request asked for committed acknowledgement and storage fails after the immediate request phase.
-- Local SDK failures: the SDK creates `ZyncBaseError` directly for path validation, timeout, and connection failures.
+- Writer failures: the writer emits `WriteError` with the write's request id when a store write fails after the immediate request phase.
+- Local SDK failures: the SDK creates `ZyncBaseError` directly for path validation, write timeout, and connection failures.
 - Token expiry first emits an uncorrelated `TOKEN_EXPIRED` error (`id` omitted); the terminal disconnect behavior is defined above.
 
 ## Retry Policy
@@ -122,6 +122,8 @@ Any other `ServerDisconnect` code is treated as `INTERNAL_ERROR`: not retryable,
 | `state` | No | Wait for scope readiness, resubscribe, or reconnect depending on the code. |
 | `validation` | No | Fix request shape/schema/query. |
 | `client` | No | Fix SDK call site or reduce payload/batch size. |
+
+Store writes are never auto-retried by the SDK, regardless of category: a resent write could commit after a later write from the same client (ADR-018).
 
 Action call results are never auto-retried by the SDK, regardless of category: a retried call may already have executed. Retry policy for actions is an application decision. For action calls, `PERMISSION_DENIED` covers `invoke` rule denials. Invalid parameters use their mapped validation codes, including `SCHEMA_VALIDATION_FAILED` for schema errors and `INVALID_ARRAY_ELEMENT` for nested array or map elements. Invalid worker return payloads use `SCHEMA_VALIDATION_FAILED`.
 

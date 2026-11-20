@@ -52,6 +52,5 @@ export type {
 	TypedQueryOptions,
 	TypedWhere,
 	WhereOperators,
-	WriteOptions,
 } from "./types.js";
 export { generateUUIDv7 } from "./uuid.js";

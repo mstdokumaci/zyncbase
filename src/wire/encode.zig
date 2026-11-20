@@ -31,7 +31,6 @@ const Keys = struct {
     pub const tables = comptimeEncodeKey("tables");
     pub const fields = comptimeEncodeKey("fields");
     pub const field_flags = comptimeEncodeKey("fieldFlags");
-    pub const write_id = comptimeEncodeKey("writeId");
     pub const phase = comptimeEncodeKey("phase");
     pub const batch_index = comptimeEncodeKey("batchIndex");
     pub const session = comptimeEncodeKey("session");
@@ -125,12 +124,12 @@ pub const presence_broadcast_header = [2]u8{ 0x93, @intFromEnum(MessageType.pres
 pub const shared_state_broadcast_header = [2]u8{ 0x93, @intFromEnum(MessageType.shared_state_broadcast) };
 
 const write_committed_header = blk: {
-    var buf: [1 + Keys.type.len + Values.write_committed.len + Keys.write_id.len]u8 = undefined;
+    var buf: [1 + Keys.type.len + Values.write_committed.len + Keys.id.len]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
     w.writeByte(0x82) catch @panic("comptime: failed to write map header");
     w.writeAll(Keys.type) catch @panic("comptime: failed to write type key");
     w.writeAll(Values.write_committed) catch @panic("comptime: failed to write WriteCommitted value");
-    w.writeAll(Keys.write_id) catch @panic("comptime: failed to write writeId key");
+    w.writeAll(Keys.id) catch @panic("comptime: failed to write id key");
     break :blk buf[0..w.end].*;
 };
 
@@ -160,16 +159,6 @@ fn encodeUint64(writer: anytype, v: u64) !void {
 /// Specialized encoder for strings.
 fn encodeStr(writer: anytype, v: []const u8) !void {
     try msgpack.writeMsgPackStr(writer, v);
-}
-
-/// Write a 16-byte write id as a lowercase hex msgpack string (always 32 chars -> str8).
-inline fn writeWriteIdHex(writer: anytype, write_id: [16]u8) !void {
-    var buf: [34]u8 = undefined;
-    buf[0] = 0xd9;
-    buf[1] = 32;
-    const hex = std.fmt.bytesToHex(write_id, .lower);
-    @memcpy(buf[2..34], &hex);
-    try writer.writeAll(&buf);
 }
 
 /// Write the common `{type: "ok", id: <u64>}` response prefix (raw-bytes hot path).
@@ -573,18 +562,20 @@ pub inline fn encodeRecord(writer: anytype, record: typed.Record, table_metadata
     }
 }
 
-pub fn encodeWriteCommitted(allocator: Allocator, write_id: [16]u8) ![]const u8 {
+/// `{type: WriteCommitted, id: <u64>}`, correlated by the write's request id.
+pub fn encodeWriteCommitted(allocator: Allocator, msg_id: u64) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
     const writer = &output.writer;
 
     try writer.writeAll(&write_committed_header);
-    try writeWriteIdHex(writer, write_id);
+    try writer.writeByte(0xcf);
+    try writer.writeInt(u64, msg_id, .big);
 
     return output.toOwnedSlice();
 }
 
-pub fn encodeWriteError(allocator: Allocator, write_id: [16]u8, wire_err: WireError, batch_index: ?usize) ![]const u8 {
+pub fn encodeWriteError(allocator: Allocator, msg_id: u64, wire_err: WireError, batch_index: ?usize) ![]const u8 {
     var output: std.Io.Writer.Allocating = .init(allocator);
     errdefer output.deinit();
     const writer = &output.writer;
@@ -596,8 +587,9 @@ pub fn encodeWriteError(allocator: Allocator, write_id: [16]u8, wire_err: WireEr
     try writer.writeAll(Keys.type);
     try writer.writeAll(Values.write_error);
 
-    try writer.writeAll(Keys.write_id);
-    try writeWriteIdHex(writer, write_id);
+    try writer.writeAll(Keys.id);
+    try writer.writeByte(0xcf);
+    try writer.writeInt(u64, msg_id, .big);
 
     try writer.writeAll(Keys.code);
     try writer.writeAll(wire_err.code);

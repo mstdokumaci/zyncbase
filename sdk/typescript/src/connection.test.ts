@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { decode } from "@msgpack/msgpack";
 import { ConnectionManager } from "./connection";
+import { WireMessageType } from "./connection_wire";
 import { packDocId } from "./doc_id";
 import {
 	connectManager,
@@ -261,6 +262,143 @@ describe("ConnectionManager", () => {
 			expect(() =>
 				mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 999 })),
 			).not.toThrow();
+		});
+	});
+
+	describe("dispatchWrite()", () => {
+		const write = { type: "StoreSet", path: ["a", "b"], value: 1 } as const;
+		const wait = (ms: number) =>
+			new Promise((resolve) => setTimeout(resolve, ms));
+		const sentId = (mockWs: MockWebSocket, type: number): number | undefined =>
+			mockWs.sentMessages
+				.map((bytes) => decode(bytes) as { type: number; id: number })
+				.find((message) => message.type === type)?.id;
+
+		test("resolves on WriteCommitted with the request id", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatchWrite(write);
+			mockWs.triggerMessage(encodeToBuffer({ type: "WriteCommitted", id: 3 }));
+
+			await expect(p).resolves.toBeUndefined();
+		});
+
+		test("rejects on WriteError with phase and batchIndex", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatchWrite({
+				type: "StoreBatch",
+				ops: [["r", ["a", "b"]]],
+			});
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "WriteError",
+					id: 3,
+					code: "UNIQUE_CONSTRAINT_VIOLATED",
+					message: "duplicate",
+					phase: "write",
+					batchIndex: 0,
+				}),
+			);
+
+			await expect(p).rejects.toMatchObject({
+				code: "UNIQUE_CONSTRAINT_VIOLATED",
+				retryable: false,
+				details: { phase: "write", batchIndex: 0 },
+			});
+		});
+
+		test("tags an accept-phase error with phase accept", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatchWrite(write);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 3,
+					code: "PERMISSION_DENIED",
+					message: "Not allowed",
+				}),
+			);
+
+			await expect(p).rejects.toMatchObject({
+				code: "PERMISSION_DENIED",
+				details: { phase: "accept" },
+			});
+		});
+
+		test("rejects with TIMEOUT when no outcome arrives", async () => {
+			const { manager, mockWs } = makeManager({ writeTimeoutMs: 20 });
+			await connectManager(manager, mockWs);
+
+			await expect(manager.dispatchWrite(write)).rejects.toMatchObject({
+				code: "TIMEOUT",
+				category: "network",
+				retryable: true,
+				message:
+					"Write outcome not received within 20 ms; the write may still commit",
+			});
+			// A late outcome for the timed-out id is ignored.
+			mockWs.triggerMessage(encodeToBuffer({ type: "WriteCommitted", id: 3 }));
+		});
+
+		test("rejects writeTimeoutMs outside the timer range", () => {
+			expect(() => makeManager({ writeTimeoutMs: 0 })).toThrow(RangeError);
+		});
+
+		test("socket close rejects pending writes", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatchWrite(write);
+			mockWs.triggerClose(1006, "");
+
+			await expect(p).rejects.toMatchObject({ code: "CONNECTION_FAILED" });
+		});
+
+		test("RATE_LIMITED is not retried", async () => {
+			const { manager, mockWs } = makeManager({ reconnectDelay: 10 });
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatchWrite(write);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 3,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 5,
+				}),
+			);
+
+			await expect(p).rejects.toMatchObject({ code: "RATE_LIMITED" });
+			await wait(20);
+			expect(mockWs.sentMessages).toHaveLength(3);
+		});
+
+		test("WriteCommitted counts as a liveness response", async () => {
+			const { manager, mockWs } = makeManager({
+				liveness: { intervalMs: 1_000, timeoutMs: 300 },
+			});
+			await connectManager(manager, mockWs);
+
+			const p = manager.dispatchWrite(write);
+			const requestId = sentId(mockWs, WireMessageType.StoreSet);
+			for (let i = 0; i < 200 && !sentId(mockWs, WireMessageType.Ping); i++) {
+				await wait(10);
+			}
+			expect(sentId(mockWs, WireMessageType.Ping)).toBeDefined();
+
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "WriteCommitted", id: requestId }),
+			);
+			await p;
+			await wait(350);
+			expect(mockWs.readyState).toBe(MockWebSocket.OPEN);
+			manager.disconnect();
 		});
 	});
 

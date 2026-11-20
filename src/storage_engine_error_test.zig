@@ -377,7 +377,7 @@ test "storage: update into another row's key fails and leaves both rows unchange
     // Update b into a's key → the update fails and both rows keep their values.
     try sth.enqueueUpdate(&ctx.engine, ctx.tableIndex("projects"), id_b, 1, &.{
         .{ .index = try tbl.fieldIndex("slug"), .value = tth.valText("first") },
-    }, null, null, null);
+    }, null, null);
     try ctx.engine.flushPendingWrites();
 
     var doc_a = try tbl.getOne(allocator, id_a, 1);

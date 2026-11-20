@@ -57,6 +57,12 @@ pub fn getOpTarget(op: WriteOp) ?OpTarget {
     };
 }
 
+/// The connection and request id a write outcome is reported to.
+pub const WriteAck = struct {
+    conn_id: u64,
+    msg_id: u64,
+};
+
 pub const WriteOp = union(enum) {
     checkpoint: struct { mode: CheckpointMode, latch: *CheckpointLatch },
     upsert: struct {
@@ -67,8 +73,7 @@ pub const WriteOp = union(enum) {
         columns: []sql.ColumnValue,
         guard_predicate: ?query_ast.FilterPredicate = null,
         timestamp: i64,
-        conn_id: ?u64 = null,
-        write_id: ?[16]u8 = null,
+        ack: ?WriteAck = null,
     },
     update: struct {
         table_index: usize,
@@ -79,8 +84,7 @@ pub const WriteOp = union(enum) {
         guard_predicate: ?query_ast.FilterPredicate = null,
         precondition_predicate: ?query_ast.FilterPredicate = null,
         timestamp: i64,
-        conn_id: ?u64 = null,
-        write_id: ?[16]u8 = null,
+        ack: ?WriteAck = null,
     },
     delete: struct {
         table_index: usize,
@@ -88,8 +92,7 @@ pub const WriteOp = union(enum) {
         namespace_id: i64,
         guard_predicate: ?query_ast.FilterPredicate = null,
         precondition_predicate: ?query_ast.FilterPredicate = null,
-        conn_id: ?u64 = null,
-        write_id: ?[16]u8 = null,
+        ack: ?WriteAck = null,
     },
     resolve_session: struct {
         conn_id: u64,
@@ -102,28 +105,17 @@ pub const WriteOp = union(enum) {
     },
     batch: struct {
         entries: []WriteOp,
-        conn_id: ?u64 = null,
-        write_id: ?[16]u8 = null,
+        /// Entries carry no ack of their own; the batch reports one outcome.
+        ack: ?WriteAck = null,
     },
 
-    pub fn getWriteAckInfo(self: WriteOp) ?struct { conn_id: u64, write_id: [16]u8 } {
+    /// Where the writer reports this op's outcome; null for internal writes.
+    pub fn ack(self: WriteOp) ?WriteAck {
         return switch (self) {
-            .upsert => |op| if (op.conn_id != null and op.write_id != null)
-                .{ .conn_id = op.conn_id.?, .write_id = op.write_id.? }
-            else
-                null,
-            .update => |op| if (op.conn_id != null and op.write_id != null)
-                .{ .conn_id = op.conn_id.?, .write_id = op.write_id.? }
-            else
-                null,
-            .delete => |op| if (op.conn_id != null and op.write_id != null)
-                .{ .conn_id = op.conn_id.?, .write_id = op.write_id.? }
-            else
-                null,
-            .batch => |op| if (op.conn_id != null and op.write_id != null)
-                .{ .conn_id = op.conn_id.?, .write_id = op.write_id.? }
-            else
-                null,
+            .upsert => |op| op.ack,
+            .update => |op| op.ack,
+            .delete => |op| op.ack,
+            .batch => |op| op.ack,
             else => null,
         };
     }

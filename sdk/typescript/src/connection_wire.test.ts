@@ -369,6 +369,36 @@ describe("ConnectionWireCodec", () => {
 		expect(codec.decodeMulti(frame)).toEqual([{ type: "ok", id: 7 }]);
 	});
 
+	test("decodes WriteCommitted and WriteError by request id", async () => {
+		const codec = await makeCodec();
+		// The server's 19-byte WriteCommitted: {type: 0x19, id: u64 42}.
+		const committed = new Uint8Array([
+			0x82, 0xa4, 0x74, 0x79, 0x70, 0x65, 0x19, 0xa2, 0x69, 0x64, 0xcf, 0, 0, 0,
+			0, 0, 0, 0, 42,
+		]);
+		expect(decodeOne(codec, committed)).toEqual({
+			type: "WriteCommitted",
+			id: 42,
+		});
+
+		const failed = encodeToBuffer({
+			type: "WriteError",
+			id: 43,
+			code: "UNIQUE_CONSTRAINT_VIOLATED",
+			message: "duplicate",
+			phase: "write",
+			batchIndex: 1,
+		});
+		expect(decodeOne(codec, failed)).toEqual({
+			type: "WriteError",
+			id: 43,
+			code: "UNIQUE_CONSTRAINT_VIOLATED",
+			message: "duplicate",
+			phase: "write",
+			batchIndex: 1,
+		});
+	});
+
 	test("decodes every correlated store row through one nested record path", async () => {
 		const codec = await makeCodec();
 		for (const type of [
@@ -612,7 +642,6 @@ describe("ConnectionWireCodec conditional writes", () => {
 	test("encodes StoreSet if conditions and increment batch ops", async () => {
 		const codec = await makeCodec();
 		const id = generateUUIDv7();
-		const writeId = "00112233445566778899aabbccddeeff";
 
 		const setEncoded = codec.encode(
 			{
@@ -620,8 +649,6 @@ describe("ConnectionWireCodec conditional writes", () => {
 				path: ["users", id],
 				value: { name: "Ada" },
 				if: { conditions: [["name", 0, "Ada"]] },
-				confirm: "committed",
-				writeId,
 			},
 			1,
 		);
@@ -629,7 +656,13 @@ describe("ConnectionWireCodec conditional writes", () => {
 		expect(setWire.type).toBe(WireMessageType.StoreSet);
 		expect(setWire.if).toEqual({ conditions: [[1, 0, "Ada"]] });
 		expect(setWire.value).toEqual([1, "Ada"]);
-		expect(setWire.writeId).toBe(writeId);
+		expect(Object.keys(setWire).sort()).toEqual([
+			"id",
+			"if",
+			"path",
+			"type",
+			"value",
+		]);
 
 		const batchEncoded = codec.encode(
 			{
@@ -643,8 +676,6 @@ describe("ConnectionWireCodec conditional writes", () => {
 					],
 					["i", ["users", id], "name", -5, { conditions: [["name", 4, 5]] }],
 				],
-				confirm: "committed",
-				writeId,
 			},
 			2,
 		);
@@ -715,10 +746,7 @@ describe("ConnectionWireCodec conditional writes", () => {
 		const command = buildSet(
 			"users.u1",
 			{ name: "Ada" },
-			{
-				confirm: "committed",
-				if: { "address.city": "London" },
-			},
+			{ if: { "address.city": "London" } },
 		);
 		const encoded = codec.encode(command.message, 1);
 		const wire = decode(encoded.bytes) as Record<string, unknown>;

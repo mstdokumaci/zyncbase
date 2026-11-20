@@ -1,6 +1,6 @@
 # Wire Protocol
 
-**Drivers**: [ADR-008](../architecture/adrs.md#adr-008-wire-encoding), [ADR-009](../architecture/adrs.md#adr-009-integer-routing-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics), [ADR-020](../architecture/adrs.md#adr-020-typed-two-tier-presence-system)
+**Drivers**: [ADR-008](../architecture/adrs.md#adr-008-wire-encoding), [ADR-009](../architecture/adrs.md#adr-009-integer-routing-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes), [ADR-020](../architecture/adrs.md#adr-020-typed-two-tier-presence-system)
 
 This document is the canonical implementation contract for ZyncBase's WebSocket messages. It names the message types, stable fields, source files, and routing rules. Detailed query operators, schema dictionaries, and public error codes live in their owner specs.
 
@@ -114,8 +114,8 @@ fixint.
 | `0x16` | `StoreUnsubscribe` | C→S | Stop a live query. |
 | `0x17` | `StoreLoadMore` | C→S | Page an active query. |
 | `0x18` | `StoreDelta` | S→C | Push committed subscription changes. |
-| `0x19` | `WriteCommitted` | S→C | Confirm a tracked write. |
-| `0x1a` | `WriteError` | S→C | Fail a tracked write. |
+| `0x19` | `WriteCommitted` | S→C | A write committed. |
+| `0x1a` | `WriteError` | S→C | A write failed in the writer. |
 | `0x20` | `PresenceSetNamespace` | C→S | Establish presence scope. |
 | `0x21` | `PresenceSet` | C→S | Update user presence. |
 | `0x22` | `PresenceSetShared` | C→S | Update shared presence state. |
@@ -150,9 +150,9 @@ All client messages include `type` and `id`. The fields below are additional mes
 | Message | Fields | Scope/session rule | Responsibility |
 |---------|--------|--------------------|----------------|
 | `StoreSetNamespace` | `namespace` | Authenticated connection; may run before store scope is ready. | Resolve and activate store namespace/user scope. |
-| `StoreSet` | `path`, `value`, optional `if`, optional `confirm`, optional `writeId` | Ready store scope. | Set or merge store data at a path; with `if`, update only if the existing row matches. |
-| `StoreRemove` | `path`, optional `if`, optional `confirm`, optional `writeId` | Ready store scope. | Remove a store document; with `if`, only if the existing row matches. |
-| `StoreBatch` | `ops`, optional `confirm`, optional `writeId` | Ready store scope. | Apply a bounded atomic batch of set/remove/increment operations. |
+| `StoreSet` | `path`, `value`, optional `if` | Ready store scope. | Set or merge store data at a path; with `if`, update only if the existing row matches. |
+| `StoreRemove` | `path`, optional `if` | Ready store scope. | Remove a store document; with `if`, only if the existing row matches. |
+| `StoreBatch` | `ops` | Ready store scope. | Apply a bounded atomic batch of set/remove/increment operations. |
 | `StoreQuery` | `table_index`, optional query fields | Ready store scope. | Execute a one-shot store query. |
 | `StoreSubscribe` | `table_index`, optional query fields | Ready store scope. | Create a live store subscription and return initial snapshot. |
 | `StoreLoadMore` | `subId`, `nextCursor`, optional `table_index` | Ready store scope and known subscription. | Page historical results for an active subscription. The server resolves the retained query by `subId`; SDKs may include `table_index` as response-context metadata. |
@@ -171,16 +171,15 @@ All client messages include `type` and `id`. The fields below are additional mes
 
 Query fields for `StoreQuery` and `StoreSubscribe` are owned by [Query Grammar](./query-grammar.md). `orderBy` is an ordered array of positional sort tuples, `[[field_index, desc_flag], ...]`; array order defines precedence. Cursor behavior is owned by [Cursor Pagination](./cursor-pagination.md).
 
-## Write Confirmation
+## Write Outcomes
 
-| Field/value | Meaning |
-|-------------|---------|
-| Omitted `confirm` or `confirm: "accepted"` | Server response confirms the mutation was accepted into the write path. |
-| `confirm: "committed"` | SDK waits for committed outcome before resolving the mutation. |
-| `writeId` | Client-provided write correlation id when the SDK is tracking committed outcome. |
-| `if` or increment present | Requires `confirm: "committed"` and `writeId`; otherwise the write is rejected with `INVALID_MESSAGE`. |
-| `WriteCommitted` push | Writer committed the tracked mutation. |
-| `WriteError` push | Writer failed the tracked mutation after the immediate accept phase. |
+Every `StoreSet`, `StoreRemove`, and `StoreBatch` receives exactly one of these replies, correlated by the request `id`. Store writes never receive `ok`.
+
+| Reply | Meaning |
+|-------|---------|
+| `error` | The server refused the write before it reached the writer (accept phase). |
+| `WriteCommitted` | The writer committed the write, including a no-op. An empty `StoreBatch` commits nothing and receives `WriteCommitted` immediately. |
+| `WriteError` | The writer rejected the write (`phase: "write"`). |
 
 Store subscription state is updated by committed `StoreDelta` pushes, not by optimistic mutation responses.
 
@@ -191,7 +190,6 @@ Store subscription state is updated by committed `StoreDelta` pushes, not by opt
 - A map with `conditions` and/or `orConditions`; each condition is `[field_index, op_code, operand?]`.
 - No `orderBy`, `limit`, or `after`. At most 32 conditions total. Empty and always-true preconditions are rejected.
 - The predicate is evaluated against the **existing** row inside the writer transaction. A conditional set/remove never creates; a missing row is `PRECONDITION_FAILED`.
-- `if` requires `confirm: "committed"` and a `writeId`; without them the write is rejected with `INVALID_MESSAGE`.
 - Conditional writes require read visibility: the write guard is the AND of the collection's write rule and read rule.
 
 `StoreBatch` operation tuples:
@@ -204,22 +202,22 @@ Store subscription state is updated by committed `StoreDelta` pushes, not by opt
 
 The increment tuple is one integer field. `delta` is a non-zero integer. The field must be an integer, must not be a system field, must not have an `enum` constraint, and must not participate in a unique constraint. The SQL applies `field = field + delta` with guards for integer storage, integer overflow, and the field's declared `minimum`/`maximum`. Failure affects zero rows and is reported as `PRECONDITION_FAILED`; it never creates a row.
 
-A rejected conditional/increment operation is reported through `WriteError` with code `PRECONDITION_FAILED`, `phase: "write"`, and `batchIndex` when it belongs to a batch. A rejected operation produces no subscription delta. In a confirmed batch the first rejection rolls back the transaction; in the coalesced flush path rejections are per-operation.
+A rejected conditional/increment operation is reported through `WriteError` with code `PRECONDITION_FAILED`, `phase: "write"`, and `batchIndex` when it belongs to a batch. A rejected operation produces no subscription delta. In an explicit batch the first rejection rolls back the transaction; in the coalesced flush path rejections are per-operation.
 
-Increments are not idempotent and the protocol has no `writeId` dedupe. The SDK does not auto-retry increments.
+Increments are not idempotent and the protocol has no write dedupe. The SDK never auto-retries writes.
 
 ## Server Responses
 
 | Response | Fields | Meaning |
 |----------|--------|---------|
-| `ok` | `id` | Generic success. |
+| `ok` | `id` | Generic success. Store writes never receive `ok`; see [Write Outcomes](#write-outcomes). |
 | `ok` presence scope | `id`, `userId` | Successful `PresenceSetNamespace`; `userId` is the mandatory bin16 internal `users.id` used by presence snapshots and broadcasts. |
 | `ok` with `session` | `id`, `session` | Namespace or auth refresh resolved session claims. |
 | `ok` query response | `id`, `value`, `nextCursor`; optional `subId`, `hasMore` | One-shot query or store subscription snapshot/page. |
 | `ok` presence user snapshot | `id`, `subId`, `users` | Initial user presence snapshot. |
 | `ok` presence shared snapshot | `id`, `subId`, `shared` | Initial shared presence snapshot. |
 | `ok` sync action response | `id`, `value` | Synchronous `ActionCall` result; `value` is the validated returns sparse field array. |
-| `error` | `id` (omitted when uncorrelated), `code`, `message`; optional `retryAfter` | Request failed before a committed async write outcome, or a proactive uncorrelated server notification (see [Token Expiry Notification](#token-expiry-notification)). |
+| `error` | `id` (omitted when uncorrelated), `code`, `message`; optional `retryAfter` | Request failed (for a store write: refused before it reached the writer), or a proactive uncorrelated server notification (see [Token Expiry Notification](#token-expiry-notification)). |
 
 Public error codes and retry categories are owned by [Error Taxonomy](./error-taxonomy.md).
 
@@ -229,8 +227,8 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 |------|--------|---------|
 | `SchemaSync` | `version`, `tables`, `fields`, `fieldFlags`, `presenceUserFields`, `presenceSharedFields`, `actions`, `actionParams`, `actionReturns`, `actionFlags` | `version` is the `schema.json` version string (`X.Y.Z`); a higher major version means stored data changed shape in a migration. The rest are integer dictionaries used by store, query, presence, and action messages. Action arrays are parallel: `actions[i]` is the action name, `actionParams[i]`/`actionReturns[i]` are its flattened param/return field names (empty for no params / async), and `actionFlags[i]` bit 0 marks sync (has `returns`), bit 1 marks presence scope. |
 | `StoreDelta` | Fixed tuple (below) | Committed record-level subscription change. |
-| `WriteCommitted` | `writeId` | Tracked write committed. |
-| `WriteError` | `writeId`, `code`, `message`, `phase`, optional `batchIndex` | Tracked write failed in writer phase. |
+| `WriteCommitted` | `id` | The write with this request id committed. |
+| `WriteError` | `id`, `code`, `message`, `phase`, optional `batchIndex` | The write with this request id failed in the writer phase. |
 | `ServerDisconnect` | `code`, `message` | Best-effort reason for a classified server-initiated close; its `code` is owned by [Error Taxonomy](./error-taxonomy.md#public-catalog). See [Close Codes](#close-codes) for transport mapping. |
 | `PresenceBroadcast` | Fixed tuple (below) | User presence join/update/leave events. |
 | `SharedStateBroadcast` | Fixed tuple (below) | Shared presence patch or batch of patches. |
@@ -274,7 +272,7 @@ A broken network path can leave the WebSocket open. Server and client liveness u
 **Client side.** A browser cannot emit a control Ping frame. It uses the correlated MessagePack `Ping` request (type `0x02`), which requires an established WebSocket but no resolved scope.
 
 - `Ping` contains only the common `type` and `id` fields. The server normally answers with correlated `ok`; a Ping rejected by its dedicated limit receives correlated `RATE_LIMITED`.
-- Any correlated `ok` or `error` response to a client-originated request proves a round trip. Server pushes and uncorrelated errors do not.
+- Any correlated `ok`, `error`, `WriteCommitted`, or `WriteError` for a client-originated request proves a round trip. Server pushes and uncorrelated errors do not.
 
 The server fast path and limiter are specified in [Message Handler](./message-handler.md). Client probe scheduling is specified in the [TypeScript SDK](./typescript-sdk.md); its developer-visible behavior is defined in [Connection Management](../api-design/connection-management.md).
 

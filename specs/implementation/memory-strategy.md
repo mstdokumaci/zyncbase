@@ -49,7 +49,7 @@
 
 - Public error codes are owned by [Error Taxonomy](./error-taxonomy.md).
 - Request-path allocation failure should fail the request and release all temporary state.
-- Storage/write-engine allocation failure during deferred work should surface through the write-outcome path when a caller requested committed acknowledgement.
+- Storage/write-engine allocation failure during deferred work should surface through the write-outcome path as a `WriteError`.
 - Test builds should treat GPA leak reports as failures.
 
 ## Related Specifications

@@ -52,6 +52,7 @@ const client = createClient({
 | `liveness.enabled` | boolean | `true` | Probe a silent connection to detect a broken path that never delivered a close |
 | `liveness.intervalMs` | number | `15000` | Maximum silence after a correlated response to a client request before probing. The first probe phase is randomized within this interval to spread reconnect bursts; this is fixed SDK behavior independent of `reconnectJitter`. Must be an integer of at least `1000` ms. |
 | `liveness.timeoutMs` | number | `10000` | Maximum wait for a correlated response after a probe before declaring the connection dead. Must be a positive integer no greater than `2147483647` ms. |
+| `writeTimeoutMs` | number | `30000` | Maximum wait for a store write's outcome before its promise rejects with `TIMEOUT`; the write may still commit. Must be a positive integer no greater than `2147483647` ms. |
 
 ### Namespace Examples
 
@@ -117,7 +118,7 @@ client.disconnect()
 
 A connection can be **closed** or merely **broken**. A closed one receives a FIN or RST and reaches a terminal state. A broken one — a NAT timeout, a dropped mobile network, a server that died — stays `OPEN` at the socket layer while carrying nothing, because a send on a dead path buffers locally and resolves. No client-side signal distinguishes them: `readyState` says `OPEN`, sends succeed, and outstanding promises never settle.
 
-The SDK treats any correlated response (`ok` or `error`) to a client-originated request as proof that the round trip is working. If no such response arrives within `liveness.intervalMs`, it probes; server pushes and successful local sends do not reset the interval. Any correlated response during the probe wait satisfies the check and restarts the interval. If no response arrives within `liveness.timeoutMs`, the SDK closes the socket and enters the ordinary reconnect path.
+The SDK treats any correlated response (`ok`, `error`, `WriteCommitted`, or `WriteError`) to a client-originated request as proof that the round trip is working. If no such response arrives within `liveness.intervalMs`, it probes; server pushes and successful local sends do not reset the interval. Any correlated response during the probe wait satisfies the check and restarts the interval. If no response arrives within `liveness.timeoutMs`, the SDK closes the socket and enters the ordinary reconnect path.
 
 Client liveness starts after WebSocket open, before store or presence scopes are ready. These options configure only client-side detection; they do not tune the server's separate idle timeout policy.
 

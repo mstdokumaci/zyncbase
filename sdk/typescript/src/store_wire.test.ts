@@ -99,122 +99,82 @@ describe("store_wire", () => {
 		).toThrow(ZyncBaseError);
 	});
 
-	test("buildSet encodes if and requires committed confirmation", () => {
-		expect(() =>
-			buildSet(
-				"users.u1",
-				{ name: "Ada" },
-				{
-					if: { name: { eq: "Ada" } },
-				},
-			),
-		).toThrow(ZyncBaseError);
-
+	test("buildSet encodes if", () => {
 		const command = buildSet(
 			"users.u1",
 			{ name: "Ada" },
-			{
-				confirm: "committed",
-				if: { name: { eq: "Ada" } },
-			},
+			{ if: { name: { eq: "Ada" } } },
 		);
-		expect(command.message.if).toEqual({
-			conditions: [["name", 0, "Ada"]],
+		expect(command.message).toEqual({
+			type: "StoreSet",
+			path: ["users", "u1"],
+			value: { name: "Ada" },
+			if: { conditions: [["name", 0, "Ada"]] },
 		});
-		expect(command.message.writeId).toBeTruthy();
 	});
 
 	test("buildSet conditional if normalizes dotted field paths", () => {
 		const command = buildSet(
 			"users.u1",
 			{ name: "Ada" },
-			{
-				confirm: "committed",
-				if: { "address.city": "NYC" },
-			},
+			{ if: { "address.city": "NYC" } },
 		);
 		expect(command.message.if).toEqual({
 			conditions: [["address__city", 0, "NYC"]],
 		});
 	});
 
-	test("buildRemove encodes if and requires committed confirmation", () => {
-		expect(() =>
-			buildRemove("users.u1", { if: { name: { eq: "Ada" } } }),
-		).toThrow(ZyncBaseError);
-
-		const command = buildRemove("users.u1", {
-			confirm: "committed",
-			if: { name: { eq: "Ada" } },
+	test("buildRemove encodes if", () => {
+		const command = buildRemove("users.u1", { if: { name: { eq: "Ada" } } });
+		expect(command.message).toEqual({
+			type: "StoreRemove",
+			path: ["users", "u1"],
+			if: { conditions: [["name", 0, "Ada"]] },
 		});
-		expect(command.message.if).toEqual({
-			conditions: [["name", 0, "Ada"]],
-		});
-		expect(command.message.writeId).toBeTruthy();
 	});
 
 	test("buildBatch encodes conditional and increment ops", () => {
-		const message = buildBatch(
-			[
-				{
-					op: "set",
-					path: "users.u1",
-					value: { name: "Ada" },
-					if: { name: { eq: "old" } },
-				},
-				{ op: "remove", path: "users.u2", if: { name: { eq: "x" } } },
-				{
-					op: "increment",
-					path: "users.u1.coins",
-					by: -5,
-					if: { coins: { gte: 5 } },
-				},
-			],
-			{ confirm: "committed" },
-		);
-
-		expect(message.ops).toEqual([
-			[
-				"s",
-				["users", "u1"],
-				{ name: "Ada" },
-				{ conditions: [["name", 0, "old"]] },
-			],
-			["r", ["users", "u2"], { conditions: [["name", 0, "x"]] }],
-			["i", ["users", "u1"], "coins", -5, { conditions: [["coins", 4, 5]] }],
+		const message = buildBatch([
+			{
+				op: "set",
+				path: "users.u1",
+				value: { name: "Ada" },
+				if: { name: { eq: "old" } },
+			},
+			{ op: "remove", path: "users.u2", if: { name: { eq: "x" } } },
+			{
+				op: "increment",
+				path: "users.u1.coins",
+				by: -5,
+				if: { coins: { gte: 5 } },
+			},
 		]);
-		expect(message.writeId).toBeTruthy();
-	});
 
-	test("buildBatch rejects conditional ops without committed confirmation", () => {
-		expect(() =>
-			buildBatch([{ op: "increment", path: "users.u1.coins", by: 1 }]),
-		).toThrow(ZyncBaseError);
-		expect(() =>
-			buildBatch([
-				{
-					op: "set",
-					path: "users.u1",
-					value: { name: "Ada" },
-					if: { name: { eq: "x" } },
-				},
-			]),
-		).toThrow(ZyncBaseError);
+		expect(message).toEqual({
+			type: "StoreBatch",
+			ops: [
+				[
+					"s",
+					["users", "u1"],
+					{ name: "Ada" },
+					{ conditions: [["name", 0, "old"]] },
+				],
+				["r", ["users", "u2"], { conditions: [["name", 0, "x"]] }],
+				["i", ["users", "u1"], "coins", -5, { conditions: [["coins", 4, 5]] }],
+			],
+		});
 	});
 
 	test("buildBatch rejects zero increment deltas", () => {
 		expect(() =>
-			buildBatch([{ op: "increment", path: "users.u1.coins", by: 0 }], {
-				confirm: "committed",
-			}),
+			buildBatch([{ op: "increment", path: "users.u1.coins", by: 0 }]),
 		).toThrow(ZyncBaseError);
 	});
 
 	test("buildBatch converts nested increment paths to flat field names", () => {
 		expect(
-			buildBatch([{ op: "increment", path: "users.u1.stats.coins", by: 1 }], {
-				confirm: "committed",
-			}).ops,
+			buildBatch([{ op: "increment", path: "users.u1.stats.coins", by: 1 }])
+				.ops,
 		).toEqual([["i", ["users", "u1"], "stats__coins", 1]]);
 	});
 

@@ -234,9 +234,7 @@ export async function run(port: number = 3000) {
 
 		// 9. Clear an object namespace in one committed write.
 		console.log("Testing namespace clear...");
-		await clientA.store.set(["tasks", "3", "must_be_complete"], null, {
-			confirm: "committed",
-		});
+		await clientA.store.set(["tasks", "3", "must_be_complete"], null, {});
 		const clearedTask3 = (await clientA.get(namespace, [
 			"tasks",
 			"3",

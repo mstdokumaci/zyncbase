@@ -20,9 +20,7 @@ import type {
 	StoreSet,
 	StoreSubscribe,
 	StoreUnsubscribe,
-	WriteOptions,
 } from "./types.js";
-import { generateUUIDv7 } from "./uuid.js";
 
 type WithoutId<T extends { id: number }> = Omit<T, "id">;
 
@@ -62,7 +60,6 @@ export function buildSet(
 			retryable: false,
 		});
 	}
-	assertConditionalConfirm(options);
 
 	const wirePath = segments.slice(0, 2);
 	const wireValue =
@@ -75,10 +72,6 @@ export function buildSet(
 			path: wirePath,
 			value: encodeWriteValue(wireValue),
 			...(options?.if ? { if: encodeWhereClause(options.if) } : {}),
-			...(options?.confirm ? { confirm: options.confirm } : {}),
-			...(options?.confirm === "committed"
-				? { writeId: generateUUIDv7().replace(/-/g, "") }
-				: {}),
 		},
 	};
 }
@@ -98,7 +91,6 @@ export function buildRemove(
 			},
 		);
 	}
-	assertConditionalConfirm(options);
 
 	return {
 		segments,
@@ -106,10 +98,6 @@ export function buildRemove(
 			type: "StoreRemove",
 			path: segments,
 			...(options?.if ? { if: encodeWhereClause(options.if) } : {}),
-			...(options?.confirm ? { confirm: options.confirm } : {}),
-			...(options?.confirm === "committed"
-				? { writeId: generateUUIDv7().replace(/-/g, "") }
-				: {}),
 		},
 	};
 }
@@ -118,7 +106,6 @@ export function buildCreate(
 	collection: string,
 	value: JsonValue,
 	id: string,
-	options?: WriteOptions,
 ): StoreCommand<WithoutId<StoreSet>> {
 	const segments = [collection, id];
 	return {
@@ -127,10 +114,6 @@ export function buildCreate(
 			type: "StoreSet",
 			path: segments,
 			value: encodeWriteValue(value),
-			...(options?.confirm ? { confirm: options.confirm } : {}),
-			...(options?.confirm === "committed"
-				? { writeId: generateUUIDv7().replace(/-/g, "") }
-				: {}),
 		},
 	};
 }
@@ -159,7 +142,6 @@ export function buildQuery(
 
 export function buildBatch(
 	operations: BatchOperation[],
-	options?: WriteOptions,
 ): WithoutId<StoreBatch> {
 	if (operations.length > 500) {
 		throw new ZyncBaseError("Batch exceeds maximum of 500 operations", {
@@ -174,24 +156,7 @@ export function buildBatch(
 		ops.push(buildBatchOp(op));
 	}
 
-	const hasConditional =
-		operations.some((op) => op.if !== undefined) ||
-		operations.some((op) => op.op === "increment");
-	if (hasConditional) {
-		requireCommitted(
-			options,
-			"Batch operations with 'if' or increment require confirm: 'committed'",
-		);
-	}
-
-	return {
-		type: "StoreBatch",
-		ops,
-		...(options?.confirm ? { confirm: options.confirm } : {}),
-		...(options?.confirm === "committed"
-			? { writeId: generateUUIDv7().replace(/-/g, "") }
-			: {}),
-	};
+	return { type: "StoreBatch", ops };
 }
 
 function buildBatchOp(op: BatchOperation): StoreBatch["ops"][number] {
@@ -287,28 +252,6 @@ function buildBatchSet(
 	return op.if
 		? ["s", wirePath, encoded, encodeWhereClause(op.if)]
 		: ["s", wirePath, encoded];
-}
-
-function requireCommitted(
-	options: { confirm?: "accepted" | "committed" } | undefined,
-	message: string,
-): void {
-	if (options?.confirm !== "committed") {
-		throw new ZyncBaseError(message, {
-			code: ErrorCodes.INVALID_MESSAGE,
-			category: "client",
-			retryable: false,
-		});
-	}
-}
-
-function assertConditionalConfirm(options?: ConditionalWriteOptions): void {
-	if (options?.if !== undefined) {
-		requireCommitted(
-			options,
-			"Conditional writes require confirm: 'committed'",
-		);
-	}
 }
 
 export function buildListen(

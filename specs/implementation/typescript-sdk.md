@@ -1,6 +1,6 @@
 # TypeScript SDK
 
-**Drivers**: [Wire Protocol](./wire-protocol.md), [Error Taxonomy](./error-taxonomy.md), [ADR-017](../architecture/adrs.md#adr-017-strict-sdk-api-surface--store-vs-presence), [ADR-018](../architecture/adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics)
+**Drivers**: [Wire Protocol](./wire-protocol.md), [Error Taxonomy](./error-taxonomy.md), [ADR-017](../architecture/adrs.md#adr-017-strict-sdk-api-surface--store-vs-presence), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes)
 
 The TypeScript SDK owns the browser/application API surface, connection lifecycle, wire translation, local subscription materialization, presence API, retry behavior, and client-side validation before requests reach the server.
 
@@ -33,7 +33,7 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 | `ZyncBaseClient` | `ConnectionManager`, `StoreImpl`, `PresenceImpl` | Public client facade. |
 | `ConnectionManager` | WebSocket, fetch, `PendingRequests`, `ConnectionWireCodec`, `RetryPolicy` | Owns transport state, reconnect, auth ticket exchange, and request dispatch. |
 | `ConnectionWireCodec` | MessagePack, schema dictionary, errors | Converts SDK commands to wire messages and server messages back to SDK events/errors. |
-| `PendingRequests` | timers, request ids, write ids | Resolves/rejects request promises and committed write waits. |
+| `PendingRequests` | timers, request ids | Resolves/rejects request promises, including store writes by request id, and enforces the write timeout. |
 | `StoreImpl` | `StoreCommand`, subscriptions, connection | Implements store reads, writes, batches, listens, load-more behavior, and the keyed subscription registry. The registry shares one server subscription per key across consumers and sits above `SubscriptionTracker` (which remains the subId→entry layer). |
 | `PresenceImpl` | connection, schema dictionary | Implements user and shared presence APIs. |
 | `SubscriptionTracker` | materialized view, comparator, cursor state | Tracks local subscription state and applies `StoreDelta` pushes. |
@@ -65,10 +65,9 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 1. Public store/presence method validates SDK inputs and builds a semantic command.
 2. `ConnectionManager` ensures the connection and required namespace scope are ready.
 3. `ConnectionWireCodec` encodes the command using current schema dictionaries and replaces the logical `type` name with its numeric wire ID from the shared registry (`WireMessageType`); `decodeMessage` maps numeric IDs back to the logical `InboundMessage` type names, so the rest of the SDK never sees numeric wire IDs.
-4. `PendingRequests` records the request id, timeout, and optional committed write id.
-5. Server response resolves/rejects the immediate request.
-6. For committed writes, `WriteCommitted` or `WriteError` resolves/rejects the tracked write.
-7. Server pushes update subscription and presence listeners independently of mutation responses.
+4. `PendingRequests` records the request id; store writes also get the `writeTimeoutMs` timer.
+5. An `ok` or `error` response resolves/rejects the request. A store write gets no `ok`: `WriteCommitted` resolves it, `WriteError` or `error` rejects it, and writes are never retried.
+6. Server pushes update subscription and presence listeners independently of mutation responses.
 
 Public methods that receive an `ok` response expose it through a promise. For subscriptions, the promise resolves once *this consumer* is registered — settlement rules live in [Store API → Subscription Lifecycle](../api-design/store-api.md#subscription-lifecycle). Callbacks deliver initial results and later updates independently. `Actions.handle()` resolves after the server accepts the registration.
 
@@ -88,7 +87,7 @@ Recovery orchestration lives in `client.ts` (resolve-at-`synced`, emit `synced`/
 ## Subscription Delivery Contract
 
 - `store.subscribe` callbacks receive the current full snapshot of matching records and fire **at most once per event-loop tick** while deltas arrive. Deltas within a tick are applied to the local materialized view in arrival order, then one snapshot is delivered. A tick whose ops applied nothing (e.g. removes of absent records) fires no callback. The view state read inside a callback is always current; only the callback timing is batched (≈1 tick, sub-ms to a few ms under load). Unchanged records keep their object reference across snapshots.
-- `store.listen` callbacks are synchronous per emitted committed delta within the message handling task (single-record projection, O(1) per delta). A field-path delta whose projected value is deep-equal to the last delivered value is not delivered; document-level listens deliver each updated record. A delta represents one record's transaction endpoints, not one accepted write: repeated writes to a record in one writer transaction may yield one callback, and create-then-delete may yield none.
+- `store.listen` callbacks are synchronous per emitted committed delta within the message handling task (single-record projection, O(1) per delta). A field-path delta whose projected value is deep-equal to the last delivered value is not delivered; document-level listens deliver each updated record. A delta represents one record's transaction endpoints, not one write: repeated writes to a record in one writer transaction may yield one callback, and create-then-delete may yield none.
 - Both preserve per-subscription arrival order; there is no cross-subscription ordering contract.
 - Delivery is per server subscription, not per consumer: all consumers of a shared key observe the same snapshots at the same times — no per-consumer buffering or divergence.
 

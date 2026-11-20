@@ -32,6 +32,7 @@ const DocId = typed_doc_id.DocId;
 const Record = typed.Record;
 const StorageError = errors.StorageError;
 const StatementCache = sql.StatementCache;
+const WriteAck = write_queue.WriteAck;
 const WriteOp = write_queue.WriteOp;
 const write_queue_type = write_queue.write_queue_type;
 
@@ -150,9 +151,9 @@ pub const WriteWorker = struct {
         return claimNextCreatedAt(&self.last_created_at[table_index], candidate_us);
     }
 
-    fn pushWriteOutcome(self: *WriteWorker, conn_id: u64, write_id: [16]u8, err: ?anyerror, batch_index: ?usize) void { // zwanzig-disable-line: unused-parameter
+    fn pushWriteOutcome(self: *WriteWorker, ack: WriteAck, err: ?anyerror, batch_index: ?usize) void { // zwanzig-disable-line: unused-parameter
         const sq = self.send_queue orelse {
-            std.log.warn("WriteWorker: send_queue not set, dropping write outcome for conn_id={d}", .{conn_id});
+            std.log.warn("WriteWorker: send_queue not set, dropping write outcome for conn_id={d}", .{ack.conn_id});
             return;
         };
 
@@ -164,19 +165,19 @@ pub const WriteWorker = struct {
 
         const msg = if (err) |e| blk: {
             const wire_err = wire_errors.getWireError(e);
-            break :blk wire_encode.encodeWriteError(handle.allocator(), write_id, wire_err, batch_index) catch |encode_err| {
+            break :blk wire_encode.encodeWriteError(handle.allocator(), ack.msg_id, wire_err, batch_index) catch |encode_err| {
                 std.log.err("WriteWorker: failed to encode WriteError: {}", .{encode_err});
                 return;
             };
         } else blk: {
-            break :blk wire_encode.encodeWriteCommitted(handle.allocator(), write_id) catch |encode_err| {
+            break :blk wire_encode.encodeWriteCommitted(handle.allocator(), ack.msg_id) catch |encode_err| {
                 std.log.err("WriteWorker: failed to encode WriteCommitted: {}", .{encode_err});
                 return;
             };
         };
 
         handle.retain();
-        sq.push(.{ .conn_id = conn_id, .data = msg, .arena = handle }) catch |push_err| {
+        sq.push(.{ .conn_id = ack.conn_id, .data = msg, .arena = handle }) catch |push_err| {
             std.log.err("WriteWorker: failed to push write outcome to SendQueue: {}", .{push_err});
             handle.release();
             return;
@@ -191,7 +192,7 @@ pub const WriteWorker = struct {
     ) void {
         var pushed = false;
         for (batch, 0..) |op, op_idx| {
-            if (op.getWriteAckInfo()) |info| {
+            if (op.ack()) |ack| {
                 const err: ?anyerror = if (batch_err) |e| e else blk: {
                     if (rejected) |items| {
                         for (items) |rejection| {
@@ -200,7 +201,7 @@ pub const WriteWorker = struct {
                     }
                     break :blk null;
                 };
-                self.pushWriteOutcome(info.conn_id, info.write_id, err, null);
+                self.pushWriteOutcome(ack, err, null);
                 pushed = true;
             }
             op.deinit(self.allocator);
@@ -1049,8 +1050,8 @@ pub const WriteWorker = struct {
                     .checkpoint => |cop| cop.latch.reject(StorageError.EngineUnhealthy),
                     else => {},
                 }
-                if (op.getWriteAckInfo()) |info| {
-                    self.pushWriteOutcome(info.conn_id, info.write_id, StorageError.EngineUnhealthy, null);
+                if (op.ack()) |ack| {
+                    self.pushWriteOutcome(ack, StorageError.EngineUnhealthy, null);
                 }
                 op.deinit(self.allocator);
                 self.flush_wg.done(1);
@@ -1146,8 +1147,8 @@ pub const WriteWorker = struct {
             .upsert, .update, .delete => blk: {
                 batch.append(self.allocator, op) catch |err| {
                     std.log.err("Failed to append to batch: {}", .{err});
-                    if (op.getWriteAckInfo()) |info| {
-                        self.pushWriteOutcome(info.conn_id, info.write_id, errors.classifyError(err), null);
+                    if (op.ack()) |ack| {
+                        self.pushWriteOutcome(ack, errors.classifyError(err), null);
                         self.notifyChanges();
                     }
                     op.deinit(self.allocator);
@@ -1216,7 +1217,7 @@ pub const WriteWorker = struct {
 
     pub fn executeBatchOp(
         self: *WriteWorker,
-        bop: anytype,
+        bop: @FieldType(WriteOp, "batch"),
         last_batch_time: *i64,
     ) void {
         _ = self.batch_arena.reset(.retain_capacity);
@@ -1237,14 +1238,10 @@ pub const WriteWorker = struct {
             for (entries) |entry| entry.deinit(self.allocator);
             self.allocator.free(entries);
 
-            if (@hasField(@TypeOf(bop), "conn_id")) {
-                if (bop.conn_id) |cid| {
-                    if (bop.write_id) |wid| {
-                        const failed_batch_index: ?usize = if (rejected.items.len > 0) rejected.items[0].index else null;
-                        self.pushWriteOutcome(cid, wid, final_err, if (final_err != null) failed_batch_index else null);
-                        self.notifyChanges();
-                    }
-                }
+            if (bop.ack) |ack| {
+                const failed_batch_index: ?usize = if (rejected.items.len > 0) rejected.items[0].index else null;
+                self.pushWriteOutcome(ack, final_err, if (final_err != null) failed_batch_index else null);
+                self.notifyChanges();
             }
 
             self.flush_wg.done(1);
@@ -1252,7 +1249,8 @@ pub const WriteWorker = struct {
         }
 
         // Execute all entries in a single transaction
-        self.runTransaction(entries, &tx_started, &rejected, true) catch |err| {
+        // The deferred block reports final_err to the client.
+        self.runTransaction(entries, &tx_started, &rejected, true) catch |err| { // zwanzig-disable-line: swallowed-error
             final_err = err;
         };
     }

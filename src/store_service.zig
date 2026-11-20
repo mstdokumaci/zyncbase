@@ -138,7 +138,12 @@ pub const StoreService = struct {
 
     pub const WriteContext = struct {
         request: request_context.RequestContext,
-        write_id: ?[16]u8 = null,
+        /// Request id that the write's outcome is correlated with.
+        msg_id: u64,
+
+        fn ack(self: WriteContext) storage_mod.WriteAck {
+            return .{ .conn_id = self.request.conn_id, .msg_id = self.msg_id };
+        }
     };
 
     pub const ReadContext = struct {
@@ -327,7 +332,6 @@ pub const StoreService = struct {
         const parsed = try self.parseStorePath(path);
 
         const has_conditional = if_payload != null;
-        try requireCommittedForConditional(has_conditional, ctx.write_id);
 
         var precondition = try self.decodePrecondition(parsed.table, if_payload);
         errdefer if (precondition) |*p| p.deinit(self.allocator);
@@ -354,8 +358,7 @@ pub const StoreService = struct {
                 .namespace_id = ctx.request.store_namespace_id,
                 .guard_predicate = store_write,
                 .precondition_predicate = precondition,
-                .conn_id = ctx.request.conn_id,
-                .write_id = ctx.write_id,
+                .ack = ctx.ack(),
             },
         };
         store_write = null;
@@ -365,14 +368,15 @@ pub const StoreService = struct {
         try self.storage_engine.enqueueWriteOp(op);
     }
 
+    /// Returns false for an empty batch, which commits nothing and is never enqueued.
     pub fn batchWrite(
         self: *StoreService,
         ctx: WriteContext,
         ops_payload: msgpack.Payload,
-    ) !void {
+    ) !bool {
         if (ops_payload != .arr) return error.InvalidMessageFormat;
         const ops = ops_payload.arr;
-        if (ops.len == 0) return; // no-op, success
+        if (ops.len == 0) return false;
         if (ops.len > 500) return error.BatchTooLarge;
 
         var doc_states = BatchDocStates.init(self.allocator);
@@ -402,13 +406,13 @@ pub const StoreService = struct {
         const op = storage_mod.WriteOp{
             .batch = .{
                 .entries = entries,
-                .conn_id = ctx.request.conn_id,
-                .write_id = ctx.write_id,
+                .ack = ctx.ack(),
             },
         };
         errdefer op.deinit(self.allocator);
 
         try self.storage_engine.enqueueWriteOp(op);
+        return true;
     }
 
     inline fn buildBatchEntry(
@@ -482,7 +486,6 @@ pub const StoreService = struct {
         }
 
         const has_conditional = if_payload != null;
-        try requireCommittedForConditional(has_conditional, ctx.write_id);
 
         var precondition = try self.decodePrecondition(path.table, if_payload);
         errdefer if (precondition) |*p| p.deinit(self.allocator);
@@ -519,8 +522,7 @@ pub const StoreService = struct {
                 .columns = columns_slice,
                 .guard_predicate = store_write,
                 .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
-                .conn_id = ctx.request.conn_id,
-                .write_id = ctx.write_id,
+                .ack = ctx.ack(),
             },
         } else storage_mod.WriteOp{
             .update = .{
@@ -531,8 +533,7 @@ pub const StoreService = struct {
                 .guard_predicate = store_write,
                 .precondition_predicate = precondition,
                 .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
-                .conn_id = ctx.request.conn_id,
-                .write_id = ctx.write_id,
+                .ack = ctx.ack(),
             },
         };
         store_write = null;
@@ -562,7 +563,6 @@ pub const StoreService = struct {
         }
 
         const has_conditional = if_payload != null;
-        try requireCommittedForConditional(has_conditional, ctx.write_id);
 
         var precondition = try self.decodePrecondition(path.table, if_payload);
         errdefer if (precondition) |*p| p.deinit(self.allocator);
@@ -630,7 +630,6 @@ pub const StoreService = struct {
         const field_index = msgpack.extractPayloadUsize(field_payload) orelse return error.InvalidMessageFormat;
         const delta = msgpack.payloadToInt(delta_payload) catch return StorageError.InvalidIncrement;
         try validateIncrementField(path.table, field_index, delta);
-        try requireCommittedForConditional(true, ctx.write_id);
 
         // $value would mean the delta here, while for a set it means the
         // value being written. The resulting value is unknown pre-enqueue, so
@@ -692,7 +691,6 @@ pub const StoreService = struct {
         const path = try self.parseStorePath(path_payload);
 
         const has_conditional = if_payload != null;
-        try requireCommittedForConditional(has_conditional, ctx.write_id);
 
         var precondition = try self.decodePrecondition(path.table, if_payload);
         errdefer if (precondition) |*p| p.deinit(self.allocator);
@@ -765,10 +763,6 @@ pub const StoreService = struct {
         }
     }
 };
-
-fn requireCommittedForConditional(is_conditional: bool, write_id: ?[16]u8) !void {
-    if (is_conditional and write_id == null) return error.InvalidWriteAck;
-}
 
 fn conditionUsesValueScope(condition: authorization_types.Condition) bool {
     switch (condition) {

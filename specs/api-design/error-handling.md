@@ -25,8 +25,7 @@ interface ZyncBaseError extends Error {
   code: string;                          // Machine-readable code (e.g., 'RATE_LIMITED')
   retryable: boolean;                    // Whether the SDK can/will auto-retry
   retryAfter?: number;                   // ms to wait before retry (server-provided)
-  requestId?: number;                    // ID of the failed immediate request
-  writeId?: string;                      // ID of a tracked or confirmed write, if applicable
+  requestId?: number;                    // ID of the failed request, if known
   path?: string[];                       // Affected data path, if applicable
   details?: {
     phase?: 'accept' | 'write';           // Request acceptance or writer-thread outcome
@@ -56,26 +55,24 @@ try {
 }
 ```
 
-Mutation promises use two phases:
+Mutation promises resolve when the write commits and reject in one of two phases:
 
 - `phase: "accept"`: the server rejected the request before the writer owned it.
-- `phase: "write"`: the writer reported a failure for a confirmed write.
-
-Default mutations use `confirm: "accepted"` and resolve after request acceptance. They do not optimistically update local subscription state and do not receive guaranteed per-operation async error delivery after acceptance.
+- `phase: "write"`: the writer rejected the write.
 
 ```typescript
 try {
-  await client.store.set('tasks.t1.status', 'done', { confirm: 'committed' })
+  await client.store.set('tasks.t1.status', 'done')
 } catch (error: ZyncBaseError) {
   if (error.details?.phase === 'write') {
-    // Writer-thread failure for this confirmed write
+    // The writer rejected this write
   }
 }
 ```
 
 ### 2. `client.on('error', ...)` for connection and systemic errors
 
-The global error event surfaces connection-level errors, systemic writer/storage failures, and tracked write errors that are not attached to a currently awaited confirmed mutation:
+The global error event surfaces connection-level errors and every store operation failure, including failures of writes nobody awaits:
 
 ```typescript
 client.on('error', (error: ZyncBaseError) => {
@@ -83,9 +80,9 @@ client.on('error', (error: ZyncBaseError) => {
 })
 ```
 
-### 3. WriteError events
+### 3. WriteError messages
 
-Asynchronous writer failures are `WriteError`s, not rollback NACKs. They use `writeId` to correlate with tracked or confirmed writes.
+Writer failures arrive as `WriteError`s, not rollback NACKs. They carry the write's request id, and the SDK rejects that write's promise with them.
 
 `WriteError` is used for user feedback and diagnostics. It does not imply local rollback because the SDK does not apply speculative local subscription updates.
 
@@ -105,14 +102,12 @@ if (error) { /* render error state */ }
 ZyncBase separates state delivery from write outcome reporting:
 
 1. Subscription callbacks are the authoritative channel for committed observable state.
-2. Default accepted writes do not receive guaranteed per-operation async error delivery after acceptance.
-3. Confirmed writes reject their promise when the writer reports failure.
-4. Tracked write errors use `writeId` and may include best-effort `path` metadata.
-5. Batch write errors include `details.batchIndex` when the failing operation is known.
-6. `PRECONDITION_FAILED` means the write did not apply: a conditional `if` did not hold, the row was missing, or an increment was NULL, out of range, or would overflow. No subscription delta is emitted. The application may retry after re-reading; the SDK never auto-retries a write.
-7. Increments are not idempotent. A manual retry after an ambiguous connection failure may apply twice; there is no `writeId` dedupe.
+2. Every write rejects its promise when the server refuses it or the writer rejects it.
+3. Batch write errors include `details.batchIndex` when the failing operation is known.
+4. `PRECONDITION_FAILED` means the write did not apply: a conditional `if` did not hold, the row was missing, or an increment was NULL, out of range, or would overflow. No subscription delta is emitted. The application may retry after re-reading; the SDK never auto-retries a write.
+5. Increments are not idempotent. A manual retry after an ambiguous connection failure or timeout may apply twice; there is no write dedupe.
 
-Confirmed write timeouts mean confirmation was not received. They do not imply the write was aborted or failed to commit. After reconnect, subscriptions remain the source of truth for final state.
+A write that gets no outcome within `writeTimeoutMs` (default 30 s) rejects with `TIMEOUT`. A timeout or a disconnect does not imply the write was aborted or failed to commit. After reconnect, subscriptions remain the source of truth for final state.
 
 ---
 
@@ -125,5 +120,5 @@ Per-category retry behavior and the canonical error code catalog live in [Error 
 ## Related Specifications
 
 - [Connection Management](./connection-management.md) — Client lifecycle and events
-- [Store API](./store-api.md) — Accepted/committed mutation methods
+- [Store API](./store-api.md) — Mutation methods and their outcomes
 - [Error Taxonomy](../implementation/error-taxonomy.md) — Canonical public error code catalog and retry behavior

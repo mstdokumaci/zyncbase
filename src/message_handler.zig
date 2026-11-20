@@ -477,19 +477,19 @@ pub const MessageHandler = struct {
         conn: *Connection,
         msg_id: u64,
         message: []const u8,
-    ) ![]const u8 {
+    ) !?[]const u8 {
         const payloads = try wire_decode.extractStorePathPayloads(message, arena_allocator);
         const value = payloads.value orelse return error.MissingRequiredFields;
         const ctx = try requireStoreCtx(conn);
 
+        // The writer answers with WriteCommitted or WriteError.
         try self.store_service.setPath(
-            .{ .request = ctx, .write_id = payloads.write_id },
+            .{ .request = ctx, .msg_id = msg_id },
             payloads.path,
             value,
             payloads.if_predicate,
         );
-
-        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
+        return null;
     }
 
     fn handleStoreRemove(
@@ -498,17 +498,17 @@ pub const MessageHandler = struct {
         conn: *Connection,
         msg_id: u64,
         message: []const u8,
-    ) ![]const u8 {
+    ) !?[]const u8 {
         const payloads = try wire_decode.extractStorePathPayloads(message, arena_allocator);
         const ctx = try requireStoreCtx(conn);
 
+        // The writer answers with WriteCommitted or WriteError.
         try self.store_service.removePath(
-            .{ .request = ctx, .write_id = payloads.write_id },
+            .{ .request = ctx, .msg_id = msg_id },
             payloads.path,
             payloads.if_predicate,
         );
-
-        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
+        return null;
     }
 
     fn handleStoreBatch(
@@ -517,16 +517,17 @@ pub const MessageHandler = struct {
         conn: *Connection,
         msg_id: u64,
         message: []const u8,
-    ) ![]const u8 {
+    ) !?[]const u8 {
         const payloads = try wire_decode.extractStoreBatchPayloads(message, arena_allocator);
         const ctx = try requireStoreCtx(conn);
 
-        try self.store_service.batchWrite(
-            .{ .request = ctx, .write_id = payloads.write_id },
+        // The writer answers an enqueued batch; an empty batch commits nothing.
+        const enqueued = try self.store_service.batchWrite(
+            .{ .request = ctx, .msg_id = msg_id },
             payloads.ops,
         );
-
-        return try wire_encode.encodeSuccess(arena_allocator, msg_id);
+        if (enqueued) return null;
+        return try wire_encode.encodeWriteCommitted(arena_allocator, msg_id);
     }
 
     fn handleStoreSubscribe(

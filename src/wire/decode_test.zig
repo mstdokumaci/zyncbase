@@ -447,7 +447,7 @@ test "extractActionReplyFast: non-bool ok is rejected" {
     try testing.expectError(error.InvalidMessageFormat, decode.extractActionReplyFast(bytes, allocator));
 }
 
-test "extractStorePathPayloads: optional if and committed write id" {
+test "extractStorePathPayloads: optional if" {
     const allocator = std.testing.allocator;
     const typed_doc_id = @import("../typed/doc_id.zig");
 
@@ -470,9 +470,6 @@ test "extractStorePathPayloads: optional if and committed write id" {
     try if_map.mapPut("conditions", .{ .arr = conds });
     try map.mapPut("if", if_map);
 
-    try map.mapPut("confirm", try msgpack.Payload.strToPayload("committed", allocator));
-    try map.mapPut("writeId", try msgpack.Payload.strToPayload("00112233445566778899aabbccddeeff", allocator));
-
     const bytes = try encodePayload(allocator, map);
     defer allocator.free(bytes);
 
@@ -484,6 +481,5 @@ test "extractStorePathPayloads: optional if and committed write id" {
     }
 
     try testing.expect(result.if_predicate != null);
-    const expected_write_id: decode.WriteId = .{ 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff };
-    try testing.expectEqual(@as(?decode.WriteId, expected_write_id), result.write_id);
+    try testing.expect(result.value == null);
 }
