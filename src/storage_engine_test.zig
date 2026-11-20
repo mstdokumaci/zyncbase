@@ -1009,23 +1009,6 @@ fn expectDocPresence(ctx: *sth.EngineTestContext, table_index: usize, id: typed_
     try testing.expectEqual(expected, record != null);
 }
 
-const TrackedWrite = struct {
-    table_index: usize,
-    id: typed_doc_id.DocId,
-    conn_id: u64,
-    columns: []const sth.ColumnValue,
-};
-
-/// Enqueue tracked upserts and flush them. Call right after another flush so
-/// they share one flush transaction inside the context's batch window.
-fn flushTrackedUpserts(ctx: *sth.EngineTestContext, namespace_id: i64, writes: []const TrackedWrite) !void {
-    for (writes, 0..) |write, i| {
-        const write_id = [_]u8{@intCast(i + 1)} ** 16;
-        try sth.enqueueUpsert(&ctx.engine, write.table_index, write.id, namespace_id, typed_doc_id.zero, write.columns, null, write.conn_id, write_id);
-    }
-    try ctx.engine.flushPendingWrites();
-}
-
 /// Assert one outcome per connection; `failed_conn` carries `failed_code`, every other is committed.
 fn expectFlushOutcomes(ctx: *sth.EngineTestContext, expected_count: usize, failed_conn: u64, failed_code: []const u8) !void {
     const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
@@ -1044,21 +1027,22 @@ fn expectFlushOutcomes(ctx: *sth.EngineTestContext, expected_count: usize, faile
 test "StorageEngine: unique violation in a flush fails only its own write" {
     const allocator = std.heap.smp_allocator;
     var ctx: sth.EngineTestContext = undefined;
-    try ctx.initWithPerformance(allocator, "unique-flush-isolation", &.{uniqueSlugTable()}, .{ .batch_timeout = 200 }, .{ .in_memory = true, .reader_pool_size = 1 });
+    try ctx.init(allocator, "unique-flush-isolation", uniqueSlugTable());
     defer ctx.deinit();
 
     const table_meta = try ctx.tableMetadata("projects");
     const slug_idx = table_meta.fieldIndex("slug").?;
     const ns: i64 = 1;
 
-    // The seed flush restarts the batch window right before the measured writes.
-    try ctx.insertText("projects", 99, ns, "slug", "seed");
-    try ctx.engine.flushPendingWrites();
+    const slug_seed = [_]sth.ColumnValue{.{ .index = slug_idx, .value = tth.valText("seed") }};
+    try sth.flushUpsertsNow(&ctx.engine, ns, &.{
+        .{ .table_index = table_meta.index, .id = 99, .columns = &slug_seed },
+    });
     _ = drainChangeCount(&ctx);
 
     const slug_a = [_]sth.ColumnValue{.{ .index = slug_idx, .value = tth.valText("a") }};
     const slug_b = [_]sth.ColumnValue{.{ .index = slug_idx, .value = tth.valText("b") }};
-    try flushTrackedUpserts(&ctx, ns, &.{
+    try sth.flushUpsertsNow(&ctx.engine, ns, &.{
         .{ .table_index = table_meta.index, .id = 1, .conn_id = 1001, .columns = &slug_a },
         .{ .table_index = table_meta.index, .id = 2, .conn_id = 1002, .columns = &slug_a },
         .{ .table_index = table_meta.index, .id = 3, .conn_id = 1003, .columns = &slug_b },
@@ -1081,7 +1065,7 @@ test "StorageEngine: orphan reference in a flush fails only its own write" {
         \\}}
     ;
     var ctx: sth.EngineTestContext = undefined;
-    try ctx.initFromJsonWithPerformance(allocator, "fk-flush-isolation", schema_json, .{ .batch_timeout = 200 }, .{ .in_memory = true, .reader_pool_size = 1 });
+    try ctx.initFromJsonWithPerformance(allocator, "fk-flush-isolation", schema_json, .{}, .{ .in_memory = true, .reader_pool_size = 1 });
     defer ctx.deinit();
 
     const parents = try ctx.tableMetadata("parents");
@@ -1089,15 +1073,15 @@ test "StorageEngine: orphan reference in a flush fails only its own write" {
     const parent_idx = children.fieldIndex("parent_id").?;
     const ns: i64 = 1;
 
-    // The seed flush restarts the batch window right before the measured writes.
-    try sth.enqueueUpsert(&ctx.engine, parents.index, 1, ns, typed_doc_id.zero, &.{}, null, null, null);
-    try ctx.engine.flushPendingWrites();
+    try sth.flushUpsertsNow(&ctx.engine, ns, &.{
+        .{ .table_index = parents.index, .id = 1, .columns = &.{} },
+    });
     _ = drainChangeCount(&ctx);
 
     // Parent 2, a child of the missing parent 999, then a child of parent 2.
     const orphan = [_]sth.ColumnValue{.{ .index = parent_idx, .value = fkDocId(999) }};
     const child = [_]sth.ColumnValue{.{ .index = parent_idx, .value = fkDocId(2) }};
-    try flushTrackedUpserts(&ctx, ns, &.{
+    try sth.flushUpsertsNow(&ctx.engine, ns, &.{
         .{ .table_index = parents.index, .id = 2, .conn_id = 2001, .columns = &.{} },
         .{ .table_index = children.index, .id = 10, .conn_id = 2002, .columns = &orphan },
         .{ .table_index = children.index, .id = 11, .conn_id = 2003, .columns = &child },

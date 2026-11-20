@@ -428,22 +428,27 @@ test "storage: multiple null constrained values succeed" {
 test "storage: unique violation in a coalesced flush fails only the colliding write" {
     const allocator = std.heap.smp_allocator;
     var ctx: sth.EngineTestContext = undefined;
-    // A wide batch window keeps both writes in one flush transaction.
-    try ctx.initWithPerformance(allocator, "unique-coalesced-flush", &.{uniqueProjectsTable()}, .{ .batch_timeout = 200 }, .{ .in_memory = true });
+    try ctx.init(allocator, "unique-coalesced-flush", uniqueProjectsTable());
     defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("projects");
+    const slug_idx = table_meta.fieldIndex("slug").?;
 
     const id_seed: typed_doc_id.DocId = 99;
     const id_ok: typed_doc_id.DocId = 1;
     const id_dup: typed_doc_id.DocId = 2;
 
-    // The seed flush restarts the batch window right before the measured writes.
-    try ctx.insertText("projects", id_seed, 1, "slug", "seed");
-    try ctx.engine.flushPendingWrites();
+    const slug_seed = [_]sth.ColumnValue{.{ .index = slug_idx, .value = tth.valText("seed") }};
+    try sth.flushUpsertsNow(&ctx.engine, 1, &.{
+        .{ .table_index = table_meta.index, .id = id_seed, .columns = &slug_seed },
+    });
     _ = drainChangeCount(&ctx);
 
-    try ctx.insertText("projects", id_ok, 1, "slug", "batch-ok");
-    try ctx.insertText("projects", id_dup, 1, "slug", "batch-ok");
-    try ctx.engine.flushPendingWrites();
+    const slug_batch = [_]sth.ColumnValue{.{ .index = slug_idx, .value = tth.valText("batch-ok") }};
+    try sth.flushUpsertsNow(&ctx.engine, 1, &.{
+        .{ .table_index = table_meta.index, .id = id_ok, .columns = &slug_batch },
+        .{ .table_index = table_meta.index, .id = id_dup, .columns = &slug_batch },
+    });
 
     {
         const record = try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_ok, 1);
