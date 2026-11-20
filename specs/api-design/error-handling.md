@@ -23,7 +23,7 @@ All errors surfaced to SDK consumers use a consistent typed object:
 ```typescript
 interface ZyncBaseError extends Error {
   code: string;                          // Machine-readable code (e.g., 'RATE_LIMITED')
-  retryable: boolean;                    // Whether the SDK can/will auto-retry
+  retryable: boolean;                    // Whether the SDK's retry/reconnect policy treats this error class as retryable; not whether replaying the operation is safe
   retryAfter?: number;                   // ms to wait before retry (server-provided)
   requestId?: number;                    // ID of the failed request, if known
   path?: string[];                       // Affected data path, if applicable
@@ -34,6 +34,8 @@ interface ZyncBaseError extends Error {
   };
 }
 ```
+
+`retryable` describes the SDK's automatic retry and reconnect policy, not the failed operation. A `true` value does not mean the SDK will retry this call, and a `false` value does not forbid a manual retry. Store writes are never automatically retried, regardless of `retryable`. A write `TIMEOUT` leaves the outcome ambiguous: the write may still commit, and a manual retry may apply it twice.
 
 ---
 
