@@ -211,7 +211,7 @@ Increments are not idempotent and the protocol has no write dedupe. The SDK neve
 | Response | Fields | Meaning |
 |----------|--------|---------|
 | `ok` | `id` | Generic success. Store writes never receive `ok`; see [Write Outcomes](#write-outcomes). |
-| `ok` scope | `id`, `userId` | Successful `StoreSetNamespace` or `PresenceSetNamespace`; `userId` is the mandatory bin16 internal `users.id` of the session in that namespace, as used by `owner_id`, presence snapshots and broadcasts. |
+| `ok` scope | `id`, `userId` | Successful `StoreSetNamespace` or `PresenceSetNamespace`; `userId` is the connection's mandatory bin16 internal `users.id` (one per connection, ADR-015), used by `owner_id`, presence snapshots and broadcasts. |
 | `ok` with `session` | `id`, `session` | Namespace or auth refresh resolved session claims. |
 | `ok` query response | `id`, `value`, `nextCursor`; optional `subId`, `hasMore` | One-shot query or store subscription snapshot/page. |
 | `ok` presence user snapshot | `id`, `subId`, `users` | Initial user presence snapshot. |
@@ -258,7 +258,7 @@ Public error codes and retry categories are owned by [Error Taxonomy](./error-ta
 - Store operations before store scope readiness return `SESSION_NOT_READY`.
 - Presence operations before presence scope readiness return `SESSION_NOT_READY`.
 - Action calls and registrations require the action's bound scope (store or presence per the schema `scope`) to be ready; otherwise they return `SESSION_NOT_READY`.
-- Every successful `StoreSetNamespace` and `PresenceSetNamespace` returns the active internal `users.id` as bin16. The SDK uses the presence one for self-filtering; the store one is the `owner_id` the server stamps on the session's creates.
+- Every successful `StoreSetNamespace` and `PresenceSetNamespace` returns the connection's internal `users.id` as bin16; the SDK uses that canonical UUID for self-filtering.
 - External JWT and anonymous subjects remain server-internal after ticket exchange and are not sent over WebSocket.
 - A superseded namespace resolution must not activate an older scope.
 - When `users.namespaced` forbids cross-namespace switching on a connection, the server returns `NAMESPACE_SWITCH_REJECTED`.

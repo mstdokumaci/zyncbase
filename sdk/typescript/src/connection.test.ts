@@ -53,18 +53,14 @@ describe("ConnectionManager", () => {
 			expect(events).toContain("connected");
 		});
 
-		test("installs the internal presence user id before connected", async () => {
+		test("records the internal user id before connected", async () => {
 			const { manager, mockWs } = makeManager();
-			const events: string[] = [];
-			manager.onPresenceUserId((userId) => events.push(`user:${userId}`));
-			manager.on("connected", () => events.push("connected"));
+			const seen: Array<string | null> = [];
+			manager.on("connected", () => seen.push(manager.userId));
 
 			await connectManager(manager, mockWs);
 
-			expect(events).toEqual([
-				"user:019c1e50-7d11-7000-8000-000000000001",
-				"connected",
-			]);
+			expect(seen).toEqual([TEST_USER_ID]);
 		});
 
 		test("rejects a presence namespace response without a binary user id", async () => {
@@ -93,22 +89,24 @@ describe("ConnectionManager", () => {
 			await expect(connected).rejects.toThrow(
 				"StoreSetNamespace response missing binary userId",
 			);
-			expect(manager.storeUserId).toBeNull();
+			expect(manager.userId).toBeNull();
 		});
 
-		test("each store namespace setup records the internal user id", async () => {
+		test("the store scope ack alone provides the user id", async () => {
 			const { manager, mockWs } = makeManager();
-			await connectManager(manager, mockWs);
-			expect(manager.storeUserId).toBe(TEST_USER_ID);
-
-			const otherUserId = "019c1e50-7d11-7000-8000-000000000002";
-			const switched = manager.setStoreNamespace("other");
+			const connected = manager.connect();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			mockWs.triggerOpen();
 			mockWs.triggerMessage(
-				encodeToBuffer({ type: "ok", id: 3, userId: packDocId(otherUserId) }),
+				encodeToBuffer({ type: "ok", id: 1, userId: packDocId(TEST_USER_ID) }),
 			);
-			await switched;
-			expect(manager.storeUserId).toBe(otherUserId);
-			expect(manager.getStoreNamespace()).toBe("other");
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			expect(manager.userId).toBe(TEST_USER_ID);
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id: 2, userId: packDocId(TEST_USER_ID) }),
+			);
+			await connected;
 		});
 
 		test("rejects a presence namespace response with a malformed user id", async () => {
@@ -131,29 +129,6 @@ describe("ConnectionManager", () => {
 			await expect(connected).rejects.toThrow(
 				"invalid userId binary length 15",
 			);
-		});
-
-		test("explicit presence namespace setup replaces the internal user id", async () => {
-			const { manager, mockWs } = makeManager();
-			const userIds: string[] = [];
-			manager.onPresenceUserId((userId) => userIds.push(userId));
-			await connectManager(manager, mockWs);
-
-			const switched = manager.setPresenceNamespace("other-room");
-			mockWs.triggerMessage(
-				encodeToBuffer({
-					type: "ok",
-					id: 3,
-					userId: packDocId("019c1e50-7d11-7000-8000-000000000002"),
-				}),
-			);
-			await switched;
-
-			expect(manager.getPresenceNamespace()).toBe("other-room");
-			expect(userIds).toEqual([
-				"019c1e50-7d11-7000-8000-000000000001",
-				"019c1e50-7d11-7000-8000-000000000002",
-			]);
 		});
 
 		test("emits 'statusChange' with 'connected' on open", async () => {

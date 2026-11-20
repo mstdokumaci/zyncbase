@@ -77,6 +77,7 @@ pub const Connection = struct {
         self.token_expiry_notified = false;
         self.resetStoreScopeLocked();
         self.resetPresenceScopeLocked();
+        self.user_doc_id = typed_doc_id.zero;
         self.subscription_ids.clearRetainingCapacity();
         self.next_subscription_id = 1;
     }
@@ -89,6 +90,7 @@ pub const Connection = struct {
         self.token_expiry_notified = false;
         self.resetStoreScopeLocked();
         self.resetPresenceScopeLocked();
+        self.user_doc_id = typed_doc_id.zero;
     }
 
     pub fn updateSessionClaims(self: *Connection, new_claims: std.StringHashMapUnmanaged(typed.Value), token_expires_at: i64) void {
@@ -126,7 +128,6 @@ pub const Connection = struct {
         self.namespace_id = unset_namespace_id;
         self.store_namespace = null;
         self.pending_store_namespace = null;
-        self.user_doc_id = typed_doc_id.zero;
         self.store_ready = false;
         self.scope_seq +%= 1;
     }

@@ -497,6 +497,45 @@ test "Namespace success: cached and asynchronous scope responses return the inte
     }
 }
 
+test "NamespaceSwitch: a store switch keeps the connection's user id for the ready presence scope" {
+    const allocator = std.testing.allocator;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "ns-switch-identity",
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": { "users": { "fields": {} } },
+        \\  "presence": { "user": { "status": { "type": "string" } } }
+        \\}
+    );
+    defer app.deinit();
+
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+    const user_doc_id = sc.conn.user_doc_id;
+    try testing.expect(user_doc_id != typed_doc_id.zero);
+
+    {
+        const msg = try createPresenceSetNamespaceMessageBytes(allocator, 1, "public");
+        defer allocator.free(msg);
+        const response = try routeWithArena(&app.handler, allocator, sc.conn, msg);
+        defer allocator.free(response);
+        try expectScopeSuccess(response, 1, user_doc_id);
+    }
+
+    // While the new store scope resolves, presence keeps operating as the same user.
+    const msg = try createStoreSetNamespaceMessageBytes(allocator, 2, "store-uncached");
+    defer allocator.free(msg);
+    try testing.expect((try routeWithArenaOptional(&app.handler, allocator, sc.conn, msg)) == null);
+    try testing.expect(!sc.conn.store_ready);
+    try testing.expect(sc.conn.presence_ready);
+    try testing.expectEqual(user_doc_id, sc.conn.user_doc_id);
+
+    try app.storage_engine.flushPendingWrites();
+    const entry = app.test_context.send_queue.?.pop() orelse return error.MissingAsyncResponse;
+    defer entry.deinit();
+    try expectScopeSuccess(entry.data, 2, user_doc_id);
+}
+
 test "NamespaceSwitch: initial store namespace setup succeeds with users.namespaced=true" {
     const allocator = std.heap.smp_allocator;
     const schema_json =

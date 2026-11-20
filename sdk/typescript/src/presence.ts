@@ -25,6 +25,7 @@ export interface PresenceConnection {
 	): void;
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
 	schemaDictionary: SchemaDictionary;
+	readonly userId: string | null;
 }
 
 export class PresenceImpl implements Presence {
@@ -41,7 +42,6 @@ export class PresenceImpl implements Presence {
 	private sharedCallbacks = new Set<
 		(shared: Record<string, unknown> | null) => void
 	>();
-	private _localUserId: string | null = null;
 	private lastSetTime = 0;
 	private pendingSetData: Record<string, unknown> | null = null;
 	private pendingSetWaiters: SetWaiter[] = [];
@@ -59,13 +59,9 @@ export class PresenceImpl implements Presence {
 		this.conn.on("disconnected", () => this.handleDisconnect());
 	}
 
-	setLocalUserId(userId: string | null): void {
-		this._localUserId = userId;
-	}
-
 	/** Scope-resolved internal users.id, or null before scope setup. */
 	get localUserId(): string | null {
-		return this._localUserId;
+		return this.conn.userId;
 	}
 
 	set(data: Record<string, unknown>): Promise<void> {
@@ -375,8 +371,9 @@ export class PresenceImpl implements Presence {
 	getAll(options?: PresenceGetAllOptions): PresenceEntry[] {
 		// snapshots stay O(n); add a delta API only if copying profiles hot again.
 		const entries = this.userEntries.slice();
-		if (!options?.includeSelf && this._localUserId) {
-			const selfIndex = this.userIndexes.get(this._localUserId);
+		const localUserId = this.conn.userId;
+		if (!options?.includeSelf && localUserId) {
+			const selfIndex = this.userIndexes.get(localUserId);
 			if (selfIndex !== undefined) {
 				entries[selfIndex] = entries[entries.length - 1];
 				entries.pop();
@@ -412,7 +409,6 @@ export class PresenceImpl implements Presence {
 	): void {
 		this.userSubGen++;
 		this.sharedSubGen++;
-		this._localUserId = null;
 		this.clearUserCache();
 		this.sharedCache = null;
 		this.userSubId = null;
@@ -473,7 +469,7 @@ export class PresenceImpl implements Presence {
 	}
 
 	private isRelevantChange(userId: string): boolean {
-		return this._localUserId === null || userId !== this._localUserId;
+		return userId !== this.conn.userId;
 	}
 
 	private handlePresenceBroadcast(msg: PresenceBroadcast): void {

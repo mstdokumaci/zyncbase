@@ -130,7 +130,6 @@ export class ConnectionManager {
 
 	private deltaHandler: DeltaHandler | null = null;
 	private presenceBroadcastHandler: PresenceBroadcastHandler | null = null;
-	private presenceUserIdHandler: ((userId: string) => void) | null = null;
 	private actionForwardHandler: ((msg: ActionForward) => void) | null = null;
 
 	private reconnectAttempt = 0;
@@ -139,7 +138,7 @@ export class ConnectionManager {
 	private currentStatus: ConnectionStatus = "disconnected";
 
 	private storeNamespace: string;
-	private currentStoreUserId: string | null = null;
+	private currentUserId: string | null = null;
 	private presenceNamespace: string;
 
 	private processingPromise: Promise<void> = Promise.resolve();
@@ -173,9 +172,9 @@ export class ConnectionManager {
 		return this.storeNamespace;
 	}
 
-	/** Internal `users.id` of the session in the store namespace; null before the first scope. */
-	get storeUserId(): string | null {
-		return this.currentStoreUserId;
+	/** The connection's internal `users.id`; null before the first scope ack. */
+	get userId(): string | null {
+		return this.currentUserId;
 	}
 
 	/** Current connection status. */
@@ -193,10 +192,7 @@ export class ConnectionManager {
 			type: "StoreSetNamespace",
 			namespace: ns,
 		});
-		if (!(ok.userId instanceof Uint8Array)) {
-			throw new Error("StoreSetNamespace response missing binary userId");
-		}
-		this.currentStoreUserId = this.schemaDictionary.decodeUserId(ok.userId);
+		this.adoptUserId(ok, "StoreSetNamespace");
 		this.storeNamespace = ns;
 	}
 
@@ -204,21 +200,20 @@ export class ConnectionManager {
 		return this.presenceNamespace;
 	}
 
-	onPresenceUserId(handler: (userId: string) => void): void {
-		this.presenceUserIdHandler = handler;
-	}
-
 	async setPresenceNamespace(ns: string): Promise<void> {
 		const ok = await this.dispatch({
 			type: "PresenceSetNamespace",
 			namespace: ns,
 		});
-		if (!(ok.userId instanceof Uint8Array)) {
-			throw new Error("PresenceSetNamespace response missing binary userId");
-		}
-		const userId = this.schemaDictionary.decodeUserId(ok.userId);
+		this.adoptUserId(ok, "PresenceSetNamespace");
 		this.presenceNamespace = ns;
-		this.presenceUserIdHandler?.(userId);
+	}
+
+	private adoptUserId(ok: OkResponse, request: string): void {
+		if (!(ok.userId instanceof Uint8Array)) {
+			throw new Error(`${request} response missing binary userId`);
+		}
+		this.currentUserId = this.schemaDictionary.decodeUserId(ok.userId);
 	}
 
 	private handleTicketError(err: unknown): never {

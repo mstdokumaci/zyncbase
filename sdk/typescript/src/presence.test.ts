@@ -45,6 +45,7 @@ function createMockConnection() {
 		},
 		on: () => {},
 		schemaDictionary: schema,
+		userId: null as string | null,
 		dispatched,
 		schema,
 		fireBroadcast: (msg: PresenceBroadcast | SharedStateBroadcast) => {
@@ -270,7 +271,7 @@ describe("PresenceImpl", () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
 		const presence = new PresenceImpl(conn);
-		presence.setLocalUserId(conn.schema.decodeUserId(packDocId("user_1")));
+		conn.userId = conn.schema.decodeUserId(packDocId("user_1"));
 
 		conn.dispatch = (msg: Record<string, unknown>) => {
 			if (msg.type === "PresenceSubscribe") {
@@ -826,7 +827,7 @@ describe("PresenceImpl", () => {
 		await setupSchema(conn.schema);
 		const presence = new PresenceImpl(conn);
 		const selfId = conn.schema.decodeUserId(packDocId("user_self"));
-		presence.setLocalUserId(selfId);
+		conn.userId = selfId;
 
 		conn.dispatch = (msg: Record<string, unknown>) => {
 			if (msg.type === "PresenceSubscribe") {
