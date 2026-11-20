@@ -59,6 +59,7 @@ test {
     _ = @import("authentication/jwt_validator_test.zig");
     _ = @import("authentication/ticket_exchange_test.zig");
     _ = @import("storage_engine/write_worker_test.zig");
+    _ = @import("storage_engine/outcome_fence_test.zig");
     _ = @import("storage_engine/write_worker_perf_test.zig");
     _ = @import("storage_engine/read_worker_perf_test.zig");
     _ = @import("subscription/engine_test.zig");
@@ -66,6 +67,7 @@ test {
     _ = @import("subscription/engine_thread_safety_test.zig");
     _ = @import("subscription/change_queue_test.zig");
     _ = @import("subscription/worker_pool_test.zig");
+    _ = @import("subscription/outcome_ordering_test.zig");
     _ = @import("subscription/worker_pool_perf_test.zig");
     _ = @import("subscription/consistency_test.zig");
     _ = @import("memory/lock_free_cache_test.zig");

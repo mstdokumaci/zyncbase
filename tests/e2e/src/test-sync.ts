@@ -234,7 +234,7 @@ export async function run(port: number = 3000) {
 
 		// 9. Clear an object namespace in one committed write.
 		console.log("Testing namespace clear...");
-		await clientA.store.set(["tasks", "3", "must_be_complete"], null, {});
+		await clientA.store.set(["tasks", "3", "must_be_complete"], null);
 		const clearedTask3 = (await clientA.get(namespace, [
 			"tasks",
 			"3",
@@ -248,6 +248,19 @@ export async function run(port: number = 3000) {
 			);
 		}
 		console.log("Namespace clear passed.");
+
+		// 10. A resolved write has already updated the writer's subscriptions.
+		console.log("Testing own write visible in subscription on resolve...");
+		const ownView = await clientA.store.subscribe("tasks", {}, () => {});
+		await clientA.store.set(["tasks", "4"], { title: "Own write" });
+		const ownRows = ownView.getSnapshot() as unknown as MockTask[];
+		if (ownRows.find((task) => task.id === "4")?.title !== "Own write") {
+			throw new Error(
+				`Subscription missed the resolved write: ${JSON.stringify(ownRows)}`,
+			);
+		}
+		await ownView.unsubscribe();
+		console.log("Own write visible on resolve passed.");
 
 		console.log("E2E Sync test passed successfully!");
 	} catch (err) {

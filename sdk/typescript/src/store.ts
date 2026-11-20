@@ -712,9 +712,10 @@ export class StoreImpl {
 
 	/**
 	 * Build and send a write synchronously, so writes and reads issued
-	 * back-to-back reach the server in call order. Failures emit on('error');
-	 * the returned promise is marked handled so un-awaited writes do not raise
-	 * unhandled rejections.
+	 * back-to-back reach the server in call order. The server sends a write's
+	 * deltas before its outcome, so subscriptions are flushed before the
+	 * promise resolves. Failures emit on('error'); the returned promise is
+	 * marked handled so un-awaited writes do not raise unhandled rejections.
 	 */
 	private write(
 		build: () => OutboundRequest,
@@ -726,8 +727,9 @@ export class StoreImpl {
 		} catch (err) {
 			sent = Promise.reject(err);
 		}
-		const result = sent.catch((err: unknown) =>
-			this.emitAndThrow(err, fallbackMessage),
+		const result = sent.then(
+			() => this.tracker.flushNow(),
+			(err: unknown) => this.emitAndThrow(err, fallbackMessage),
 		);
 		result.catch(() => {});
 		return result;

@@ -616,7 +616,9 @@ pub const ZyncBaseServer = struct {
             return err;
         }
 
-        // Lock the engine and start the runtime thread
+        // Lock the engine and start the runtime thread. The writer reads the
+        // subscription count to order outcomes after deltas.
+        self.storage_engine.write_worker.subscription_count = &self.subscription_engine.active_count;
         try self.storage_engine.start(&self.send_queue, &self.change_queue, &self.session_resolver);
     }
 
@@ -817,16 +819,17 @@ pub const ZyncBaseServer = struct {
         // Stop background threads before any shared-resource deinit.
         self.stopBackgroundWorkers();
 
+        // change_queue.deinit() frees any remaining unconsumed change jobs.
+        // Before send_queue: a job's outcome fence may still publish into it.
+        std.log.debug("Deinitializing change_queue", .{});
+        self.change_queue.deinit();
+
         // send_queue.deinit() releases the stub node. Drain remaining entries first.
         std.log.debug("Deinitializing send_queue", .{});
         while (self.send_queue.pop()) |entry| {
             entry.deinit();
         }
         self.send_queue.deinit();
-
-        // change_queue.deinit() frees any remaining unconsumed change jobs.
-        std.log.debug("Deinitializing change_queue", .{});
-        self.change_queue.deinit();
 
         std.log.debug("Deinitializing connection_manager", .{});
         self.connection_manager.deinit();

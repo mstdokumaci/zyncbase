@@ -8,8 +8,6 @@ const schema_types = @import("../schema/types.zig");
 const change_queue_mod = @import("../subscription/change_queue.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
-const wire_encode = @import("../wire/encode.zig");
-const wire_errors = @import("../wire/errors.zig");
 const storage_cache = @import("cache.zig");
 const connection = @import("connection.zig");
 const errors = @import("errors.zig");
@@ -24,6 +22,7 @@ const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const WaitGroup = @import("../threading/wait_group.zig").WaitGroup;
+const OutcomeFence = @import("outcome_fence.zig").OutcomeFence;
 
 const Allocator = std.mem.Allocator;
 const ChangeQueue = change_queue_mod.ChangeQueue;
@@ -40,6 +39,13 @@ const Rejection = struct {
     index: usize,
     err: anyerror,
 };
+
+fn rejectionFor(rejected: []const Rejection, op_idx: usize) ?anyerror {
+    for (rejected) |rejection| {
+        if (rejection.index == op_idx) return rejection.err;
+    }
+    return null;
+}
 
 /// Classify a database error, log it, and optionally deinit an old record.
 /// Used as the catch handler in executeBatch* / handle*Entry functions.
@@ -86,6 +92,9 @@ pub const WriteWorker = struct {
     thread: managedThread(WriteWorker),
     flush_wg: WaitGroup,
     change_queue: ?*ChangeQueue,
+    /// Live subscription count; set before `start` when subscription workers
+    /// consume `change_queue`. Null means no outcome waits for deltas.
+    subscription_count: ?*const std.atomic.Value(usize) = null,
     session_resolver: ?*SessionResolver,
     send_queue: ?*send_queue_type,
     notifier: Notifier,
@@ -151,64 +160,32 @@ pub const WriteWorker = struct {
         return claimNextCreatedAt(&self.last_created_at[table_index], candidate_us);
     }
 
-    fn pushWriteOutcome(self: *WriteWorker, ack: WriteAck, err: ?anyerror, batch_index: ?usize) void { // zwanzig-disable-line: unused-parameter
+    /// Collects a transaction's outcomes; null when none are tracked or the
+    /// fence cannot be created (the client's write timeout then reports it).
+    fn createFence(self: *WriteWorker, tracked: bool) ?*OutcomeFence {
+        if (!tracked) return null;
         const sq = self.send_queue orelse {
-            std.log.warn("WriteWorker: send_queue not set, dropping write outcome for conn_id={d}", .{ack.conn_id});
-            return;
+            std.log.warn("WriteWorker: send_queue not set, dropping write outcomes", .{});
+            return null;
         };
-
-        const handle = self.memory_strategy.acquireArenaDeferred() catch |acq_err| {
-            std.log.err("WriteWorker: failed to acquire arena: {}", .{acq_err});
-            return;
-        };
-        defer handle.release();
-
-        const msg = if (err) |e| blk: {
-            const wire_err = wire_errors.getWireError(e);
-            break :blk wire_encode.encodeWriteError(handle.allocator(), ack.msg_id, wire_err, batch_index) catch |encode_err| {
-                std.log.err("WriteWorker: failed to encode WriteError: {}", .{encode_err});
-                return;
-            };
-        } else blk: {
-            break :blk wire_encode.encodeWriteCommitted(handle.allocator(), ack.msg_id) catch |encode_err| {
-                std.log.err("WriteWorker: failed to encode WriteCommitted: {}", .{encode_err});
-                return;
-            };
-        };
-
-        handle.retain();
-        sq.push(.{ .conn_id = ack.conn_id, .data = msg, .arena = handle }) catch |push_err| {
-            std.log.err("WriteWorker: failed to push write outcome to SendQueue: {}", .{push_err});
-            handle.release();
-            return;
+        return OutcomeFence.create(self.memory_strategy, sq, self.notifier) catch |err| {
+            std.log.err("WriteWorker: failed to create outcome fence, dropping write outcomes: {}", .{err});
+            return null;
         };
     }
 
-    fn pushBatchOutcomes(
-        self: *WriteWorker,
-        batch: []const WriteOp,
-        rejected: ?[]const Rejection,
-        batch_err: ?anyerror,
-    ) void {
-        var pushed = false;
-        for (batch, 0..) |op, op_idx| {
-            if (op.ack()) |ack| {
-                const err: ?anyerror = if (batch_err) |e| e else blk: {
-                    if (rejected) |items| {
-                        for (items) |rejection| {
-                            if (rejection.index == op_idx) break :blk rejection.err;
-                        }
-                    }
-                    break :blk null;
-                };
-                self.pushWriteOutcome(ack, err, null);
-                pushed = true;
-            }
-            op.deinit(self.allocator);
-        }
-        if (pushed) {
-            self.notifyChanges();
-        }
+    /// The fence the transaction's change jobs carry. Without subscribers no
+    /// delta can follow, so outcomes publish as soon as the writer releases.
+    fn orderedFence(self: *const WriteWorker, fence: ?*OutcomeFence) ?*OutcomeFence {
+        const count = self.subscription_count orelse return null;
+        return if (count.load(.acquire) > 0) fence else null;
+    }
+
+    /// Reports one outcome that has no deltas to wait for.
+    fn reportOutcome(self: *WriteWorker, ack: WriteAck, err: anyerror) void {
+        const fence = self.createFence(true) orelse return;
+        fence.add(ack, err, null);
+        fence.release();
     }
 
     pub fn spawn(self: *WriteWorker) !void {
@@ -427,6 +404,7 @@ pub const WriteWorker = struct {
     fn flushPendingChanges(
         self: *WriteWorker,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
+        fence: ?*OutcomeFence,
     ) void {
         var changes_pushed = false;
         for (pending_changes.items) |raw_change| {
@@ -436,7 +414,8 @@ pub const WriteWorker = struct {
                 continue;
             }
             if (self.change_queue) |cq| {
-                cq.push(change, self.allocator);
+                if (fence) |f| f.retain();
+                cq.push(change, self.allocator, fence);
                 changes_pushed = true;
             } else {
                 change.deinit(self.allocator);
@@ -467,12 +446,14 @@ pub const WriteWorker = struct {
         };
     }
 
+    /// `fence`, when set, rides on every change the commit pushes.
     fn runTransaction(
         self: *WriteWorker,
         ops: []const WriteOp,
         tx_started: *bool,
         rejected: *std.ArrayListUnmanaged(Rejection),
         fail_fast: bool,
+        fence: ?*OutcomeFence,
     ) !void {
         var pending_changes = std.ArrayListUnmanaged(OwnedRecordChange).empty;
         defer {
@@ -517,7 +498,7 @@ pub const WriteWorker = struct {
 
         try self.runOps(&ctx, ops, fail_fast, rejected);
 
-        try commitBatchAndApply(self, tx_started, &pk_mutations, &pending_changes, &pending_cache_ops);
+        try commitBatchAndApply(self, tx_started, &pk_mutations, &pending_changes, &pending_cache_ops, fence);
     }
 
     fn runOps(
@@ -1022,15 +1003,21 @@ pub const WriteWorker = struct {
         var rejected = std.ArrayListUnmanaged(Rejection).empty;
         defer rejected.deinit(self.allocator);
 
+        const tracked = for (batch.items) |op| {
+            if (op.ack() != null) break true;
+        } else false;
+        const fence = self.createFence(tracked);
         var tx_started = false;
-        const result = runTransaction(self, batch.items, &tx_started, &rejected, false);
-        if (result) |_| {
-            self.pushBatchOutcomes(batch.items, rejected.items, null);
-        } else |err| {
-            const classified_err = errors.classifyError(err);
-            std.log.debug("Failed to execute batch, transaction rolled back: {}", .{classified_err});
-            self.pushBatchOutcomes(batch.items, null, classified_err);
+        const result = runTransaction(self, batch.items, &tx_started, &rejected, false, self.orderedFence(fence));
+        const batch_err: ?anyerror = if (result) |_| null else |err| errors.classifyError(err);
+        if (batch_err) |err| std.log.debug("Failed to execute batch, transaction rolled back: {}", .{err});
+        for (batch.items, 0..) |op, op_idx| {
+            if (fence) |f| if (op.ack()) |ack| {
+                f.add(ack, batch_err orelse rejectionFor(rejected.items, op_idx), null);
+            };
+            op.deinit(self.allocator);
         }
+        if (fence) |f| f.release();
         batch.clearRetainingCapacity();
         self.endOp(batch_len);
         last_batch_time.* = std.Io.Clock.real.now(self.io).toMilliseconds();
@@ -1050,9 +1037,7 @@ pub const WriteWorker = struct {
                     .checkpoint => |cop| cop.latch.reject(StorageError.EngineUnhealthy),
                     else => {},
                 }
-                if (op.ack()) |ack| {
-                    self.pushWriteOutcome(ack, StorageError.EngineUnhealthy, null);
-                }
+                if (op.ack()) |ack| self.reportOutcome(ack, StorageError.EngineUnhealthy);
                 op.deinit(self.allocator);
                 self.flush_wg.done(1);
             }
@@ -1147,10 +1132,7 @@ pub const WriteWorker = struct {
             .upsert, .update, .delete => blk: {
                 batch.append(self.allocator, op) catch |err| {
                     std.log.err("Failed to append to batch: {}", .{err});
-                    if (op.ack()) |ack| {
-                        self.pushWriteOutcome(ack, errors.classifyError(err), null);
-                        self.notifyChanges();
-                    }
+                    if (op.ack()) |ack| self.reportOutcome(ack, errors.classifyError(err));
                     op.deinit(self.allocator);
                     self.flush_wg.done(1);
                     break :blk .skipped;
@@ -1226,6 +1208,7 @@ pub const WriteWorker = struct {
         var final_err: ?anyerror = null;
         var rejected = std.ArrayListUnmanaged(Rejection).empty;
         defer rejected.deinit(self.allocator);
+        const fence = self.createFence(bop.ack != null);
         defer {
             if (tx_started) {
                 execTransactionControl(&self.conn, "ROLLBACK") catch |rollback_err| {
@@ -1238,10 +1221,10 @@ pub const WriteWorker = struct {
             for (entries) |entry| entry.deinit(self.allocator);
             self.allocator.free(entries);
 
-            if (bop.ack) |ack| {
+            if (fence) |f| {
                 const failed_batch_index: ?usize = if (rejected.items.len > 0) rejected.items[0].index else null;
-                self.pushWriteOutcome(ack, final_err, if (final_err != null) failed_batch_index else null);
-                self.notifyChanges();
+                f.add(bop.ack.?, final_err, if (final_err != null) failed_batch_index else null);
+                f.release();
             }
 
             self.flush_wg.done(1);
@@ -1250,7 +1233,7 @@ pub const WriteWorker = struct {
 
         // Execute all entries in a single transaction
         // The deferred block reports final_err to the client.
-        self.runTransaction(entries, &tx_started, &rejected, true) catch |err| { // zwanzig-disable-line: swallowed-error
+        self.runTransaction(entries, &tx_started, &rejected, true, self.orderedFence(fence)) catch |err| { // zwanzig-disable-line: swallowed-error
             final_err = err;
         };
     }
@@ -1261,6 +1244,7 @@ pub const WriteWorker = struct {
         pk_mutations: *std.ArrayListUnmanaged(PkMutation),
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
+        fence: ?*OutcomeFence,
     ) !void {
         const insert_counts = try self.allocator.alloc(u32, self.pk_sets.len);
         defer self.allocator.free(insert_counts);
@@ -1289,7 +1273,7 @@ pub const WriteWorker = struct {
             }
         }
 
-        flushPendingChanges(self, pending_changes);
+        flushPendingChanges(self, pending_changes, fence);
     }
 
     fn applyDocumentCache(self: *WriteWorker, pending_cache_ops: *std.ArrayListUnmanaged(CacheOp)) !void {

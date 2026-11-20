@@ -131,14 +131,10 @@ describe("React hooks E2E", () => {
 							});
 						});
 
-						await waitFor(
-							() => {
-								const last = renders[renders.length - 1];
-								expect(last?.listenTitle).toBe("hello");
-								expect(last?.titles).toContain("hello");
-							},
-							{ timeout: 10_000 },
-						);
+						// The write resolves after its deltas: no wait for a re-render.
+						const afterWrite = renders[renders.length - 1];
+						expect(afterWrite?.listenTitle).toBe("hello");
+						expect(afterWrite?.titles).toContain("hello");
 
 						reference = await client.store.subscribe("tasks", {}, () => {});
 						await waitFor(

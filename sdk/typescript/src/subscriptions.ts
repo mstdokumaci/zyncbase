@@ -127,6 +127,14 @@ export class SubscriptionTracker {
 	}
 
 	/**
+	 * Deliver pending deltas now instead of on the next tick. A resolved
+	 * write calls this so its deltas, which arrive first, are already visible.
+	 */
+	flushNow(): void {
+		this._flushPending();
+	}
+
+	/**
 	 * Apply all pending deltas (per subscription, in arrival order) and
 	 * invoke each subscription's callbacks once with the current snapshot.
 	 */

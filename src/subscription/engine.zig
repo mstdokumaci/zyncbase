@@ -171,6 +171,9 @@ pub const SubscriptionEngine = struct {
     tries_by_collection: std.AutoHashMapUnmanaged(CollectionKey, PredicateTrie) = .empty,
     /// (conn_id, sub_id) -> group_id
     active_subs: std.AutoHashMapUnmanaged(SubscriptionGroup.SubscriberKey, u64) = .empty,
+    /// `active_subs.count()`, readable without the lock. The writer skips
+    /// outcome fences while it is zero.
+    active_count: std.atomic.Value(usize) = .init(0),
     next_group_id: u64 = 1,
     mutex: std.Io.RwLock = .init,
 
@@ -318,6 +321,7 @@ pub const SubscriptionEngine = struct {
         }
 
         try self.active_subs.put(self.allocator, sub_key, group_id);
+        _ = self.active_count.fetchAdd(1, .release);
     }
 
     fn removeGroupFromCollectionIndex(self: *SubscriptionEngine, coll_key: CollectionKey, group_id: u64) void {
@@ -375,6 +379,7 @@ pub const SubscriptionEngine = struct {
 
     fn removeSubscriberLocked(self: *SubscriptionEngine, sub_key: SubscriptionGroup.SubscriberKey) void {
         const group_id = self.active_subs.fetchRemove(sub_key) orelse return;
+        _ = self.active_count.fetchSub(1, .release);
 
         var group = self.groups.getPtr(group_id.value) orelse unreachable;
         _ = group.subscribers.remove(sub_key);

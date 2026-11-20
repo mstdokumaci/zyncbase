@@ -552,6 +552,37 @@ describe("StoreImpl", () => {
 		]);
 	});
 
+	test("a resolved write has already delivered the deltas sent before it", async () => {
+		const { store, tracker, conn } = makeStore(
+			[{ type: "ok", id: 1, subId: 9, value: [] }],
+			await makeReadySchema(),
+		);
+		const snapshots: JsonValue[][] = [];
+		const handle = await store.subscribe("users", {}, (value) =>
+			snapshots.push(value),
+		);
+		// The server pushes the write's delta, then its WriteCommitted.
+		conn.dispatchWrite = async () => {
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 9,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", name: "Ada" },
+					},
+				],
+			});
+		};
+
+		await store.set("users.u1", { name: "Ada" });
+
+		expect(snapshots.at(-1)).toEqual([{ id: "u1", name: "Ada" }]);
+		expect(handle.getSnapshot()).toEqual([{ id: "u1", name: "Ada" }]);
+		await handle.unsubscribe();
+	});
+
 	test("a write that fails to build rejects and emits on error", async () => {
 		const { store, messages, errors } = makeStore();
 

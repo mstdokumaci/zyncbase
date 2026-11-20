@@ -650,6 +650,12 @@ The server answers every write with exactly one terminal message, correlated by 
 
 Store writes never receive an `ok` response. An empty batch commits nothing, so the server answers it with `WriteCommitted` immediately.
 
+### Ordering
+
+For every subscription registered before a write was sent, the connection receives the deltas the write's transaction produces before the transaction's outcomes. When a write's promise resolves, the issuing client's subscriptions already reflect it and their callbacks have fired.
+
+The server holds a transaction's outcomes until each subscription worker has finished the transaction's changes. While the server has no subscriptions, outcomes go out as soon as the transaction ends.
+
 ### Terminology
 
 - **committed** — the writer transaction containing the write committed, or the write was a no-op.
@@ -701,12 +707,16 @@ Write promises are scoped to the originating live connection. On disconnect, the
 - **Acknowledge writes on acceptance by default** — rejected; write-phase failures (constraint violations, precondition failures, post-read authorization, storage errors) would be invisible to the caller, and a resolved write would not guarantee that a following read sees it.
 - **A client-generated write id** — rejected; the request id already identifies the write, and the SDK never resends one.
 - **Report only writer failures** — rejected; without a success message the client cannot tell when a write has settled.
+- **Send outcomes independently of deltas** — rejected; a resolved write could precede its own deltas, so the writer's subscriptions would briefly show pre-write state.
+- **Sequence outcomes behind deltas on the event loop** — rejected; the event loop does not know which deltas a transaction produces, only the subscription workers do.
+- **A marker job per change-queue shard** — rejected; every transaction would cost one job per shard, including shards it never touched.
 - **No writer failure reporting** — rejected; ambiguous missing deltas cannot support user-facing save-failure feedback.
 - **Optimistic local writes** — rejected; requires rollback machinery, conflict handling, and speculative materialized-view logic that the subscription-first model avoids entirely.
 - **NACK messages as rollback commands** — rejected; there is no speculative local state to roll back.
 
 **Consequences**:
-- A resolved write is durable, and a read issued after it resolves observes it.
+- A resolved write is durable, a read issued after it resolves observes it, and the issuing client's subscriptions already show it.
+- With subscriptions active, write latency includes delta fan-out for the write's transaction.
 - Write latency includes the writer's batch window and commit.
 - Every write failure reaches the caller; un-awaited writes surface failures on `on('error')`.
 - The SDK never speculatively mutates local state; subscriptions are the single source of truth.
