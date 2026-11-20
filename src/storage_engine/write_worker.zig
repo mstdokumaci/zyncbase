@@ -565,9 +565,21 @@ pub const WriteWorker = struct {
                 return StorageError.InvalidOperation;
             },
         } catch |err| {
-            if (fail_fast) try rejected.append(self.allocator, .{ .index = op_idx, .err = err });
+            if (fail_fast) {
+                try rejected.append(self.allocator, .{ .index = op_idx, .err = err });
+                return err;
+            }
+            // A constraint failure undoes only its own statement and records no
+            // pending state, so the rest of the flush can still commit.
+            if (isStatementLocalFailure(err) and sqlite.c.sqlite3_get_autocommit(self.conn.db) == 0) {
+                return @as(?anyerror, err);
+            }
             return err;
         };
+    }
+
+    fn isStatementLocalFailure(err: anyerror) bool {
+        return err == StorageError.UniqueConstraintViolation or err == StorageError.ConstraintViolation;
     }
 
     /// Handles post-execute bookkeeping shared by all three write paths:

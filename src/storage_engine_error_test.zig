@@ -374,7 +374,7 @@ test "storage: update into another row's key fails and leaves both rows unchange
     try ctx.insertText("projects", id_b, 1, "slug", "second");
     try ctx.engine.flushPendingWrites();
 
-    // Update b into a's key → whole batch rolls back.
+    // Update b into a's key → the update fails and both rows keep their values.
     try sth.enqueueUpdate(&ctx.engine, ctx.tableIndex("projects"), id_b, 1, &.{
         .{ .index = try tbl.fieldIndex("slug"), .value = tth.valText("first") },
     }, null, null, null);
@@ -425,24 +425,36 @@ test "storage: multiple null constrained values succeed" {
     try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("members"), id_d, 1)) != null);
 }
 
-test "storage: failed atomic batch leaves no partial writes" {
+test "storage: unique violation in a coalesced flush fails only the colliding write" {
     const allocator = std.heap.smp_allocator;
     var ctx: sth.EngineTestContext = undefined;
-    try ctx.initWithOptions(allocator, "unique-atomic-batch", &.{uniqueProjectsTable()}, .{ .in_memory = true });
+    // A wide batch window keeps both writes in one flush transaction.
+    try ctx.initWithPerformance(allocator, "unique-coalesced-flush", &.{uniqueProjectsTable()}, .{ .batch_timeout = 200 }, .{ .in_memory = true });
     defer ctx.deinit();
 
+    const id_seed: typed_doc_id.DocId = 99;
     const id_ok: typed_doc_id.DocId = 1;
     const id_dup: typed_doc_id.DocId = 2;
 
-    // Both ops enter the same batch; the second violates uniqueness so the
-    // transaction must roll back both writes.
+    // The seed flush restarts the batch window right before the measured writes.
+    try ctx.insertText("projects", id_seed, 1, "slug", "seed");
+    try ctx.engine.flushPendingWrites();
+    _ = drainChangeCount(&ctx);
+
     try ctx.insertText("projects", id_ok, 1, "slug", "batch-ok");
     try ctx.insertText("projects", id_dup, 1, "slug", "batch-ok");
     try ctx.engine.flushPendingWrites();
 
-    try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_ok, 1)) == null);
+    {
+        const record = try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_ok, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record != null);
+    }
     try testing.expect((try sth.readDoc(allocator, &ctx.engine, ctx.tableIndex("projects"), id_dup, 1)) == null);
+    try testing.expectEqual(@as(usize, 1), drainChangeCount(&ctx));
+}
 
+fn drainChangeCount(ctx: *sth.EngineTestContext) usize {
     var change_count: usize = 0;
     for (ctx.test_context.change_queue.?.shards) |*shard| {
         while (shard.popTimed(0)) |job| {
@@ -451,5 +463,5 @@ test "storage: failed atomic batch leaves no partial writes" {
             change_count += 1;
         }
     }
-    try testing.expectEqual(@as(usize, 0), change_count);
+    return change_count;
 }

@@ -452,6 +452,22 @@ pub const EngineTestContext = struct {
         errdefer self.engine.deinit();
     }
 
+    pub fn initFromJsonWithPerformance(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, schema_json: []const u8, performance_config: config_state.Config.PerformanceConfig, options: StorageEngine.Options) !void {
+        const effective_options = schema_helpers.normalizeTestStorageOptions(options);
+        self.allocator = allocator;
+        self.test_context = try createTestContext(allocator, prefix, effective_options);
+        errdefer self.test_context.deinit();
+
+        try self.memory_strategy.init();
+        errdefer self.memory_strategy.deinit();
+
+        self.schema = try schema_parse.initFromJson(allocator, schema_json);
+        errdefer self.schema.deinit();
+
+        try schema_helpers.setupTestEngineWithJson(&self.engine, allocator, &self.memory_strategy, &self.test_context, &self.schema, schema_json, performance_config, effective_options);
+        errdefer self.engine.deinit();
+    }
+
     pub fn deinit(self: *EngineTestContext) void {
         self.deinitInternal(true);
     }
