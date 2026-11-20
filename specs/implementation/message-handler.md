@@ -98,8 +98,8 @@ Errors flow through four distinct paths depending on when they occur:
 
 1. Event loop enqueues the write operation with its `WriteAck` (`conn_id` and request `msg_id`) and sends no immediate response.
 2. Writer thread commits or rejects the transaction after durable ordering is known.
-3. Writer encodes `WriteCommitted` (success) or `WriteError` (failure) with the request `msg_id` as `id` and optional `batch_index`.
-4. Writer pushes owned encoded bytes to `SendQueue` and wakes the event loop.
+3. Writer encodes `WriteCommitted` (success) or `WriteError` (failure) with the request `msg_id` as `id` and optional `batch_index` into the transaction's `OutcomeFence`.
+4. Once the subscription workers have pushed the transaction's deltas, the last fence holder pushes the outcomes to `SendQueue` and wakes the event loop.
 5. The event loop drains `SendQueue` and delivers the encoded push to the origin connection via `Connection.send()`.
 
 ### Asynchronous Session Resolution Errors

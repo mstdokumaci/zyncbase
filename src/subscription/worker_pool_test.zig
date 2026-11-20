@@ -111,7 +111,7 @@ test "SubscriptionWorkerPool: matching change is processed and pushed to send_qu
         .old_record = null,
         .new_record = new_record,
     };
-    ctx.change_queue.push(change, allocator);
+    ctx.change_queue.push(change, allocator, null);
 
     // stop() shuts down the queue and joins the worker after its final drain.
     pool.stop();
@@ -171,7 +171,7 @@ test "SubscriptionWorkerPool: non-matching change does not push to send_queue" {
         .old_record = null,
         .new_record = new_record,
     };
-    ctx.change_queue.push(change, allocator);
+    ctx.change_queue.push(change, allocator, null);
 
     // stop() is the production drain acknowledgment for a non-notifying job.
     pool.stop();

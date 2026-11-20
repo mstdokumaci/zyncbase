@@ -24,7 +24,7 @@ test "ChangeQueue: computeShard determinism and range" {
         .old_record = null,
         .new_record = null,
     };
-    queue.push(change1, alloc);
+    queue.push(change1, alloc, null);
 
     // Verify item is in exactly one shard
     var found_shard: ?usize = null;
@@ -58,7 +58,7 @@ test "ChangeQueue: computeShard distribution across shards" {
             .old_record = null,
             .new_record = null,
         };
-        queue.push(change, alloc);
+        queue.push(change, alloc, null);
     }
 
     // Count which shards received items
@@ -97,7 +97,7 @@ test "ChangeQueue: push routes to correct shard" {
         .new_record = null,
     };
 
-    queue.push(change, alloc);
+    queue.push(change, alloc, null);
 
     // Pop from all shards and verify exactly one has the item with correct data
     var found = false;

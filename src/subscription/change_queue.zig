@@ -3,6 +3,7 @@ const std = @import("std");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const spmcBlockingQueue = @import("../queues/spmc_blocking_queue.zig").spmcBlockingQueue;
+const OutcomeFence = @import("../storage_engine/outcome_fence.zig").OutcomeFence;
 const RecordChange = @import("engine.zig").RecordChange;
 
 const Allocator = std.mem.Allocator;
@@ -27,9 +28,13 @@ pub const OwnedRecordChange = struct {
 pub const ChangeJob = struct {
     change: OwnedRecordChange,
     allocator: Allocator,
+    /// Outcomes of the change's transaction, held until its deltas are pushed.
+    fence: ?*OutcomeFence = null,
 
     pub fn deinit(self: *ChangeJob, _: std.mem.Allocator) void {
         self.change.deinit(self.allocator);
+        // Last: workers deinit a job only after pushing its deltas.
+        if (self.fence) |fence| fence.release();
     }
 };
 
@@ -51,15 +56,13 @@ pub const ChangeQueue = struct {
         };
     }
 
-    pub fn push(self: *ChangeQueue, change: OwnedRecordChange, writer_allocator: Allocator) void {
+    /// Takes ownership of `change` and of one `fence` reference.
+    pub fn push(self: *ChangeQueue, change: OwnedRecordChange, writer_allocator: Allocator, fence: ?*OutcomeFence) void {
         const shard = computeShard(change.namespace_id, change.table_index, change.doc_id, self.shards.len);
-        self.shards[shard].push(.{
-            .change = change,
-            .allocator = writer_allocator,
-        }) catch |err| {
+        var job = ChangeJob{ .change = change, .allocator = writer_allocator, .fence = fence };
+        self.shards[shard].push(job) catch |err| {
             std.log.err("ChangeQueue push failed (shard {d}): {}", .{ shard, err });
-            var mut = change;
-            mut.deinit(writer_allocator);
+            job.deinit(writer_allocator);
         };
     }
 
