@@ -242,6 +242,7 @@ export class ConnectionManager {
 	}
 
 	private teardownSocket(): void {
+		this.currentUserId = null;
 		if (this.ws) {
 			const ws = this.ws;
 			this.ws = null;
@@ -286,6 +287,7 @@ export class ConnectionManager {
 	async connect(): Promise<void> {
 		this.intentionalDisconnect = false;
 		this.pendingDisconnectError = null;
+		this.currentUserId = null;
 		this.stopLiveness();
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
@@ -548,6 +550,7 @@ export class ConnectionManager {
 
 	disconnect(): void {
 		this.intentionalDisconnect = true;
+		this.currentUserId = null;
 		this.stopLiveness();
 		if (this.reconnectTimer !== null) {
 			clearTimeout(this.reconnectTimer);
@@ -611,6 +614,7 @@ export class ConnectionManager {
 	}
 
 	private handleSocketClose(code: number, reason: string): void {
+		this.currentUserId = null;
 		this.stopLiveness();
 		const closeError = socketCloseError(code, reason);
 		const messageError = this.pendingDisconnectError;

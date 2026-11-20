@@ -226,7 +226,7 @@ const client = createClient({
 })
 ```
 
-**Switching namespaces**: `client.setPresenceNamespace(ns)` removes your user presence from the old namespace, clears the local user and shared state caches, resolves the new presence scope, and invalidates all active presence and shared-state subscriptions. The client must re-subscribe.
+**Switching namespaces**: `client.setPresenceNamespace(ns)` removes your user presence from the old namespace, clears the local user and shared state caches, resolves the new presence scope, and invalidates all active presence and shared-state subscriptions. The client must re-subscribe. When `users.namespaced = true`, the server rejects a switch to a different namespace with `NAMESPACE_SWITCH_REJECTED` and leaves the current scope unchanged. Open a new connection to use another namespace.
 
 ---
 

@@ -63,6 +63,49 @@ describe("ConnectionManager", () => {
 			expect(seen).toEqual([TEST_USER_ID]);
 		});
 
+		test("clears the user id on close and until the next scope ack", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			expect(manager.userId).toBe(TEST_USER_ID);
+
+			mockWs.triggerClose(1006, "gone");
+			expect(manager.userId).toBeNull();
+
+			const reconnected = manager.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			expect(manager.userId).toBeNull();
+
+			const storeAck = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			expect(storeAck.type).toBe(WireMessageType.StoreSetNamespace);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: storeAck.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 0));
+			expect(manager.userId).toBe(TEST_USER_ID);
+
+			const presenceAck = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			expect(presenceAck.type).toBe(WireMessageType.PresenceSetNamespace);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: presenceAck.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await reconnected;
+		});
+
 		test("rejects a presence namespace response without a binary user id", async () => {
 			const { manager, mockWs } = makeManager();
 			const connected = manager.connect();
@@ -637,6 +680,15 @@ describe("ConnectionManager", () => {
 			manager.disconnect();
 
 			expect(events).toContain("disconnected");
+		});
+
+		test("clears the user id", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			manager.disconnect();
+
+			expect(manager.userId).toBeNull();
 		});
 	});
 
