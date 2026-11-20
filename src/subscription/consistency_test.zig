@@ -4,6 +4,7 @@ const query_ast = @import("../query/ast.zig");
 const qth = @import("../query/test_helpers.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
 const tth = @import("../typed/test_helpers.zig");
 const typed = @import("../typed/types.zig");
 const sub_eng = @import("engine.zig");
@@ -128,12 +129,18 @@ test "Subscription Consistency: delta matching agrees with SQL snapshots on NULL
         const snapshot = try sth.queryDocs(allocator, &ctx.engine, items.index, 1, &filter);
         defer snapshot.deinit(allocator);
 
+        var snapshot_ids = std.AutoHashMap(typed_doc_id.DocId, void).init(allocator);
+        defer snapshot_ids.deinit();
+        for (snapshot.records) |record| {
+            const id = sth.getFieldDocIdOrNull(record, items, "id") orelse return error.TestExpectedValue;
+            try snapshot_ids.put(id, {});
+        }
+
         var sub_engine = SubscriptionEngine.init(testing.io, allocator);
         defer sub_engine.deinit();
         try sub_engine.subscribe(1, items.index, filter, 42, sub_id);
 
         // A row the snapshot excludes must not produce a delta, and vice versa.
-        var delta_matches: usize = 0;
         for (stored) |record| {
             const matches = try sub_engine.handleRecordChange(.{
                 .namespace_id = 1,
@@ -143,11 +150,12 @@ test "Subscription Consistency: delta matching agrees with SQL snapshots on NULL
                 .old_record = null,
             }, allocator);
             defer allocator.free(matches);
-            if (matches.len > 0) delta_matches += 1;
+            const id = sth.getFieldDocIdOrNull(record, items, "id") orelse return error.TestExpectedValue;
+            const in_snapshot = snapshot_ids.contains(id);
+            testing.expectEqual(in_snapshot, matches.len > 0) catch |err| {
+                std.debug.print("operator {s}: record {d} in SQL snapshot: {}, deltas matched: {d}\n", .{ @tagName(op), id, in_snapshot, matches.len });
+                return err;
+            };
         }
-        testing.expectEqual(snapshot.records.len, delta_matches) catch |err| {
-            std.debug.print("operator {s}: SQL matched {d} rows, deltas matched {d}\n", .{ @tagName(op), snapshot.records.len, delta_matches });
-            return err;
-        };
     }
 }

@@ -58,7 +58,7 @@ The query engine converts SDK query requests into a typed AST, validates them ag
 
 SQL lowering (`filter_sql.zig`) and in-memory evaluation (`eval.zig`) implement the same rules, so a subscription snapshot and its deltas select the same rows.
 
-- **NULL fields.** A field that is NULL (or absent from the record) matches only `isNull`. Every other operator, `ne` and `notIn` included, evaluates to false — SQL's three-valued comparison, where `NULL != x` is not true.
+- **NULL fields.** A field that is NULL (or absent from the record) matches only `isNull`. Every other operator, `ne` and non-empty `notIn` included, evaluates to false — SQL's three-valued comparison, where `NULL != x` is not true. An empty `notIn` list is the exception: normalization removes `notIn([])` as trivially true, so the resulting filter includes rows with NULL fields.
 - **NULL operands.** The parser rejects a `null` operand (`NullOperandUnsupported`); `isNull` / `isNotNull` are the only way to test for NULL.
 
 ## Invariants
