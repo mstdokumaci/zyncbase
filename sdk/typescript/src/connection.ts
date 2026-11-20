@@ -139,6 +139,7 @@ export class ConnectionManager {
 	private currentStatus: ConnectionStatus = "disconnected";
 
 	private storeNamespace: string;
+	private currentStoreUserId: string | null = null;
 	private presenceNamespace: string;
 
 	private processingPromise: Promise<void> = Promise.resolve();
@@ -172,6 +173,11 @@ export class ConnectionManager {
 		return this.storeNamespace;
 	}
 
+	/** Internal `users.id` of the session in the store namespace; null before the first scope. */
+	get storeUserId(): string | null {
+		return this.currentStoreUserId;
+	}
+
 	/** Current connection status. */
 	get status(): ConnectionStatus {
 		return this.currentStatus;
@@ -183,7 +189,14 @@ export class ConnectionManager {
 	}
 
 	async setStoreNamespace(ns: string): Promise<void> {
-		await this.dispatch({ type: "StoreSetNamespace", namespace: ns });
+		const ok = await this.dispatch({
+			type: "StoreSetNamespace",
+			namespace: ns,
+		});
+		if (!(ok.userId instanceof Uint8Array)) {
+			throw new Error("StoreSetNamespace response missing binary userId");
+		}
+		this.currentStoreUserId = this.schemaDictionary.decodeUserId(ok.userId);
 		this.storeNamespace = ns;
 	}
 
@@ -203,7 +216,7 @@ export class ConnectionManager {
 		if (!(ok.userId instanceof Uint8Array)) {
 			throw new Error("PresenceSetNamespace response missing binary userId");
 		}
-		const userId = this.schemaDictionary.decodePresenceUserId(ok.userId);
+		const userId = this.schemaDictionary.decodeUserId(ok.userId);
 		this.presenceNamespace = ns;
 		this.presenceUserIdHandler?.(userId);
 	}

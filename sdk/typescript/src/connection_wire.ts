@@ -757,7 +757,7 @@ export class ConnectionWireCodec {
 			return {
 				type: "ActionForward",
 				execId: raw[1],
-				userId: this.schema.decodePresenceUserId(raw[2]),
+				userId: this.schema.decodeUserId(raw[2]),
 				action_id: raw[3],
 				params: raw[4] as SparseFieldArray,
 				claims: raw[5] as Record<string, JsonValue>,

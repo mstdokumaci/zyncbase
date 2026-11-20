@@ -260,7 +260,7 @@ describe("PresenceImpl", () => {
 		presence.subscribe(() => {});
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
-		const userId = conn.schema.decodePresenceUserId(packDocId("user_1"));
+		const userId = conn.schema.decodeUserId(packDocId("user_1"));
 		const entry = presence.get(userId);
 		expect(entry).toBeDefined();
 		expect(entry?.data.status).toBe("active");
@@ -270,9 +270,7 @@ describe("PresenceImpl", () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
 		const presence = new PresenceImpl(conn);
-		presence.setLocalUserId(
-			conn.schema.decodePresenceUserId(packDocId("user_1")),
-		);
+		presence.setLocalUserId(conn.schema.decodeUserId(packDocId("user_1")));
 
 		conn.dispatch = (msg: Record<string, unknown>) => {
 			if (msg.type === "PresenceSubscribe") {
@@ -339,7 +337,7 @@ describe("PresenceImpl", () => {
 		} as PresenceBroadcast);
 
 		expect(callbackCount).toBe(2);
-		const userId = conn.schema.decodePresenceUserId(packDocId("user_2"));
+		const userId = conn.schema.decodeUserId(packDocId("user_2"));
 		const entry = presence.get(userId);
 		expect(entry?.data).toEqual({ cursor: { x: 50, y: 75 } });
 	});
@@ -388,8 +386,8 @@ describe("PresenceImpl", () => {
 			],
 		} as PresenceBroadcast);
 
-		const removedId = conn.schema.decodePresenceUserId(packDocId("user_3"));
-		const retainedId = conn.schema.decodePresenceUserId(packDocId("user_4"));
+		const removedId = conn.schema.decodeUserId(packDocId("user_3"));
+		const retainedId = conn.schema.decodeUserId(packDocId("user_4"));
 		expect(presence.get(removedId)).toBeUndefined();
 		expect(presence.get(retainedId)?.data.status).toBe("active");
 		expect(presence.getAll().map((entry) => entry.userId)).toEqual([
@@ -449,7 +447,7 @@ describe("PresenceImpl", () => {
 			],
 		} as PresenceBroadcast);
 
-		const unknownId = conn.schema.decodePresenceUserId(packDocId("user_5"));
+		const unknownId = conn.schema.decodeUserId(packDocId("user_5"));
 		const entry = presence.get(unknownId);
 		expect(entry).toBeDefined();
 		expect(entry?.joinedAt).toBe(0);
@@ -675,9 +673,9 @@ describe("PresenceImpl", () => {
 
 		// Cache should NOT have stale data — still has the new namespace data
 		expect(presence.getAll().length).toBe(1);
-		const newUserId = conn.schema.decodePresenceUserId(packDocId("user_2"));
+		const newUserId = conn.schema.decodeUserId(packDocId("user_2"));
 		expect(presence.get(newUserId)).toBeDefined();
-		const staleUserId = conn.schema.decodePresenceUserId(packDocId("user_1"));
+		const staleUserId = conn.schema.decodeUserId(packDocId("user_1"));
 		expect(presence.get(staleUserId)).toBeUndefined();
 	});
 
@@ -827,7 +825,7 @@ describe("PresenceImpl", () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
 		const presence = new PresenceImpl(conn);
-		const selfId = conn.schema.decodePresenceUserId(packDocId("user_self"));
+		const selfId = conn.schema.decodeUserId(packDocId("user_self"));
 		presence.setLocalUserId(selfId);
 
 		conn.dispatch = (msg: Record<string, unknown>) => {
@@ -861,7 +859,7 @@ describe("PresenceImpl", () => {
 
 		expect(snapshots.length).toBe(1);
 		expect(snapshots[0].map((u) => u.userId)).toEqual([
-			conn.schema.decodePresenceUserId(packDocId("user_other")),
+			conn.schema.decodeUserId(packDocId("user_other")),
 		]);
 
 		// Self-only broadcast updates the cache but does not fire the callback
@@ -898,7 +896,7 @@ describe("PresenceImpl", () => {
 		} as PresenceBroadcast);
 		expect(snapshots.length).toBe(2);
 		expect(snapshots[1].map((u) => u.userId)).toEqual([
-			conn.schema.decodePresenceUserId(packDocId("user_other")),
+			conn.schema.decodeUserId(packDocId("user_other")),
 		]);
 		expect(snapshots[1][0].data.status).toBe("idle");
 	});
@@ -1013,12 +1011,12 @@ describe("SchemaDictionary presence encode/decode", () => {
 		);
 	});
 
-	test("decodePresenceUserId converts bin16 to UUID string", async () => {
+	test("decodeUserId converts bin16 to UUID string", async () => {
 		const schema = new SchemaDictionary();
 		await setupSchema(schema);
 
 		const bin = packDocId("019c1e50-7d11-7abc-9def-0123456789ab");
-		const uuid = schema.decodePresenceUserId(bin);
+		const uuid = schema.decodeUserId(bin);
 
 		expect(uuid).toBe("019c1e50-7d11-7abc-9def-0123456789ab");
 	});

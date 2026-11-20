@@ -552,6 +552,64 @@ describe("StoreImpl", () => {
 		]);
 	});
 
+	test("a delta that precedes its subscribe ack is applied after the snapshot", async () => {
+		const { store, tracker, conn } = makeStore([], await makeReadySchema());
+		// The server registered subId 7 and pushed a delta before the ack, whose
+		// snapshot was read before that commit.
+		conn.dispatch = async () => {
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 7,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", name: "Ada" },
+					},
+				],
+			});
+			return { type: "ok", id: 1, subId: 7, value: [] };
+		};
+
+		const handle = await store.subscribe("users", {}, () => {});
+		await flushTimers();
+
+		expect(handle.getSnapshot()).toEqual([{ id: "u1", name: "Ada" }]);
+		await handle.unsubscribe();
+	});
+
+	test("an early delta no subscribe claims is discarded once acks settle", async () => {
+		const { store, tracker, conn } = makeStore([], await makeReadySchema());
+		const acks = [
+			{ type: "ok" as const, id: 1, subId: 7, value: [] },
+			{ type: "ok" as const, id: 2, subId: 8, value: [] },
+		];
+		conn.dispatch = async (msg) => {
+			if (msg.type === "StoreSubscribe" && acks.length === 2) {
+				tracker.dispatch({
+					type: "StoreDelta",
+					subId: 8,
+					ops: [
+						{
+							op: "set",
+							path: ["users", "u1"],
+							value: { id: "u1", name: "Old" },
+						},
+					],
+				});
+			}
+			return acks.shift() ?? { type: "ok", id: 3 };
+		};
+
+		const first = await store.subscribe("users", {}, () => {});
+		const second = await store.subscribe("users", { limit: 5 }, () => {});
+		await flushTimers();
+
+		expect(second.getSnapshot()).toEqual([]);
+		await first.unsubscribe();
+		await second.unsubscribe();
+	});
+
 	test("a resolved write has already delivered the deltas sent before it", async () => {
 		const { store, tracker, conn } = makeStore(
 			[{ type: "ok", id: 1, subId: 9, value: [] }],

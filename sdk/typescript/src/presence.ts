@@ -490,9 +490,7 @@ export class PresenceImpl implements Presence {
 	}
 
 	private applyBroadcastEntry(entry: PresenceBroadcastEntry): boolean {
-		const userId = this.conn.schemaDictionary.decodePresenceUserId(
-			entry.userId,
-		);
+		const userId = this.conn.schemaDictionary.decodeUserId(entry.userId);
 
 		if (entry.event === "leave") {
 			this.removeUserEntry(userId);
@@ -555,9 +553,7 @@ export class PresenceImpl implements Presence {
 		if (!Array.isArray(ok.users)) return;
 
 		for (const user of ok.users) {
-			const userId = this.conn.schemaDictionary.decodePresenceUserId(
-				user.userId,
-			);
+			const userId = this.conn.schemaDictionary.decodeUserId(user.userId);
 			this.setUserEntry({
 				userId,
 				data: user.data as Record<string, unknown>,

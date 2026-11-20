@@ -121,13 +121,7 @@ export class AutoMockWebSocket {
 	}
 
 	private _autoRespondOk(id: number): void {
-		const buf = encodeToBuffer({
-			type: "ok",
-			id,
-			...(id === 2
-				? { userId: packDocId("019c1e50-7d11-7000-8000-000000000001") }
-				: {}),
-		});
+		const buf = encodeToBuffer({ type: "ok", id, userId: testUserId() });
 		if (this.onmessage) {
 			this.onmessage({ data: buf });
 		}
@@ -236,15 +230,20 @@ export function makeManager(options?: Partial<ClientOptions>): {
 	return { manager, mockWs };
 }
 
+/** The internal user id every mocked namespace ack carries. */
+export const TEST_USER_ID = "019c1e50-7d11-7000-8000-000000000001";
+
+function testUserId(): Uint8Array {
+	return packDocId(TEST_USER_ID);
+}
+
 /** Trigger ok responses for initial StoreSetNamespace (id=1) and PresenceSetNamespace (id=2). */
 export function triggerNamespaceOk(mockWs: MockWebSocket) {
-	mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
 	mockWs.triggerMessage(
-		encodeToBuffer({
-			type: "ok",
-			id: 2,
-			userId: packDocId("019c1e50-7d11-7000-8000-000000000001"),
-		}),
+		encodeToBuffer({ type: "ok", id: 1, userId: testUserId() }),
+	);
+	mockWs.triggerMessage(
+		encodeToBuffer({ type: "ok", id: 2, userId: testUserId() }),
 	);
 }
 

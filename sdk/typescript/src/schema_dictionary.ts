@@ -757,7 +757,7 @@ export class SchemaDictionary {
 	/**
 	 * Decode a bin16 userId (Uint8Array) to a UUID string.
 	 */
-	decodePresenceUserId(bin: Uint8Array): string {
+	decodeUserId(bin: Uint8Array): string {
 		if (bin.length !== 16) {
 			throw new Error(
 				`SchemaDictionary: invalid userId binary length ${bin.length}`,

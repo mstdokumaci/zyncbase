@@ -38,7 +38,7 @@ Before ordinary request rate limiting or arena acquisition, `MessageHandler` att
 
 ## Request Lifecycle
 
-1. Apply ordinary per-connection message rate limiting from `Config.SecurityConfig` to non-Ping messages.
+1. Apply ordinary per-connection message rate limiting from `Config.SecurityConfig` to non-Ping messages. A rejected message gets `RATE_LIMITED` with `retryAfter`, correlated with the message's `id` when its envelope parses; it is never routed, and an unparseable envelope gets an uncorrelated error.
 2. Decode `wire.Envelope` from the raw MessagePack frame.
 3. Acquire a request arena from `MemoryStrategy`.
 4. Convert the envelope `type` ID to `MessageType` via `std.enums.fromInt`; unknown or server-only IDs return `error.UnknownMessageType` → `INVALID_MESSAGE_TYPE`.

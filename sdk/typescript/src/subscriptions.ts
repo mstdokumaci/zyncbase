@@ -41,6 +41,10 @@ export class SubscriptionTracker {
 	private readonly subscriptions = new Map<number, SubscriptionEntry>();
 	private readonly deltaQueue: StoreDelta[] = [];
 	private pendingDeltas: StoreDelta[] = [];
+	/** Subscribes awaiting their ack; their subIds are not known yet. */
+	private establishing = 0;
+	/** Deltas for unknown subIds that arrived while a subscribe was in flight. */
+	private earlyDeltas: StoreDelta[] = [];
 	private flushScheduled = false;
 	private connected = true;
 	private debug = false;
@@ -105,12 +109,43 @@ export class SubscriptionTracker {
 			return;
 		}
 		const entry = this.subscriptions.get(delta.subId);
+		if (!entry && this.establishing > 0) {
+			// The server registers a subscription before acking it, so its
+			// first deltas can precede the ack that reveals the subId.
+			this.earlyDeltas.push(delta);
+			return;
+		}
 		if (entry?.materializedView) {
 			this.pendingDeltas.push(delta);
 			this.scheduleFlush();
 			return;
 		}
 		this._dispatchDelta(delta);
+	}
+
+	/** A subscribe is in flight; hold deltas for subIds not registered yet. */
+	beginEstablish(): void {
+		this.establishing++;
+	}
+
+	/** A subscribe settled; with none left in flight, unclaimed deltas are stale. */
+	endEstablish(): void {
+		this.establishing--;
+		if (this.establishing === 0) this.earlyDeltas = [];
+	}
+
+	/**
+	 * Apply the deltas `subId` received before its ack, in arrival order,
+	 * after its initial snapshot. Deltas carry whole records, so replaying one
+	 * the snapshot already contains converges.
+	 */
+	replayEarlyDeltas(subId: number): void {
+		const early = this.earlyDeltas.filter((delta) => delta.subId === subId);
+		if (early.length === 0) return;
+		this.earlyDeltas = this.earlyDeltas.filter(
+			(delta) => delta.subId !== subId,
+		);
+		for (const delta of early) this.dispatch(delta);
 	}
 
 	/**

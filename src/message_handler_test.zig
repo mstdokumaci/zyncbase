@@ -127,6 +127,48 @@ test "MessageHandler: Ping bypasses ordinary limit and uses its dedicated limit"
     try testing.expectEqualStrings("RATE_LIMITED", limited.code.?);
 }
 
+test "MessageHandler: rate-limited request is answered with its id" {
+    const allocator = std.heap.smp_allocator;
+    var app: AppTestContext = undefined;
+    try app.init(allocator, "mh-rate-limit-id", &.{});
+    defer app.deinit();
+
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+
+    app.handler.security_config.max_messages_per_second = 1;
+    sc.conn.request_tokens = 0;
+    sc.conn.last_request_time = std.Io.Clock.real.now(std.testing.io).toMicroseconds();
+
+    var captured: [256]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&captured);
+    sc.conn.ws.test_send_observer = helpers.sendRecorderObserver;
+    sc.conn.ws.test_send_observer_ctx = &recorder;
+
+    var request = msgpack.Payload.mapPayload(allocator);
+    defer request.free(allocator);
+    try request.mapPut("type", msgpack.Payload.uintToPayload(@intFromEnum(MessageType.store_query)));
+    try request.mapPut("id", msgpack.Payload.uintToPayload(42));
+    const bytes = try helpers.encodePayloadToBytes(allocator, request);
+    defer allocator.free(bytes);
+
+    try app.handler.handleMessage(sc.conn, bytes);
+    try expectErrorCode(allocator, recorder.bytes(), "RATE_LIMITED");
+    const limited = try decodeResponse(allocator, recorder.bytes());
+    defer limited.free(allocator);
+    const id = (try msgpack_helpers.getMapValue(limited, "id")) orelse return error.TestExpectedError;
+    try testing.expectEqual(@as(u64, 42), id.uint);
+
+    // An envelope that does not parse has no id to echo.
+    recorder.reset();
+    var malformed = [_]u8{0x81};
+    try app.handler.handleMessage(sc.conn, &malformed);
+    try expectErrorCode(allocator, recorder.bytes(), "RATE_LIMITED");
+    const uncorrelated = try decodeResponse(allocator, recorder.bytes());
+    defer uncorrelated.free(allocator);
+    try testing.expect((try msgpack_helpers.getMapValue(uncorrelated, "id")) == null);
+}
+
 test "MessageHandler: store operations require ready scope" {
     const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
@@ -382,7 +424,7 @@ fn createPresenceSetNamespaceMessageBytes(allocator: std.mem.Allocator, id: u64,
     return buf.toOwnedSlice();
 }
 
-fn expectPresenceScopeSuccess(response: []const u8, msg_id: u64, user_doc_id: typed_doc_id.DocId) !void {
+fn expectScopeSuccess(response: []const u8, msg_id: u64, user_doc_id: typed_doc_id.DocId) !void {
     const allocator = std.testing.allocator;
     var reader: std.Io.Reader = .fixed(response);
     const parsed = try msgpack.decode(allocator, &reader);
@@ -398,7 +440,7 @@ fn expectPresenceScopeSuccess(response: []const u8, msg_id: u64, user_doc_id: ty
     try testing.expectEqualSlices(u8, &expected, user_id.bin.value());
 }
 
-test "Namespace success: cached and asynchronous presence responses return the internal user id" {
+test "Namespace success: cached and asynchronous scope responses return the internal user id" {
     const allocator = std.testing.allocator;
     var app: AppTestContext = undefined;
     try app.initWithSchemaJSON(allocator, "ns-presence-identity",
@@ -419,7 +461,7 @@ test "Namespace success: cached and asynchronous presence responses return the i
         defer allocator.free(msg);
         const response = try routeWithArena(&app.handler, allocator, sc.conn, msg);
         defer allocator.free(response);
-        try expectPresenceScopeSuccess(response, 1, cached_scope.user_doc_id);
+        try expectScopeSuccess(response, 1, cached_scope.user_doc_id);
     }
 
     {
@@ -431,7 +473,7 @@ test "Namespace success: cached and asynchronous presence responses return the i
         const entry = app.test_context.send_queue.?.pop() orelse return error.MissingAsyncResponse;
         defer entry.deinit();
         try testing.expectEqual(sc.conn.id, entry.conn_id);
-        try expectPresenceScopeSuccess(entry.data, 2, sc.conn.user_doc_id);
+        try expectScopeSuccess(entry.data, 2, sc.conn.user_doc_id);
     }
 
     {
@@ -442,10 +484,16 @@ test "Namespace success: cached and asynchronous presence responses return the i
 
         const entry = app.test_context.send_queue.?.pop() orelse return error.MissingAsyncResponse;
         defer entry.deinit();
-        var reader: std.Io.Reader = .fixed(entry.data);
-        const parsed = try msgpack.decode(allocator, &reader);
-        defer parsed.free(allocator);
-        try testing.expect((try parsed.mapGet("userId")) == null);
+        try testing.expectEqual(sc.conn.id, entry.conn_id);
+        try expectScopeSuccess(entry.data, 3, sc.conn.user_doc_id);
+    }
+
+    {
+        const msg = try createStoreSetNamespaceMessageBytes(allocator, 4, "public");
+        defer allocator.free(msg);
+        const response = try routeWithArena(&app.handler, allocator, sc.conn, msg);
+        defer allocator.free(response);
+        try expectScopeSuccess(response, 4, cached_scope.user_doc_id);
     }
 }
 

@@ -9,6 +9,7 @@ import {
 	installMockWs,
 	MockWebSocket,
 	restoreFetch,
+	TEST_USER_ID,
 	triggerNamespaceOk,
 	triggerSchemaSync,
 } from "./test-helpers";
@@ -128,7 +129,13 @@ describe("ZyncBaseClient", () => {
 		const first = decode(ws.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
 		};
-		ws.triggerMessage(encodeToBuffer({ type: "ok", id: first.id }));
+		ws.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: first.id,
+				userId: packDocId(TEST_USER_ID),
+			}),
+		);
 		await new Promise((r) => setTimeout(r, 0));
 		const second = decode(ws.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
@@ -339,7 +346,13 @@ describe("ZyncBaseClient", () => {
 		const namespace = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
 		};
-		mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: namespace.id }));
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: namespace.id,
+				userId: packDocId(TEST_USER_ID),
+			}),
+		);
 		await new Promise((r) => setTimeout(r, 0));
 
 		const replay = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
@@ -467,7 +480,13 @@ describe("ZyncBaseClient", () => {
 		const namespace = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
 		};
-		mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: namespace.id }));
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: namespace.id,
+				userId: packDocId(TEST_USER_ID),
+			}),
+		);
 		await switching;
 
 		// The switch restored the store scope without re-subscribing presence.

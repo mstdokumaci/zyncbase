@@ -182,7 +182,8 @@ pub fn encodeSuccess(msgpack_allocator: Allocator, msg_id: u64) ![]const u8 {
     return output.toOwnedSlice();
 }
 
-pub fn encodePresenceScopeSuccess(
+/// `ok` for a resolved store or presence scope, carrying the internal `users.id`.
+pub fn encodeScopeSuccess(
     msgpack_allocator: Allocator,
     msg_id: u64,
     user_id: typed_doc_id.DocId,
