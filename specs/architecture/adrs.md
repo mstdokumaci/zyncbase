@@ -652,9 +652,11 @@ Store writes never receive an `ok` response. An empty batch commits nothing, so 
 
 ### Ordering
 
-Deltas are ordered before outcomes for every subscription the server registered before processing the write. The client-side guarantee is narrower: it covers only subscriptions whose subscribe response had already arrived before the write was sent. A subscription whose response is still in flight is outside that guarantee — the client cannot route deltas until it learns the `subId`, so a concurrent write does not guarantee updated contents for that subscription. For a covered write, when its promise resolves, the issuing client's subscriptions already reflect it and their callbacks have fired.
+Deltas are ordered before outcomes for subscriptions registered before the writer checks the active subscription count for that write. Subscriptions registered after that check are not guaranteed to receive the write's deltas before its outcome. The client-side guarantee is narrower: it covers only subscriptions whose subscribe response had already arrived before the write was sent. A subscription whose response is still in flight is outside that guarantee — the client cannot route deltas until it learns the `subId`, so a concurrent write does not guarantee updated contents for that subscription.
 
-The server holds a transaction's outcomes until each subscription worker has finished the transaction's changes. While the server has no subscriptions, outcomes go out as soon as the transaction ends.
+For a covered write while the subscription tracker is synced, when its promise resolves, every delta the write produced has been applied to the issuing client's subscriptions and any callbacks they triggered have fired. A write that produces no delta, such as a same-value write, fires no callback. While the tracker is disconnected, the write may resolve before its queued deltas are applied; `reconnect()` drains and applies them.
+
+The server holds a transaction's outcomes until each subscription worker has finished the transaction's changes. When the writer's active-subscription check saw zero subscriptions, outcomes go out as soon as the transaction ends.
 
 ### Terminology
 
