@@ -683,6 +683,8 @@ Both use `ZyncBaseError` with a `details.phase: 'accept' | 'write'` discriminant
 
 Failed batch operations include `batchIndex` when the failing operation is identifiable. For transaction-level failures where no single operation is culpable, `batchIndex` is omitted.
 
+Outside an explicit batch, the writer groups queued writes into opportunistic flush transactions. In a flush, guard, precondition, and constraint rejections fail only their own write; storage-level failures (I/O, disk full, allocation, commit) fail every write in the flush.
+
 Subscription observation is transaction-endpoint based. Explicit batches and opportunistic writer flush transactions may coalesce repeated changes to one record into one final delta without changing per-operation confirmation outcomes. Subscriptions are state replication, not a mutation event log.
 
 ### Authorization Semantics for Creates
@@ -861,7 +863,7 @@ Every generated index begins with `namespace_id`: equal values may coexist acros
 
 ### Write Behavior
 
-The upsert conflict target remains `ON CONFLICT("id")`; a conflict on a user unique index therefore aborts the write instead of updating another row. The containing batch transaction rolls back normally, preserving all-or-nothing semantics. Because default `confirm: "accepted"` writes only confirm queue admission, applications that branch on duplicates must use `confirm: "committed"`; confirmed failures surface as public code `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Constraint names are not part of the wire contract.
+The upsert conflict target remains `ON CONFLICT("id")`; a conflict on a user unique index therefore aborts the write instead of updating another row. An explicit batch rolls back as a whole, preserving all-or-nothing semantics; in a coalesced writer flush only the colliding write fails and the other writes commit. Because default `confirm: "accepted"` writes only confirm queue admission, applications that branch on duplicates must use `confirm: "committed"`; confirmed failures surface as public code `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Constraint names are not part of the wire contract.
 
 ### Migration Behavior
 

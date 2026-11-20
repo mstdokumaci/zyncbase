@@ -3,12 +3,14 @@ const std = @import("std");
 const app_test_helpers = @import("app_test_helpers.zig");
 const send_queue_mod = @import("connection/send_queue.zig");
 const fail_alloc = @import("failing_allocator_test_helper.zig");
+const msgpack = @import("msgpack_utils.zig");
 const query_ast = @import("query/ast.zig");
 const query_parser = @import("query/parser.zig");
 const qth = @import("query/test_helpers.zig");
 const schema_parse = @import("schema/parse.zig");
 const schema_system = @import("schema/system.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
+const schema_types = @import("schema/types.zig");
 const storage_mod = @import("storage_engine.zig");
 const cache_mod = @import("storage_engine/cache.zig");
 const sth = @import("storage_engine_test_helpers.zig");
@@ -977,6 +979,185 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
         }
     }
     try testing.expectEqual(@as(usize, 1), change_count);
+}
+
+// static fixture slices must outlive buildRuntimeTable's clone.
+const unique_slug_fields = [_]sth.Field{schema_helpers.makeField("slug", .text)};
+const unique_slug_constraints = [_]schema_types.UniqueConstraint{.{ .field_indexes = &.{0} }};
+
+fn uniqueSlugTable() sth.Table {
+    var table = schema_helpers.makeTable("projects", &unique_slug_fields);
+    table.unique_constraints = &unique_slug_constraints;
+    return table;
+}
+
+fn drainChangeCount(ctx: *sth.EngineTestContext) usize {
+    var change_count: usize = 0;
+    for (ctx.test_context.change_queue.?.shards) |*shard| {
+        while (shard.popTimed(0)) |job| {
+            var owned = job;
+            owned.deinit(ctx.engine.allocator);
+            change_count += 1;
+        }
+    }
+    return change_count;
+}
+
+fn expectDocPresence(ctx: *sth.EngineTestContext, table_index: usize, id: typed_doc_id.DocId, namespace_id: i64, expected: bool) !void {
+    const record = try sth.readDoc(ctx.allocator, &ctx.engine, table_index, id, namespace_id);
+    defer if (record) |r| r.deinit(ctx.allocator);
+    try testing.expectEqual(expected, record != null);
+}
+
+/// Assert one outcome per connection; `failed_conn` carries `failed_code`, every other is committed.
+fn expectFlushOutcomes(ctx: *sth.EngineTestContext, expected_count: usize, failed_conn: u64, failed_code: []const u8) !void {
+    const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (entries) |e| e.deinit();
+        std.heap.smp_allocator.free(entries);
+    }
+    try testing.expectEqual(expected_count, entries.len);
+    for (entries) |e| {
+        const is_error = std.mem.indexOf(u8, e.data, &typeMarker(.write_error)) != null;
+        try testing.expectEqual(e.conn_id == failed_conn, is_error);
+        if (is_error) try testing.expect(std.mem.indexOf(u8, e.data, failed_code) != null);
+    }
+}
+
+test "StorageEngine: unique violation in a flush fails only its own write" {
+    const allocator = std.heap.smp_allocator;
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.init(allocator, "unique-flush-isolation", uniqueSlugTable());
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("projects");
+    const slug_idx = table_meta.fieldIndex("slug").?;
+    const ns: i64 = 1;
+
+    const slug_seed = [_]sth.ColumnValue{.{ .index = slug_idx, .value = tth.valText("seed") }};
+    try sth.flushUpsertsNow(&ctx.engine, ns, &.{
+        .{ .table_index = table_meta.index, .id = 99, .columns = &slug_seed },
+    });
+    _ = drainChangeCount(&ctx);
+
+    const slug_a = [_]sth.ColumnValue{.{ .index = slug_idx, .value = tth.valText("a") }};
+    const slug_b = [_]sth.ColumnValue{.{ .index = slug_idx, .value = tth.valText("b") }};
+    try sth.flushUpsertsNow(&ctx.engine, ns, &.{
+        .{ .table_index = table_meta.index, .id = 1, .conn_id = 1001, .columns = &slug_a },
+        .{ .table_index = table_meta.index, .id = 2, .conn_id = 1002, .columns = &slug_a },
+        .{ .table_index = table_meta.index, .id = 3, .conn_id = 1003, .columns = &slug_b },
+    });
+
+    try expectFlushOutcomes(&ctx, 3, 1002, "UNIQUE_CONSTRAINT_VIOLATED");
+    try expectDocPresence(&ctx, table_meta.index, 1, ns, true);
+    try expectDocPresence(&ctx, table_meta.index, 2, ns, false);
+    try expectDocPresence(&ctx, table_meta.index, 3, ns, true);
+    try testing.expect(!ctx.engine.documentExists(table_meta.index, 2));
+    try testing.expectEqual(@as(usize, 2), drainChangeCount(&ctx));
+}
+
+test "StorageEngine: orphan reference in a flush fails only its own write" {
+    const allocator = std.heap.smp_allocator;
+    const schema_json =
+        \\{"version":"1.0.0","store":{
+        \\  "parents":{"fields":{}},
+        \\  "children":{"fields":{"parent_id":{"type":"string","references":"parents"}}}
+        \\}}
+    ;
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.initFromJsonWithPerformance(allocator, "fk-flush-isolation", schema_json, .{}, .{ .in_memory = true, .reader_pool_size = 1 });
+    defer ctx.deinit();
+
+    const parents = try ctx.tableMetadata("parents");
+    const children = try ctx.tableMetadata("children");
+    const parent_idx = children.fieldIndex("parent_id").?;
+    const ns: i64 = 1;
+
+    try sth.flushUpsertsNow(&ctx.engine, ns, &.{
+        .{ .table_index = parents.index, .id = 1, .columns = &.{} },
+    });
+    _ = drainChangeCount(&ctx);
+
+    // Parent 2, a child of the missing parent 999, then a child of parent 2.
+    const orphan = [_]sth.ColumnValue{.{ .index = parent_idx, .value = fkDocId(999) }};
+    const child = [_]sth.ColumnValue{.{ .index = parent_idx, .value = fkDocId(2) }};
+    try sth.flushUpsertsNow(&ctx.engine, ns, &.{
+        .{ .table_index = parents.index, .id = 2, .conn_id = 2001, .columns = &.{} },
+        .{ .table_index = children.index, .id = 10, .conn_id = 2002, .columns = &orphan },
+        .{ .table_index = children.index, .id = 11, .conn_id = 2003, .columns = &child },
+    });
+
+    try expectFlushOutcomes(&ctx, 3, 2002, "SCHEMA_VALIDATION_FAILED");
+    try expectDocPresence(&ctx, parents.index, 2, ns, true);
+    try expectDocPresence(&ctx, children.index, 10, ns, false);
+    try expectDocPresence(&ctx, children.index, 11, ns, true);
+    try testing.expect(ctx.engine.documentExists(parents.index, 2));
+    try testing.expect(!ctx.engine.documentExists(children.index, 10));
+    try testing.expect(ctx.engine.documentExists(children.index, 11));
+    try testing.expectEqual(@as(usize, 2), drainChangeCount(&ctx));
+}
+
+fn makeSlugUpsertOp(allocator: std.mem.Allocator, table: *const sth.TableMetadata, id: typed_doc_id.DocId, slug: []const u8) !storage_mod.WriteOp {
+    const columns = try allocator.alloc(sth.ColumnValue, 1);
+    errdefer allocator.free(columns);
+    columns[0] = .{
+        .index = table.fieldIndex("slug") orelse return error.TestExpectedValue,
+        .value = try tth.valText(slug).clone(allocator),
+    };
+    return .{ .upsert = .{
+        .table_index = table.index,
+        .id = id,
+        .namespace_id = 1,
+        .owner_doc_id = typed_doc_id.zero,
+        .columns = columns,
+        .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
+    } };
+}
+
+test "StorageEngine: unique violation in an explicit batch rolls back the batch and reports batchIndex" {
+    const allocator = std.heap.smp_allocator;
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.initWithOptions(allocator, "unique-explicit-batch", &.{uniqueSlugTable()}, .{ .in_memory = true, .reader_pool_size = 1 });
+    defer ctx.deinit();
+
+    const table_meta = try ctx.tableMetadata("projects");
+    const write_allocator = ctx.engine.allocator;
+    const entries = try write_allocator.alloc(storage_mod.WriteOp, 2);
+    var initialized: usize = 0;
+    var enqueued = false;
+    errdefer if (!enqueued) {
+        for (entries[0..initialized]) |entry| entry.deinit(write_allocator);
+        write_allocator.free(entries);
+    };
+    entries[0] = try makeSlugUpsertOp(write_allocator, table_meta, 1, "dup");
+    initialized += 1;
+    entries[1] = try makeSlugUpsertOp(write_allocator, table_meta, 2, "dup");
+    initialized += 1;
+
+    const conn_id: u64 = 3001;
+    try ctx.engine.enqueueWriteOp(.{ .batch = .{ .entries = entries, .conn_id = conn_id, .write_id = [_]u8{7} ** 16 } });
+    enqueued = true;
+    try ctx.engine.flushPendingWrites();
+
+    const outcomes = try drainOutcomes(&ctx.test_context.send_queue.?);
+    defer {
+        for (outcomes) |e| e.deinit();
+        allocator.free(outcomes);
+    }
+    try testing.expectEqual(@as(usize, 1), outcomes.len);
+    try testing.expectEqual(conn_id, outcomes[0].conn_id);
+
+    var reader: std.Io.Reader = .fixed(outcomes[0].data);
+    const outcome = try msgpack.decode(allocator, &reader);
+    defer outcome.free(allocator);
+    const code = (try outcome.mapGet("code")) orelse return error.MissingCode;
+    try testing.expectEqualStrings("UNIQUE_CONSTRAINT_VIOLATED", code.str.value());
+    const batch_index = (try outcome.mapGet("batchIndex")) orelse return error.MissingBatchIndex;
+    try testing.expectEqual(@as(u64, 1), batch_index.uint);
+
+    try expectDocPresence(&ctx, table_meta.index, 1, 1, false);
+    try expectDocPresence(&ctx, table_meta.index, 2, 1, false);
+    try testing.expectEqual(@as(usize, 0), drainChangeCount(&ctx));
 }
 
 test "StorageEngine: accepted upsert with rejecting guard is silent no-op" {

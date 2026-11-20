@@ -11,6 +11,7 @@ const storage_engine = @import("storage_engine.zig");
 const storage_cache = @import("storage_engine/cache.zig");
 const reader_mod = @import("storage_engine/reader.zig");
 const sql = @import("storage_engine/sql.zig");
+const write_queue = @import("storage_engine/write_queue.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const tth = @import("typed/test_helpers.zig");
 const typed = @import("typed/types.zig");
@@ -95,6 +96,50 @@ pub fn enqueueUpsert(
         .conn_id = conn_id,
         .write_id = write_id,
     } });
+}
+
+pub const PendingUpsert = struct {
+    table_index: usize,
+    id: typed_doc_id.DocId,
+    columns: []const ColumnValue,
+    conn_id: ?u64 = null,
+    write_id: ?[16]u8 = null,
+};
+
+/// Flush `upserts` in one transaction on the calling thread. Bypasses the write
+/// worker so per-statement failure isolation can be tested without racing the
+/// batch timer.
+pub fn flushUpsertsNow(engine: *StorageEngine, namespace_id: i64, upserts: []const PendingUpsert) !void {
+    const allocator = engine.allocator;
+    var batch = std.ArrayListUnmanaged(write_queue.WriteOp).empty;
+    errdefer {
+        for (batch.items) |op| op.deinit(allocator);
+        batch.deinit(allocator);
+    }
+    for (upserts, 0..) |pending, i| {
+        const columns = try cloneColumns(allocator, pending.columns);
+        var write_id = pending.write_id;
+        if (write_id == null and pending.conn_id != null) write_id = std.mem.toBytes(@as(u128, i + 1));
+        batch.append(allocator, .{ .upsert = .{
+            .table_index = pending.table_index,
+            .id = pending.id,
+            .namespace_id = namespace_id,
+            .owner_doc_id = typed_doc_id.zero,
+            .columns = columns,
+            .timestamp = std.Io.Clock.real.now(std.testing.io).toMicroseconds(),
+            .conn_id = pending.conn_id,
+            .write_id = write_id,
+        } }) catch |err| {
+            for (columns) |col| col.value.deinit(allocator);
+            allocator.free(columns);
+            return err;
+        };
+    }
+    // flushBatch deinits every op and clears the list; one call is one transaction.
+    engine.write_worker.flush_wg.add(batch.items.len);
+    var last_batch_time = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
+    engine.write_worker.flushBatch(&batch, &last_batch_time);
+    batch.deinit(allocator);
 }
 
 pub fn enqueueUpdate(
@@ -449,6 +494,22 @@ pub const EngineTestContext = struct {
         errdefer self.schema.deinit();
 
         try schema_helpers.setupTestEngineWithPerformance(&self.engine, allocator, &self.memory_strategy, &self.test_context, &self.schema, performance_config, effective_options);
+        errdefer self.engine.deinit();
+    }
+
+    pub fn initFromJsonWithPerformance(self: *EngineTestContext, allocator: Allocator, prefix: []const u8, schema_json: []const u8, performance_config: config_state.Config.PerformanceConfig, options: StorageEngine.Options) !void {
+        const effective_options = schema_helpers.normalizeTestStorageOptions(options);
+        self.allocator = allocator;
+        self.test_context = try createTestContext(allocator, prefix, effective_options);
+        errdefer self.test_context.deinit();
+
+        try self.memory_strategy.init();
+        errdefer self.memory_strategy.deinit();
+
+        self.schema = try schema_parse.initFromJson(allocator, schema_json);
+        errdefer self.schema.deinit();
+
+        try schema_helpers.setupTestEngineWithJson(&self.engine, allocator, &self.memory_strategy, &self.test_context, &self.schema, schema_json, performance_config, effective_options);
         errdefer self.engine.deinit();
     }
 
