@@ -67,7 +67,7 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 3. `ConnectionWireCodec` encodes the command using current schema dictionaries and replaces the logical `type` name with its numeric wire ID from the shared registry (`WireMessageType`); `decodeMessage` maps numeric IDs back to the logical `InboundMessage` type names, so the rest of the SDK never sees numeric wire IDs.
 4. `PendingRequests` records the request id; store writes also get the `writeTimeoutMs` timer.
 5. An `ok` or `error` response resolves/rejects the request. A store write gets no `ok`: `WriteCommitted` resolves it, `WriteError` or `error` rejects it, and writes are never retried.
-6. Server pushes update subscription and presence listeners. A write's deltas arrive before its `WriteCommitted`, and the SDK delivers pending subscription snapshots before the write promise resolves.
+6. Server pushes update subscription and presence listeners. While the subscription tracker is synced, a write's deltas arrive before its `WriteCommitted`, and the SDK delivers pending subscription snapshots before the `StoreImpl.write` promise resolves. A write made while the tracker is disconnected can resolve before its queued deltas are delivered on reconnect; those deltas are applied when the tracker reconnects.
 
 Public methods that receive an `ok` response expose it through a promise. For subscriptions, the promise resolves once *this consumer* is registered — settlement rules live in [Store API → Subscription Lifecycle](../api-design/store-api.md#subscription-lifecycle). Callbacks deliver initial results and later updates independently. `Actions.handle()` resolves after the server accepts the registration.
 

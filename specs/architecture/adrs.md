@@ -652,7 +652,7 @@ Store writes never receive an `ok` response. An empty batch commits nothing, so 
 
 ### Ordering
 
-For every subscription registered before a write was sent, the connection receives the deltas the write's transaction produces before the transaction's outcomes. When a write's promise resolves, the issuing client's subscriptions already reflect it and their callbacks have fired.
+Deltas are ordered before outcomes for every subscription the server registered before processing the write. The client-side guarantee is narrower: it covers only subscriptions whose subscribe response had already arrived before the write was sent. A subscription whose response is still in flight is outside that guarantee — the client cannot route deltas until it learns the `subId`, so a concurrent write does not guarantee updated contents for that subscription. For a covered write, when its promise resolves, the issuing client's subscriptions already reflect it and their callbacks have fired.
 
 The server holds a transaction's outcomes until each subscription worker has finished the transaction's changes. While the server has no subscriptions, outcomes go out as soon as the transaction ends.
 
