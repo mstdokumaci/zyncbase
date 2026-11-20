@@ -4,7 +4,9 @@ const query_ast = @import("../query/ast.zig");
 const qth = @import("../query/test_helpers.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
 const tth = @import("../typed/test_helpers.zig");
+const typed = @import("../typed/types.zig");
 const sub_eng = @import("engine.zig");
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
 
@@ -87,4 +89,73 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     try testing.expectEqual(@as(usize, 1), matches.len);
     try testing.expectEqual(@as(u64, 42), matches[0].connection_id);
     try testing.expectEqual(@as(u64, 101), matches[0].subscription_id);
+}
+
+test "Subscription Consistency: delta matching agrees with SQL snapshots on NULL fields" {
+    const allocator = std.heap.smp_allocator;
+
+    var fields_arr = [_]sth.Field{
+        schema_helpers.makeField("name", .text),
+        schema_helpers.makeField("score", .integer),
+    };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "null-consistency", schema_helpers.makeTable("items", &fields_arr));
+    defer ctx.deinit();
+
+    const items = try ctx.tableMetadata("items");
+    const score_index = items.fieldIndex("score") orelse return error.UnknownField;
+    try ctx.insertText("items", 1, 1, "name", "no score");
+    try ctx.insertInt("items", 2, 1, "score", 5);
+    try ctx.insertInt("items", 3, 1, "score", 20);
+    try ctx.engine.flushPendingWrites();
+
+    var stored: [3]typed.Record = undefined;
+    for (&stored, 1..) |*record, id| {
+        record.* = (try sth.readDoc(allocator, &ctx.engine, items.index, @intCast(id), 1)) orelse return error.TestExpectedValue;
+    }
+    defer for (stored) |record| record.deinit(allocator);
+
+    var members = [_]typed.ScalarValue{.{ .integer = 5 }};
+    const ops = [_]query_ast.Operator{ .eq, .ne, .gt, .lt, .gte, .lte, .in, .notIn, .isNull, .isNotNull };
+    for (ops, 0..) |op, sub_id| {
+        const operand: ?typed.Value = switch (op) {
+            .isNull, .isNotNull => null,
+            .in, .notIn => .{ .array = &members },
+            else => tth.valInt(10),
+        };
+        var filter = try qth.makeFilterWithConditions(allocator, &.{.{ .field_index = score_index, .op = op, .value = operand, .field_type = .integer, .items_type = null }});
+        defer filter.deinit(allocator);
+
+        const snapshot = try sth.queryDocs(allocator, &ctx.engine, items.index, 1, &filter);
+        defer snapshot.deinit(allocator);
+
+        var snapshot_ids = std.AutoHashMap(typed_doc_id.DocId, void).init(allocator);
+        defer snapshot_ids.deinit();
+        for (snapshot.records) |record| {
+            const id = sth.getFieldDocIdOrNull(record, items, "id") orelse return error.TestExpectedValue;
+            try snapshot_ids.put(id, {});
+        }
+
+        var sub_engine = SubscriptionEngine.init(testing.io, allocator);
+        defer sub_engine.deinit();
+        try sub_engine.subscribe(1, items.index, filter, 42, sub_id);
+
+        // A row the snapshot excludes must not produce a delta, and vice versa.
+        for (stored) |record| {
+            const matches = try sub_engine.handleRecordChange(.{
+                .namespace_id = 1,
+                .table_index = items.index,
+                .operation = .insert,
+                .new_record = record,
+                .old_record = null,
+            }, allocator);
+            defer allocator.free(matches);
+            const id = sth.getFieldDocIdOrNull(record, items, "id") orelse return error.TestExpectedValue;
+            const in_snapshot = snapshot_ids.contains(id);
+            testing.expectEqual(in_snapshot, matches.len > 0) catch |err| {
+                std.debug.print("operator {s}: record {d} in SQL snapshot: {}, deltas matched: {d}\n", .{ @tagName(op), id, in_snapshot, matches.len });
+                return err;
+            };
+        }
+    }
 }

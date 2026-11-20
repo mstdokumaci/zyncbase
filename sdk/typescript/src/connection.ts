@@ -130,7 +130,6 @@ export class ConnectionManager {
 
 	private deltaHandler: DeltaHandler | null = null;
 	private presenceBroadcastHandler: PresenceBroadcastHandler | null = null;
-	private presenceUserIdHandler: ((userId: string) => void) | null = null;
 	private actionForwardHandler: ((msg: ActionForward) => void) | null = null;
 
 	private reconnectAttempt = 0;
@@ -139,6 +138,7 @@ export class ConnectionManager {
 	private currentStatus: ConnectionStatus = "disconnected";
 
 	private storeNamespace: string;
+	private currentUserId: string | null = null;
 	private presenceNamespace: string;
 
 	private processingPromise: Promise<void> = Promise.resolve();
@@ -172,6 +172,11 @@ export class ConnectionManager {
 		return this.storeNamespace;
 	}
 
+	/** The connection's internal `users.id`; null before the first scope ack. */
+	get userId(): string | null {
+		return this.currentUserId;
+	}
+
 	/** Current connection status. */
 	get status(): ConnectionStatus {
 		return this.currentStatus;
@@ -183,7 +188,11 @@ export class ConnectionManager {
 	}
 
 	async setStoreNamespace(ns: string): Promise<void> {
-		await this.dispatch({ type: "StoreSetNamespace", namespace: ns });
+		const ok = await this.dispatch({
+			type: "StoreSetNamespace",
+			namespace: ns,
+		});
+		this.adoptUserId(ok, "StoreSetNamespace");
 		this.storeNamespace = ns;
 	}
 
@@ -191,21 +200,20 @@ export class ConnectionManager {
 		return this.presenceNamespace;
 	}
 
-	onPresenceUserId(handler: (userId: string) => void): void {
-		this.presenceUserIdHandler = handler;
-	}
-
 	async setPresenceNamespace(ns: string): Promise<void> {
 		const ok = await this.dispatch({
 			type: "PresenceSetNamespace",
 			namespace: ns,
 		});
-		if (!(ok.userId instanceof Uint8Array)) {
-			throw new Error("PresenceSetNamespace response missing binary userId");
-		}
-		const userId = this.schemaDictionary.decodePresenceUserId(ok.userId);
+		this.adoptUserId(ok, "PresenceSetNamespace");
 		this.presenceNamespace = ns;
-		this.presenceUserIdHandler?.(userId);
+	}
+
+	private adoptUserId(ok: OkResponse, request: string): void {
+		if (!(ok.userId instanceof Uint8Array)) {
+			throw new Error(`${request} response missing binary userId`);
+		}
+		this.currentUserId = this.schemaDictionary.decodeUserId(ok.userId);
 	}
 
 	private handleTicketError(err: unknown): never {
@@ -234,6 +242,7 @@ export class ConnectionManager {
 	}
 
 	private teardownSocket(): void {
+		this.currentUserId = null;
 		if (this.ws) {
 			const ws = this.ws;
 			this.ws = null;
@@ -278,6 +287,7 @@ export class ConnectionManager {
 	async connect(): Promise<void> {
 		this.intentionalDisconnect = false;
 		this.pendingDisconnectError = null;
+		this.currentUserId = null;
 		this.stopLiveness();
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
@@ -540,6 +550,7 @@ export class ConnectionManager {
 
 	disconnect(): void {
 		this.intentionalDisconnect = true;
+		this.currentUserId = null;
 		this.stopLiveness();
 		if (this.reconnectTimer !== null) {
 			clearTimeout(this.reconnectTimer);
@@ -603,6 +614,7 @@ export class ConnectionManager {
 	}
 
 	private handleSocketClose(code: number, reason: string): void {
+		this.currentUserId = null;
 		this.stopLiveness();
 		const closeError = socketCloseError(code, reason);
 		const messageError = this.pendingDisconnectError;

@@ -168,7 +168,10 @@ pub const MessageHandler = struct {
                 const ms_until_token: u64 = (1000 + rate - 1) / rate;
                 var err = wire_errors.getWireError(error.RateLimited);
                 err.retry_after_ms = ms_until_token;
-                try self.sendError(self.allocator, conn, null, err);
+                // Correlate when the envelope parses so the request settles. A
+                // malformed envelope stays uncorrelated; it is never routed.
+                const msg_id: ?u64 = if (wire_decode.extractEnvelopeFast(message)) |envelope| envelope.id else |_| null;
+                try self.sendError(self.allocator, conn, msg_id, err);
                 return;
             }
         }
@@ -418,7 +421,7 @@ pub const MessageHandler = struct {
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
             try authorization_evaluate.authorizeNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), false);
             if (conn.setScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id, false)) {
-                return try wire_encode.encodeSuccess(arena_allocator, msg_id);
+                return try wire_encode.encodeScopeSuccess(arena_allocator, msg_id, scope.user_doc_id);
             }
             return error.RequestSuperseded;
         }
@@ -665,7 +668,7 @@ pub const MessageHandler = struct {
                 true,
             );
             if (conn.setScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id, true)) {
-                return try wire_encode.encodePresenceScopeSuccess(arena_allocator, msg_id, scope.user_doc_id);
+                return try wire_encode.encodeScopeSuccess(arena_allocator, msg_id, scope.user_doc_id);
             }
             return error.RequestSuperseded;
         }

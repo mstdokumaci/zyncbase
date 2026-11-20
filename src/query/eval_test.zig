@@ -1,7 +1,9 @@
 const std = @import("std");
 
 const tth = @import("../typed/test_helpers.zig");
+const typed = @import("../typed/types.zig");
 const query_ast = @import("ast.zig");
+const query_eval = @import("eval.zig");
 const qth = @import("test_helpers.zig");
 
 test "evaluatePredicate respects explicit predicate states" {
@@ -53,4 +55,22 @@ test "evaluatePredicate keeps conditional AND plus OR semantics" {
     var wrong_or = try tth.recordFromValues(allocator, &.{ tth.valText("high"), tth.valText("closed") });
     defer wrong_or.deinit(allocator);
     try std.testing.expect(!try qth.evaluatePredicate(&predicate, &wrong_or));
+}
+
+test "evaluateCondition: a NULL field fails every binary operator, as in SQL" {
+    const allocator = std.testing.allocator;
+    var record = try tth.recordFromValues(allocator, &.{.nil});
+    defer record.deinit(allocator);
+
+    var members = [_]typed.ScalarValue{.{ .integer = 10 }};
+    for (std.enums.values(query_ast.Operator)) |op| {
+        const operand: ?typed.Value = switch (op) {
+            .isNull, .isNotNull => null,
+            .in, .notIn => .{ .array = &members },
+            .startsWith, .endsWith, .contains => tth.valText("a"),
+            else => tth.valInt(10),
+        };
+        const cond = query_ast.Condition{ .field_index = 3, .op = op, .value = operand, .field_type = .integer, .items_type = null };
+        try std.testing.expectEqual(op == .isNull, try query_eval.evaluateCondition(&cond, &record));
+    }
 }

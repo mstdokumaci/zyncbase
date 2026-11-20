@@ -79,11 +79,6 @@ export class ZyncBaseClient<
 		this.actionsImpl = new ActionsImpl(this.conn, emitError);
 		this.actions = this.actionsImpl as unknown as Actions<A>;
 
-		// Presence scope resolution returns the same internal UUID used by entries.
-		this.conn.onPresenceUserId((userId) => {
-			this.presenceImpl.setLocalUserId(userId);
-		});
-
 		this.utils = { id: generateUUIDv7 };
 
 		// On connect/reconnect: restore everything, then emit `synced`.

@@ -552,6 +552,76 @@ describe("StoreImpl", () => {
 		]);
 	});
 
+	test("a delta that precedes its subscribe ack is applied after the snapshot", async () => {
+		const { store, tracker, conn } = makeStore([], await makeReadySchema());
+		// The server registered subId 7 and pushed a delta before the ack, whose
+		// snapshot was read before that commit.
+		conn.dispatch = async () => {
+			tracker.dispatch({
+				type: "StoreDelta",
+				subId: 7,
+				ops: [
+					{
+						op: "set",
+						path: ["users", "u1"],
+						value: { id: "u1", name: "Ada" },
+					},
+				],
+			});
+			return { type: "ok", id: 1, subId: 7, value: [] };
+		};
+
+		const handle = await store.subscribe("users", {}, () => {});
+		await flushTimers();
+
+		expect(handle.getSnapshot()).toEqual([{ id: "u1", name: "Ada" }]);
+		await handle.unsubscribe();
+	});
+
+	test("an early delta for a subscription awaiting its ack is applied to the snapshot", async () => {
+		const { store, tracker, conn } = makeStore([], await makeReadySchema());
+		let releaseFirst!: (ok: OkResponse) => void;
+		let releaseSecond!: (ok: OkResponse) => void;
+		const firstAck = new Promise<OkResponse>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const secondAck = new Promise<OkResponse>((resolve) => {
+			releaseSecond = resolve;
+		});
+		let dispatchCount = 0;
+		conn.dispatch = async () => {
+			dispatchCount += 1;
+			return dispatchCount === 1 ? firstAck : secondAck;
+		};
+
+		const first = store.subscribe("users", {}, () => {});
+		const second = store.subscribe("users", { limit: 5 }, () => {});
+		await flushPromises();
+
+		// The server pushes subId 8's delta before either ack reveals its subId.
+		tracker.dispatch({
+			type: "StoreDelta",
+			subId: 8,
+			ops: [
+				{
+					op: "set",
+					path: ["users", "u1"],
+					value: { id: "u1", name: "Old" },
+				},
+			],
+		});
+
+		releaseFirst({ type: "ok", id: 1, subId: 7, value: [] });
+		const firstHandle = await first;
+		releaseSecond({ type: "ok", id: 2, subId: 8, value: [] });
+		const secondHandle = await second;
+		await flushTimers();
+
+		expect(secondHandle.getSnapshot()).toEqual([{ id: "u1", name: "Old" }]);
+		await firstHandle.unsubscribe();
+		await secondHandle.unsubscribe();
+	});
+
 	test("a resolved write has already delivered the deltas sent before it", async () => {
 		const { store, tracker, conn } = makeStore(
 			[{ type: "ok", id: 1, subId: 9, value: [] }],

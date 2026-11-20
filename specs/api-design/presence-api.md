@@ -218,7 +218,7 @@ const shared = client.presence.getShared()
 
 ## Presence Namespaces
 
-Presence is scoped to `presenceNamespace`. Only users in the same namespace see each other and share the same shared state record. When `users.namespaced = true`, the namespace also determines which internal `users.id` is used for presence identity. That ID is returned by `PresenceSetNamespace` and is the same canonical UUID used in snapshots and broadcasts.
+Presence is scoped to `presenceNamespace`. Only users in the same namespace see each other and share the same shared state record. When `users.namespaced = true`, the namespace also determines which internal `users.id` the connection uses; store and presence must then share that namespace, so the ID is the same for both scopes. Both scope acknowledgements return that ID, and it is the same canonical UUID used in snapshots and broadcasts.
 
 ```typescript
 const client = createClient({
@@ -226,7 +226,7 @@ const client = createClient({
 })
 ```
 
-**Switching namespaces**: `client.setPresenceNamespace(ns)` removes your user presence from the old namespace, clears the local user and shared state caches, resolves the new presence scope, and invalidates all active presence and shared-state subscriptions. The client must re-subscribe.
+**Switching namespaces**: `client.setPresenceNamespace(ns)` removes your user presence from the old namespace, clears the local user and shared state caches, resolves the new presence scope, and invalidates all active presence and shared-state subscriptions. The client must re-subscribe. When `users.namespaced = true`, the server rejects a switch to a different namespace with `NAMESPACE_SWITCH_REJECTED` and leaves the current scope unchanged. Open a new connection to use another namespace.
 
 ---
 

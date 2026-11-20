@@ -10,6 +10,7 @@ import {
 	MockWebSocket,
 	makeManager,
 	restoreFetch,
+	TEST_USER_ID,
 } from "./test-helpers";
 
 beforeEach(() => {
@@ -52,18 +53,57 @@ describe("ConnectionManager", () => {
 			expect(events).toContain("connected");
 		});
 
-		test("installs the internal presence user id before connected", async () => {
+		test("records the internal user id before connected", async () => {
 			const { manager, mockWs } = makeManager();
-			const events: string[] = [];
-			manager.onPresenceUserId((userId) => events.push(`user:${userId}`));
-			manager.on("connected", () => events.push("connected"));
+			const seen: Array<string | null> = [];
+			manager.on("connected", () => seen.push(manager.userId));
 
 			await connectManager(manager, mockWs);
 
-			expect(events).toEqual([
-				"user:019c1e50-7d11-7000-8000-000000000001",
-				"connected",
-			]);
+			expect(seen).toEqual([TEST_USER_ID]);
+		});
+
+		test("clears the user id on close and until the next scope ack", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			expect(manager.userId).toBe(TEST_USER_ID);
+
+			mockWs.triggerClose(1006, "gone");
+			expect(manager.userId).toBeNull();
+
+			const reconnected = manager.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			expect(manager.userId).toBeNull();
+
+			const storeAck = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			expect(storeAck.type).toBe(WireMessageType.StoreSetNamespace);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: storeAck.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 0));
+			expect(manager.userId).toBe(TEST_USER_ID);
+
+			const presenceAck = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			expect(presenceAck.type).toBe(WireMessageType.PresenceSetNamespace);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: presenceAck.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await reconnected;
 		});
 
 		test("rejects a presence namespace response without a binary user id", async () => {
@@ -71,7 +111,9 @@ describe("ConnectionManager", () => {
 			const connected = manager.connect();
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			mockWs.triggerOpen();
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id: 1, userId: packDocId(TEST_USER_ID) }),
+			);
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
 
@@ -80,12 +122,44 @@ describe("ConnectionManager", () => {
 			);
 		});
 
-		test("rejects a presence namespace response with a malformed user id", async () => {
+		test("rejects a store namespace response without a binary user id", async () => {
 			const { manager, mockWs } = makeManager();
 			const connected = manager.connect();
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			mockWs.triggerOpen();
 			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
+
+			await expect(connected).rejects.toThrow(
+				"StoreSetNamespace response missing binary userId",
+			);
+			expect(manager.userId).toBeNull();
+		});
+
+		test("the store scope ack alone provides the user id", async () => {
+			const { manager, mockWs } = makeManager();
+			const connected = manager.connect();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			mockWs.triggerOpen();
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id: 1, userId: packDocId(TEST_USER_ID) }),
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			expect(manager.userId).toBe(TEST_USER_ID);
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id: 2, userId: packDocId(TEST_USER_ID) }),
+			);
+			await connected;
+		});
+
+		test("rejects a presence namespace response with a malformed user id", async () => {
+			const { manager, mockWs } = makeManager();
+			const connected = manager.connect();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			mockWs.triggerOpen();
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id: 1, userId: packDocId(TEST_USER_ID) }),
+			);
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			mockWs.triggerMessage(
 				encodeToBuffer({
@@ -98,29 +172,6 @@ describe("ConnectionManager", () => {
 			await expect(connected).rejects.toThrow(
 				"invalid userId binary length 15",
 			);
-		});
-
-		test("explicit presence namespace setup replaces the internal user id", async () => {
-			const { manager, mockWs } = makeManager();
-			const userIds: string[] = [];
-			manager.onPresenceUserId((userId) => userIds.push(userId));
-			await connectManager(manager, mockWs);
-
-			const switched = manager.setPresenceNamespace("other-room");
-			mockWs.triggerMessage(
-				encodeToBuffer({
-					type: "ok",
-					id: 3,
-					userId: packDocId("019c1e50-7d11-7000-8000-000000000002"),
-				}),
-			);
-			await switched;
-
-			expect(manager.getPresenceNamespace()).toBe("other-room");
-			expect(userIds).toEqual([
-				"019c1e50-7d11-7000-8000-000000000001",
-				"019c1e50-7d11-7000-8000-000000000002",
-			]);
 		});
 
 		test("emits 'statusChange' with 'connected' on open", async () => {
@@ -630,6 +681,15 @@ describe("ConnectionManager", () => {
 
 			expect(events).toContain("disconnected");
 		});
+
+		test("clears the user id", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			manager.disconnect();
+
+			expect(manager.userId).toBeNull();
+		});
 	});
 
 	describe("send()", () => {
@@ -712,7 +772,9 @@ describe("ConnectionManager", () => {
 
 			// Complete the handshake: the rejected StoreSet consumed id=2, so
 			// PresenceSetNamespace goes out as id=3.
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 1 }));
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id: 1, userId: packDocId(TEST_USER_ID) }),
+			);
 			await new Promise((r) => setTimeout(r, 0));
 			mockWs.triggerMessage(
 				encodeToBuffer({

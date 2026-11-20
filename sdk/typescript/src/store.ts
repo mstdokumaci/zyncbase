@@ -434,6 +434,18 @@ export class StoreImpl {
 		state: RegistrationKey,
 		gen: number,
 	): Promise<boolean> {
+		this.tracker.beginEstablish();
+		try {
+			return await this.establishOnce(state, gen);
+		} finally {
+			this.tracker.endEstablish();
+		}
+	}
+
+	private async establishOnce(
+		state: RegistrationKey,
+		gen: number,
+	): Promise<boolean> {
 		const ok = await this.conn.dispatch(state.message);
 		const subId = ok.subId;
 		if (subId === undefined) throw missingSubIdError(state.kind);
@@ -481,6 +493,7 @@ export class StoreImpl {
 				ok.value as JsonValue,
 			);
 		}
+		this.tracker.replayEarlyDeltas(subId);
 	}
 
 	private entryFor(state: RegistrationKey): SubscriptionEntry {

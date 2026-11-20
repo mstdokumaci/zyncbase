@@ -95,6 +95,7 @@ Recovery orchestration lives in `client.ts` (resolve-at-`synced`, emit `synced`/
 
 - **Readiness queue.** `listen`/`subscribe` issued before session readiness are held in a pending queue and dispatched when readiness is reached. Readiness must be awaited by re-checking after each connection cycle: `awaitSchemaSync()` rejects on mid-session drops, so a bare single await is wrong — the flush loop catches rejection and waits for the next cycle. Contract (flush points, disconnect rejection, writes excluded): [Store API → Readiness queue](../api-design/store-api.md#readiness-queue).
 - **Keyed sharing.** One server subscription per key (key definition: [Store API → Keyed sharing](../api-design/store-api.md#keyed-sharing)). `StoreImpl`'s keyed registry owns key→subId, refcounts, per-key pagination state (`nextCursor`, `hasMore`), and grace timers. Establishment races use the presence generation-guard pattern (`presence.ts` establish loop): detach-during-establishment re-checks the refcount when the wire response lands and unsubscribes immediately if it is zero.
+- **Deltas before the ack.** The server registers a subscription before it reads the snapshot, so deltas can arrive before the `ok` that reveals their subId, and the snapshot may predate them. While any subscribe is in flight, `SubscriptionTracker` holds deltas for unknown subIds. `acceptAck` registers the entry, delivers the snapshot, then replays that subId's held deltas in arrival order into the same flush. When no subscribe is in flight the held deltas are discarded; deltas for unknown subIds are then dropped with a warning.
 - **Grace teardown.** Last-consumer detach schedules the wire unsubscribe after the contract's grace window via a single `setTimeout` per key, cancelled on re-attach.
 - **Snapshots.** Collection entries read the sorted `materializedView.records`; listen entries retain a `lastValue` field (projection dispatch stores what it delivers — new field on `SubscriptionEntry`), which `getSnapshot()` returns.
 - **Namespace switch.** `setStoreNamespace` flushes every live store key against the new namespace through the registry before resolving; registry refcounts are preserved across re-dispatch. Presence and action replay is scoped to `setPresenceNamespace`.
@@ -103,7 +104,7 @@ Recovery orchestration lives in `client.ts` (resolve-at-`synced`, emit `synced`/
 
 - Public server codes mirror [Error Taxonomy](./error-taxonomy.md).
 - SDK-local `CONNECTION_FAILED`, `TIMEOUT`, and `INVALID_PATH` are created client-side.
-- Retry behavior is driven by error category plus `retryAfter` when supplied by the server.
+- Retry behavior is driven by error category plus `retryAfter` when supplied by the server. A `RATE_LIMITED` read waits `retryAfter` and is resent; a write is never resent.
 - Auth refresh/token failure must not silently retry an unauthorized operation under stale identity.
 
 ## Maintenance Rules

@@ -654,7 +654,7 @@ The `users` collection is a reserved hybrid table that is automatically managed 
 }
 ```
 
-Custom fields on `users` cannot be listed in `required`. The server auto-creates identity rows as soon as a scoped session needs an internal user ID, before application profile data is available. If `users.namespaced = true`, the same external identity may resolve to different internal user IDs for different store or presence namespaces.
+Custom fields on `users` cannot be listed in `required`. The server auto-creates identity rows as soon as a scoped session needs an internal user ID, before application profile data is available. If `users.namespaced = true`, the same external identity resolves to a different internal user ID in each namespace. A connection is then locked to one namespace for both store and presence, so each connection still has a single internal user ID.
 
 ### Automatic Column Flattening
 

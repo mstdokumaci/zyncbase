@@ -650,7 +650,7 @@ export type OutboundMessage =
 export interface OkResponse {
 	type: "ok";
 	id: number;
-	// PresenceSetNamespace response field (bin16 on wire):
+	// StoreSetNamespace / PresenceSetNamespace response field (bin16 on wire):
 	userId?: Uint8Array;
 	// StoreQuery response fields:
 	value?: JsonValue[];

@@ -34,11 +34,11 @@
 
 ## Ping Fast Path
 
-Before ordinary request rate limiting or arena acquisition, `MessageHandler` attempts bounded, low-allocation extraction of the Ping envelope. A recognized Ping uses a separate per-connection limit of two requests per second with a burst of two, then sends the correlated response defined by the wire protocol. It bypasses full payload decoding, generic routing, scope resolution, and per-message authorization. Non-Ping messages continue through the normal lifecycle below.
+Before ordinary request rate limiting or arena acquisition, `MessageHandler` attempts bounded, low-allocation extraction of the Ping envelope. A recognized Ping uses a separate per-connection limit of two requests per second with a burst of two, then sends the correlated response defined by the wire protocol. It bypasses full payload decoding, generic routing, scope resolution, and per-message authorization. Frames the fast path does not recognize continue through the normal lifecycle below.
 
 ## Request Lifecycle
 
-1. Apply ordinary per-connection message rate limiting from `Config.SecurityConfig` to non-Ping messages.
+1. Apply ordinary per-connection message rate limiting from `Config.SecurityConfig` to every frame the minimal-Ping fast path did not recognize, including Ping maps with extra fields; recognized minimal Pings stay on the separate Ping limit above. A rejected message gets `RATE_LIMITED` with `retryAfter`, correlated with the message's `id` when its envelope parses; it is never routed, and an unparseable envelope gets an uncorrelated error.
 2. Decode `wire.Envelope` from the raw MessagePack frame.
 3. Acquire a request arena from `MemoryStrategy`.
 4. Convert the envelope `type` ID to `MessageType` via `std.enums.fromInt`; unknown or server-only IDs return `error.UnknownMessageType` → `INVALID_MESSAGE_TYPE`.

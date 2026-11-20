@@ -93,10 +93,7 @@ pub const SessionResolver = struct {
             return makeErrorOutcome(handle, conn_id, msg_id, error.RequestSuperseded);
         }
 
-        const msg = (if (is_presence)
-            wire_encode.encodePresenceScopeSuccess(handle.allocator(), msg_id, user_doc_id)
-        else
-            wire_encode.encodeSuccess(handle.allocator(), msg_id)) catch |encode_err| {
+        const msg = wire_encode.encodeScopeSuccess(handle.allocator(), msg_id, user_doc_id) catch |encode_err| {
             std.log.err("SessionResolver failed to encode success response: {}", .{encode_err});
             return null;
         };

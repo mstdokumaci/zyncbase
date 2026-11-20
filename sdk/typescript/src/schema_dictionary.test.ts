@@ -5,7 +5,7 @@ import { SchemaDictionary } from "./schema_dictionary.js";
 describe("SchemaDictionary doc IDs", () => {
 	test("decodes packed canonical UUID presence user IDs", () => {
 		const id = "019c1e50-7d11-7abc-9def-0123456789ab";
-		expect(new SchemaDictionary().decodePresenceUserId(packDocId(id))).toBe(id);
+		expect(new SchemaDictionary().decodeUserId(packDocId(id))).toBe(id);
 	});
 
 	test("encodes and decodes path doc IDs as bin(16)", async () => {

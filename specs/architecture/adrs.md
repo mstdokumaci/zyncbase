@@ -532,7 +532,7 @@ A scope is the resolved pair:
 1. **Namespace ID** — the namespace string resolved to `_zync_namespaces.id` (integer)
 2. **`$session.userId`** — the external identity string (JWT `sub` or anonymous subject) resolved to an internal `BLOB(16)` UUIDv7 from the `users` table
 
-Store and presence resolve independently — each scope maintains its own resolved namespace ID and user ID.
+Store and presence resolve independently and each keeps its own namespace ID, but a connection has exactly one `users.id`: both scopes always resolve the same `users` row, for the reasons below.
 
 When `users.namespaced = false` (the default), `users` is a global table and the same external identity always maps to the same `users.id` regardless of which namespace is active — namespace switching carries the same identity forward. When `users.namespaced = true`, identity resolution is scoped to the active namespace. This mode is designed for single-namespace users; the server enforces that a connection is locked to a single namespace for both store and presence scopes. Specifically, the first `SetNamespace` (store or presence) establishes the connection's namespace. Any subsequent `SetNamespace` for either scope is rejected with `NAMESPACE_SWITCH_REJECTED` if the namespace string differs from the established one.
 
