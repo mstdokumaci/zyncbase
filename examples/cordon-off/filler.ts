@@ -151,7 +151,7 @@ export class HoleFiller {
 		return this.holes.subarray(0, holes);
 	}
 
-	// ponytail: doubling keeps the amortised cost per run at one copy per pixel
+	// doubling keeps the amortised cost per run at one copy per pixel
 	// of growth, the same trick the scanline stack used. Runs stay sparse for real
 	// territory; only a checkerboard bbox approaches one run per two pixels.
 	private growRuns(size: number) {
