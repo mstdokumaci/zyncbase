@@ -131,8 +131,8 @@ Conditional writes and atomic increments reuse the writer transaction and the sa
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Batch size | 500 ops | Maximum writes per transaction. |
-| Batch timeout | 8 ms | Maximum time to wait before flushing an incomplete batch. |
+| Batch size | 500 ops (default) | Maximum writes per transaction. Configured by `performance.batchSize`. |
+| Batch timeout | 8 ms (default) | Maximum time to wait before flushing an incomplete batch. Configured by `performance.batchTimeout`. |
 | Statement cache | 100 per connection | LRU eviction for prepared statements. |
 
 ### Reader Pool

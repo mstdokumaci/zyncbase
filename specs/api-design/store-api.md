@@ -4,7 +4,7 @@ The Store API handles durable, synchronized data. Everything in this namespace i
 
 Store methods require a ready store scope. `client.connect()` and `client.setStoreNamespace(namespace)` resolve only after the server has resolved the namespace and internal `users.id`. Data operations (`get`, `set`, `remove`, `increment`, `create`, `query`, `batch`) issued before that point fail with `SESSION_NOT_READY`. Subscription registrations (`listen`, `subscribe`) are the exception: they are queued and dispatched when the session becomes ready — see [Subscription Lifecycle](#subscription-lifecycle).
 
-Mutating methods (`set`, `remove`, `increment`, `create`, `batch`) resolve when the writer commits the write and reject on any failure (ADR-018). A read issued after a write resolves observes it. Mutations do not optimistically update local subscription state; subscription callbacks are the authoritative source of committed observable state.
+Mutating methods (`set`, `remove`, `increment`, `create`, `batch`) resolve when the writer commits the write and reject on any failure (ADR-018). A read issued after a write resolves observes that write only if no later write to the same field has superseded it; when another client has committed a superseding write, the read returns the newer value ([ADR-010](../architecture/adrs.md#adr-010-conflict-resolution--last-write-wins)). Mutations do not optimistically update local subscription state; subscription callbacks are the authoritative source of committed observable state.
 
 ## Table of Contents
 

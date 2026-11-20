@@ -828,6 +828,7 @@ test "message: concurrent routed requests release response allocations" {
         thread_index: usize,
         iterations: usize,
         failure: ?anyerror = null,
+        conn_id: u64 = 0,
 
         fn run(ctx: *@This()) void {
             runInternal(ctx) catch |err| {
@@ -840,6 +841,7 @@ test "message: concurrent routed requests release response allocations" {
             const thread_allocator = ctx.app.allocator;
             const sc = try ctx.app.setupMockConnection();
             defer sc.deinit();
+            ctx.conn_id = sc.conn.id;
 
             var i: usize = 0;
             while (i < ctx.iterations) : (i += 1) {
@@ -888,23 +890,42 @@ test "message: concurrent routed requests release response allocations" {
         if (ctx.failure) |err| return err;
     }
 
+    const Outcome = struct {
+        conn_id: u64,
+        id: u64,
+    };
+
     // Each thread writes from its own connection, so per-thread outcome order is
-    // preserved but threads interleave; compare the outcomes as a sorted set.
+    // preserved but threads interleave; compare (conn_id, id) as a sorted set.
     try app.storage_engine.flushPendingWrites();
-    var ids = std.ArrayListUnmanaged(u64).empty;
-    defer ids.deinit(allocator);
+    var outcomes = std.ArrayListUnmanaged(Outcome).empty;
+    defer outcomes.deinit(allocator);
     while (app.test_context.send_queue.?.pop()) |entry| {
         defer entry.deinit();
         try expectResponseType(allocator, entry.data, MessageType.write_committed);
         const parsed = try decodeResponse(allocator, entry.data);
         defer parsed.free(allocator);
         const id_value = (try msgpack_helpers.getMapValue(parsed, "id")) orelse return error.TestExpectedError;
-        try ids.append(allocator, id_value.uint);
+        try outcomes.append(allocator, .{ .conn_id = entry.conn_id, .id = id_value.uint });
     }
-    std.mem.sort(u64, ids.items, {}, std.sort.asc(u64));
-    var expected_ids: [32]u64 = undefined;
-    for (&expected_ids, 0..) |*expected_id, i| expected_id.* = (i / 8) * 1000 + (i % 8) + 1;
-    try testing.expectEqualSlices(u64, &expected_ids, ids.items);
+    std.mem.sort(Outcome, outcomes.items, {}, struct {
+        fn lessThan(_: void, a: Outcome, b: Outcome) bool {
+            return a.id < b.id;
+        }
+    }.lessThan);
+    var expected_outcomes: [32]Outcome = undefined;
+    for (&expected_outcomes, 0..) |*expected_outcome, i| {
+        const thread_index = i / 8;
+        expected_outcome.* = .{
+            .conn_id = contexts[thread_index].conn_id,
+            .id = @intCast(thread_index * 1000 + (i % 8) + 1),
+        };
+    }
+    try testing.expectEqual(@as(usize, expected_outcomes.len), outcomes.items.len);
+    for (expected_outcomes, outcomes.items) |expected_outcome, actual_outcome| {
+        try testing.expectEqual(expected_outcome.conn_id, actual_outcome.conn_id);
+        try testing.expectEqual(expected_outcome.id, actual_outcome.id);
+    }
 }
 
 test "MessageHandler: action register, call, and reply route through the service" {

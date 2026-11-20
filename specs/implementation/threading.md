@@ -96,7 +96,7 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 - uWS `.backpressure` means the frame was accepted and buffered; `Connection.send()` returns `error.Dropped` without closing the WebSocket, and `ConnectionManager.sendOrClose()` closes the connection after receiving that error.
 - Background producers encode into general-allocator-owned byte slices before enqueue. After a successful `SendQueue.push()`, the queue owns the bytes and the event loop frees them after send.
 - Background producers call `Notifier.notify()` after a successful enqueue, not before, so a notify always observes queued work or later work.
-- No request may publish subscription deltas or write outcomes before the corresponding storage commit.
+- No request may publish subscription deltas or `WriteCommitted` for a non-empty write before the corresponding storage commit. `WriteError` may be published after a rejected batch rolls back (no commit occurs), and an empty batch receives `WriteCommitted` without a transaction.
 - StoreSubscribe registration happens synchronously in `MessageHandler` before the initial read request is enqueued, so committed changes cannot be missed while the snapshot is being read.
 - Read response records are allocated by reader threads; after encoding to MessagePack bytes, reader threads free records and push owned bytes to `SendQueue`. The event loop frees encoded bytes after sending.
 - Namespace resolution results must be ignored when superseded by a newer namespace request.

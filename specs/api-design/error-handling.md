@@ -55,10 +55,12 @@ try {
 }
 ```
 
-Mutation promises resolve when the write commits and reject in one of two phases:
+Mutation promises resolve when the write commits. When the server reports a rejection, it carries one of two phases:
 
 - `phase: "accept"`: the server rejected the request before the writer owned it.
 - `phase: "write"`: the writer rejected the write.
+
+`TIMEOUT` and connection failures reject without a `details.phase` because no server outcome arrived. They are ambiguous: they do not establish that the write was refused or rejected, or that it failed to commit. See [Write Failure Reporting](#write-failure-reporting).
 
 ```typescript
 try {
