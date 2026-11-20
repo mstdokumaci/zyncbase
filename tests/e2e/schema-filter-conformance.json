@@ -1,0 +1,36 @@
+{
+	"version": "0.0.1",
+	"store": {
+		"vectors": {
+			"fields": {
+				"name": {
+					"type": "string"
+				},
+				"label": {
+					"type": "string"
+				},
+				"score": {
+					"type": "integer"
+				},
+				"ratio": {
+					"type": "number"
+				},
+				"active": {
+					"type": "boolean"
+				},
+				"tags": {
+					"type": "array",
+					"items": "string"
+				},
+				"meta": {
+					"type": "object",
+					"fields": {
+						"rank": {
+							"type": "integer"
+						}
+					}
+				}
+			}
+		}
+	}
+}

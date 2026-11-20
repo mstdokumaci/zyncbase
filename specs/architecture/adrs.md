@@ -632,11 +632,11 @@ ADR-022 adds `client.actions.*` / `server.actions.*` as a third, independent sur
 
 ---
 
-## ADR-018: Mutation Outcomes
+## ADR-018: Mutation Outcomes and Optimistic Local State
 
-Client-visible state in a real-time system is observed through subscriptions, but the client that issued a write needs its own definite outcome: to report a failed save, and to read its own write once it resolves.
+Client-visible state in a real-time system is observed through subscriptions, but the client that issued a write needs its own definite outcome: to report a failed save, and to read its own write once it resolves. Its UI should also show the write without waiting a round trip.
 
-**Decision**: Every store write (`store.set`, `store.remove`, `store.increment`, `store.create`, `store.batch`) is tracked. Its promise resolves when the writer commits the write and rejects on any failure. Subscriptions deliver committed state to every observer; the write promise reports the outcome to the client that issued it. There is no optimistic local state and no local rollback.
+**Decision**: Every store write (`store.set`, `store.remove`, `store.increment`, `store.create`, `store.batch`) is tracked. Its promise resolves when the writer commits the write and rejects on any failure. Subscriptions deliver committed state to every observer; the write promise reports the outcome to the client that issued it. The issuing client also shows the write in its own subscriptions and listens as soon as it sends it: a pending overlay on top of committed state, dropped when the write settles.
 
 ### Outcome Reporting
 
@@ -658,10 +658,38 @@ For a covered write while the subscription tracker is synced, when its promise r
 
 The server holds a transaction's outcomes until each subscription worker has finished the transaction's changes. When the writer's active-subscription check saw zero subscriptions, outcomes go out as soon as the transaction ends.
 
+### Optimistic Local State
+
+The SDK keeps committed records exactly as subscriptions deliver them. Pending writes are kept apart, per document, in send order. Each delivered value is computed from both; the overlay never changes a committed record.
+
+1. **Apply.** A document's pending writes apply in send order to its committed record, taken from any subscription or listen that holds it.
+   - `set` merges into a known document.
+   - `create` makes a row with every schema field (unset ones null), `owner_id` set to the connection's user id (a `users` row owns itself), and provisional `created_at` / `updated_at` after every server timestamp the client has seen, so it sorts last in the default order.
+   - `remove` hides the document.
+   - `increment` adds to a number it can see.
+   - A `set` or `increment` on a document the client holds no record of is not shown.
+   - Array fields show in the server's sorted-set form; a null object clears every field beneath it.
+2. **Commit.** A commit drops the write and every earlier pending write's changes to the same documents. The server applies a connection's writes in send order and never retries one, so those writes are already applied or failed, and their deltas arrived before this outcome.
+3. **Failure.** Any failure (accept phase, write phase, timeout, disconnect) drops only that write. The promise rejects and `on('error')` fires.
+4. **Scope.** Losing the session or switching the store namespace drops every pending write; subscriptions show committed state, and the snapshot after reconnect is authoritative.
+5. **Exclusions.** These writes are never shown early:
+   - writes with `if`, and batches containing one: compare-and-set depends on server state
+   - writes with `{ optimistic: false }`
+   - writes made while the session is not ready (they fail fast) or a namespace switch is in flight
+6. **Membership.** A document with pending writes belongs in a view exactly when the overlaid record matches the view's `where` under the server's matching semantics ([Query Engine](../implementation/query-engine.md#client-evaluation)). Its position follows the view's order. `limit` does not apply, as for deltas.
+
+Delivery:
+- A local write is delivered synchronously, inside the write call and after its message is sent, to every affected subscription and listen. Only the changed rows move, by binary insertion; nothing is re-sorted.
+- Each delivery carries the ids of rows that show a pending write. A delivery also happens when only that set changes.
+- On commit the SDK drops the write, applies the deltas that arrived before the outcome, and delivers once: no frame shows the previous committed value.
+- Read authorization stays on the server. A local create that a view's read rule hides shows until it commits, then leaves with the next snapshot or delta.
+- One-shot `get` and `query` return committed state only.
+
 ### Terminology
 
 - **committed** — the writer transaction containing the write committed, or the write was a no-op.
-- **WriteError** — the name for writer failure messages. Not "NACK" — there is no speculative local state to roll back.
+- **pending** — sent and shown locally, outcome not received.
+- **WriteError** — the name for writer failure messages.
 
 ### Error Phases
 
@@ -703,7 +731,7 @@ Ownership rules such as `{ "$doc.owner_id": { "eq": "$session.userId" } }` natur
 
 ### Connection Failures
 
-Write promises are scoped to the originating live connection. On disconnect, the SDK rejects pending write promises with a connection error. The write may still commit. After reconnect, subscriptions are the source of truth for final state.
+Write promises are scoped to the originating live connection. On disconnect, the SDK drops pending writes from the overlay and rejects their promises with a connection error. The write may still commit. After reconnect, subscriptions are the source of truth for final state.
 
 **Rejected alternatives**:
 - **Acknowledge writes on acceptance by default** — rejected; write-phase failures (constraint violations, precondition failures, post-read authorization, storage errors) would be invisible to the caller, and a resolved write would not guarantee that a following read sees it.
@@ -713,15 +741,17 @@ Write promises are scoped to the originating live connection. On disconnect, the
 - **Sequence outcomes behind deltas on the event loop** — rejected; the event loop does not know which deltas a transaction produces, only the subscription workers do.
 - **A marker job per change-queue shard** — rejected; every transaction would cost one job per shard, including shards it never touched.
 - **No writer failure reporting** — rejected; ambiguous missing deltas cannot support user-facing save-failure feedback.
-- **Optimistic local writes** — rejected; requires rollback machinery, conflict handling, and speculative materialized-view logic that the subscription-first model avoids entirely.
-- **NACK messages as rollback commands** — rejected; there is no speculative local state to roll back.
+- **Show only committed state** — rejected; every UI update would wait a round trip plus the writer's batch window, and a controlled input that waits for its own value loses its caret position.
+- **Snapshot and rollback per write** — rejected; restoring a snapshot on failure discards remote changes and later local writes that arrived after it.
+- **Matching server echoes by value** — rejected; a delta's content cannot attribute it to a write when other clients write the same values, and a coalesced transaction merges several writes into one delta.
+- **Optimistic conditional writes** — rejected; an `if` is checked against server state the client may not have.
 
 **Consequences**:
 - A resolved write is durable, a read issued after it resolves observes it, and the issuing client's subscriptions already show it.
-- With subscriptions active, write latency includes delta fan-out for the write's transaction.
+- With subscriptions active, write latency includes delta fan-out for the write's transaction; the overlay hides it from the issuing client's UI.
 - Write latency includes the writer's batch window and commit.
-- Every write failure reaches the caller; un-awaited writes surface failures on `on('error')`.
-- The SDK never speculatively mutates local state; subscriptions are the single source of truth.
+- Every write failure reaches the caller; un-awaited writes surface failures on `on('error')`. A failed write shows for up to one round trip plus the writer's batch window, then reverts.
+- Committed state comes only from subscriptions; the overlay is a pending, revertible projection on top of it.
 
 **Principles**: P-RTF, P-SAT, P-TSF, P-SOT
 

@@ -86,9 +86,9 @@ client.on('error', (error: ZyncBaseError) => {
 
 ### 3. WriteError messages
 
-Writer failures arrive as `WriteError`s, not rollback NACKs. They carry the write's request id, and the SDK rejects that write's promise with them.
+Writer failures arrive as `WriteError`s. They carry the write's request id, and the SDK rejects that write's promise with them.
 
-`WriteError` is used for user feedback and diagnostics. It does not imply local rollback because the SDK does not apply speculative local subscription updates.
+A write the SDK showed optimistically reverts when it fails, whatever the failure: an accept-phase `error`, a `WriteError`, a timeout, or a disconnect. Subscriptions and listens deliver the committed value again before the promise rejects. `WriteError` is used for user feedback and diagnostics.
 
 ### 4. Framework hooks
 
@@ -111,7 +111,7 @@ ZyncBase separates state delivery from write outcome reporting:
 4. `PRECONDITION_FAILED` means the write did not apply: a conditional `if` did not hold, the row was missing, or an increment was NULL, out of range, or would overflow. No subscription delta is emitted. The application may retry after re-reading; the SDK never auto-retries a write.
 5. Increments are not idempotent. A manual retry after an ambiguous connection failure or timeout may apply twice; there is no write dedupe.
 
-A write that gets no outcome within `writeTimeoutMs` (default 30 s) rejects with `TIMEOUT`. A timeout or a disconnect does not imply the write was aborted or failed to commit. After reconnect, subscriptions remain the source of truth for final state.
+A write that gets no outcome within `writeTimeoutMs` (default 30 s) rejects with `TIMEOUT`. A timeout or a disconnect does not imply the write was aborted or failed to commit: its optimistic value reverts, and if it committed, the delta brings it back. After reconnect, subscriptions remain the source of truth for final state.
 
 ---
 

@@ -1,6 +1,6 @@
 # Threading
 
-**Drivers**: [Threading Model Architecture](../architecture/threading-model.md), [ADR-006](../architecture/adrs.md#adr-006-deterministic-thread-budget-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes)
+**Drivers**: [Threading Model Architecture](../architecture/threading-model.md), [ADR-006](../architecture/adrs.md#adr-006-deterministic-thread-budget-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes-and-optimistic-local-state)
 
 ZyncBase uses a deterministic thread budget architecture with six thread domains computed from CPU core count. Thread counts are hardcoded via formula — no configuration overrides. The server refuses to start on machines with fewer than 2 CPU cores.
 

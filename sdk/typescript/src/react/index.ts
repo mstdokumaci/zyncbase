@@ -36,16 +36,20 @@ import type {
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
-/** Triad returned by `useQuery`. */
+/** State returned by `useQuery`. */
 export interface QueryState<R> {
 	data: R;
+	/** Ids of rows in `data` that show a write not yet committed. */
+	pending: ReadonlySet<string>;
 	isLoading: boolean;
 	error: ZyncBaseError | null;
 }
 
-/** Triad returned by `useListen`. */
+/** State returned by `useListen`. */
 export interface ListenState<V> {
 	value: V;
+	/** Whether `value` shows a write not yet committed. */
+	isPending: boolean;
 	isLoading: boolean;
 	error: ZyncBaseError | null;
 }
@@ -80,6 +84,7 @@ type SubscribeOptions<
 type PresenceData<P> = Parameters<Presence<P>["set"]>[0];
 
 const EMPTY_ROWS: never[] = [];
+const NO_PENDING: ReadonlySet<string> = new Set();
 
 // ─── Canonical option keying ─────────────────────────────────────────────────
 
@@ -159,6 +164,7 @@ export function createZyncBaseReact<
 			client: Client;
 			key: string;
 			data: QueryRows<S, C>;
+			pending: ReadonlySet<string>;
 			isLoading: boolean;
 			error: ZyncBaseError | null;
 		} | null>(null);
@@ -170,10 +176,21 @@ export function createZyncBaseReact<
 			let disposed = false;
 			let handle: SubscriptionHandle<S, C> | null = null;
 			client.store
-				.subscribe(collection, options as SubscribeOptions<S, C>, (rows) => {
-					if (disposed) return;
-					setState({ client, key, data: rows, isLoading: false, error: null });
-				})
+				.subscribe(
+					collection,
+					options as SubscribeOptions<S, C>,
+					(rows, { pending }) => {
+						if (disposed) return;
+						setState({
+							client,
+							key,
+							data: rows,
+							pending,
+							isLoading: false,
+							error: null,
+						});
+					},
+				)
 				.then((resolved) => {
 					if (disposed) {
 						void resolved.unsubscribe().catch(() => {});
@@ -182,12 +199,20 @@ export function createZyncBaseReact<
 					handle = resolved;
 					const seed = resolved.getSnapshot();
 					if (seed.length > 0) {
+						const pending = resolved.pendingIds;
 						setState((prev) =>
 							prev === null ||
 							prev.client !== client ||
 							prev.key !== key ||
 							prev.isLoading
-								? { client, key, data: seed, isLoading: false, error: null }
+								? {
+										client,
+										key,
+										data: seed,
+										pending,
+										isLoading: false,
+										error: null,
+									}
 								: prev,
 						);
 					}
@@ -198,6 +223,7 @@ export function createZyncBaseReact<
 						client,
 						key,
 						data: empty,
+						pending: NO_PENDING,
 						isLoading: false,
 						error: error as ZyncBaseError,
 					});
@@ -212,16 +238,22 @@ export function createZyncBaseReact<
 		}, [client, key]);
 
 		if (key === null) {
-			return { data: empty, isLoading: false, error: null };
+			return {
+				data: empty,
+				pending: NO_PENDING,
+				isLoading: false,
+				error: null,
+			};
 		}
 		if (state !== null && state.client === client && state.key === key) {
 			return {
 				data: state.data,
+				pending: state.pending,
 				isLoading: state.isLoading,
 				error: state.error,
 			};
 		}
-		return { data: empty, isLoading: true, error: null };
+		return { data: empty, pending: NO_PENDING, isLoading: true, error: null };
 	}
 
 	function useListen<Pth extends Parameters<Store<S>["listen"]>[0]>(
@@ -233,6 +265,7 @@ export function createZyncBaseReact<
 			client: Client;
 			key: string;
 			value: ListenValue<S, Pth>;
+			isPending: boolean;
 			isLoading: boolean;
 			error: ZyncBaseError | null;
 		} | null>(null);
@@ -242,9 +275,16 @@ export function createZyncBaseReact<
 			let disposed = false;
 			let handle: ListenHandle<S, Pth> | null = null;
 			client.store
-				.listen(path, (value) => {
+				.listen(path, (value, { pending }) => {
 					if (disposed) return;
-					setState({ client, key, value, isLoading: false, error: null });
+					setState({
+						client,
+						key,
+						value,
+						isPending: pending,
+						isLoading: false,
+						error: null,
+					});
 				})
 				.then((resolved) => {
 					if (disposed) {
@@ -254,12 +294,20 @@ export function createZyncBaseReact<
 					handle = resolved;
 					const seed = resolved.getSnapshot();
 					if (seed !== undefined) {
+						const isPending = resolved.isPending;
 						setState((prev) =>
 							prev === null ||
 							prev.client !== client ||
 							prev.key !== key ||
 							prev.isLoading
-								? { client, key, value: seed, isLoading: false, error: null }
+								? {
+										client,
+										key,
+										value: seed,
+										isPending,
+										isLoading: false,
+										error: null,
+									}
 								: prev,
 						);
 					}
@@ -270,6 +318,7 @@ export function createZyncBaseReact<
 						client,
 						key,
 						value: undefined as ListenValue<S, Pth>,
+						isPending: false,
 						isLoading: false,
 						error: error as ZyncBaseError,
 					});
@@ -286,12 +335,14 @@ export function createZyncBaseReact<
 		if (state !== null && state.client === client && state.key === key) {
 			return {
 				value: state.value,
+				isPending: state.isPending,
 				isLoading: state.isLoading,
 				error: state.error,
 			};
 		}
 		return {
 			value: undefined as ListenValue<S, Pth>,
+			isPending: false,
 			isLoading: true,
 			error: null,
 		};

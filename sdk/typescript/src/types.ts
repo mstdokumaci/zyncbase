@@ -337,15 +337,31 @@ type CollectionOfPath<S, P> = P extends readonly [
 		? C
 		: CollectionsOf<S>;
 
+/** Options every store write accepts. */
+export type WriteOptions = {
+	/**
+	 * Show the write in subscriptions and listens before it commits, marked
+	 * pending, and revert it if it fails. Default true; writes with `if` are
+	 * never shown early.
+	 */
+	optimistic?: boolean;
+};
+
 /** Options for conditional writes; `if` is checked against the stored row at commit. */
-export type ConditionalWriteOptions<S extends object = SchemaLike, P = Path> = {
+export type ConditionalWriteOptions<
+	S extends object = SchemaLike,
+	P = Path,
+> = WriteOptions & {
 	if?: IsLooseSchema<S> extends true
 		? QueryOptions["where"]
 		: TypedWhere<S, Extract<CollectionOfPath<S, P>, keyof S & string>>;
 };
 
 /** Options for atomic increments. */
-export type IncrementOptions<S extends object = SchemaLike, P = Path> = {
+export type IncrementOptions<
+	S extends object = SchemaLike,
+	P = Path,
+> = WriteOptions & {
 	if?: IsLooseSchema<S> extends true
 		? QueryOptions["where"]
 		: TypedWhere<S, Extract<CollectionOfPath<S, P>, keyof S & string>>;
@@ -390,6 +406,8 @@ export interface SubscriptionHandle<
 	hasMore: boolean;
 	/** Current sorted results; empty before the first delivery. */
 	getSnapshot: () => RowsOf<S, C>;
+	/** Ids of rows in the current results that show a write not yet committed. */
+	readonly pendingIds: ReadonlySet<string>;
 }
 
 /** Handle returned by `store.listen`. */
@@ -398,6 +416,20 @@ export interface ListenHandle<S extends object = SchemaLike, P = Path> {
 	unlisten: () => Promise<void>;
 	/** Last value delivered to callbacks for this path; `undefined` before the first. */
 	getSnapshot: () => GetValue<S, P>;
+	/** Whether the current value shows a write not yet committed. */
+	readonly isPending: boolean;
+}
+
+/** Second callback argument of `store.subscribe`. */
+export interface SubscriptionMeta {
+	/** Ids of delivered rows that show a write not yet committed. */
+	pending: ReadonlySet<string>;
+}
+
+/** Second callback argument of `store.listen`. */
+export interface ListenMeta {
+	/** Whether the delivered value shows a write not yet committed. */
+	pending: boolean;
 }
 
 // ─── Store interface ──────────────────────────────────────────────────────────
@@ -427,22 +459,24 @@ export interface Store<S extends object = SchemaLike> {
 	create<C extends CollectionsOf<S>>(
 		collection: C,
 		value: CreateValue<S, C>,
+		options?: WriteOptions,
 	): Promise<string>;
-	/** Get current value(s) in a one-off read. */
+	/** Get the committed value(s) in a one-off read; local pending writes are not applied. */
 	get<const P extends GetPath<S>>(path: P): Promise<GetValue<S, P>>;
 	/** Listen for changes at a path; resolves with a handle once the registration settles. */
 	listen<const P extends WritePath<S>>(
 		path: P,
-		callback: (value: GetValue<S, P>) => void,
+		callback: (value: GetValue<S, P>, meta: ListenMeta) => void,
 	): Promise<ListenHandle<S, P>>;
 	/** Subscribe to a collection with complex queries; resolves with its handle after server acknowledgement. */
 	subscribe<C extends CollectionsOf<S>>(
 		collection: C,
 		options: QueryOptionsFor<S, C>,
-		callback: (results: RowsOf<S, C>) => void,
+		callback: (results: RowsOf<S, C>, meta: SubscriptionMeta) => void,
 	): Promise<SubscriptionHandle<S, C>>;
 	/** Apply operations atomically. Resolves when the batch commits. */
-	batch(operations: BatchOperation[]): Promise<void>;
+	batch(operations: BatchOperation[], options?: WriteOptions): Promise<void>;
+	/** Query the committed rows once; local pending writes are not applied. */
 	query<C extends CollectionsOf<S>>(
 		collection: C,
 		options?: QueryOptionsFor<S, C>,

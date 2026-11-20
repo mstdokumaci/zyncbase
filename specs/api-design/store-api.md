@@ -4,15 +4,16 @@ The Store API handles durable, synchronized data. Everything in this namespace i
 
 Store methods require a ready store scope. `client.connect()` and `client.setStoreNamespace(namespace)` resolve only after the server has resolved the namespace and internal `users.id`. Data operations (`get`, `set`, `remove`, `increment`, `create`, `query`, `batch`) issued before that point fail with `SESSION_NOT_READY`. Subscription registrations (`listen`, `subscribe`) are the exception: they are queued and dispatched when the session becomes ready — see [Subscription Lifecycle](#subscription-lifecycle).
 
-Mutating methods (`set`, `remove`, `increment`, `create`, `batch`) resolve when the writer commits the write and reject on any failure (ADR-018). A read issued after a write resolves observes that write only if no later write to the same field has superseded it; when another client has committed a superseding write, the read returns the newer value ([ADR-010](../architecture/adrs.md#adr-010-conflict-resolution--last-write-wins)). Mutations do not optimistically update local subscription state; subscription callbacks are the authoritative source of committed observable state.
+Mutating methods (`set`, `remove`, `increment`, `create`, `batch`) resolve when the writer commits the write and reject on any failure (ADR-018). A read issued after a write resolves observes that write only if no later write to the same field has superseded it; when another client has committed a superseding write, the read returns the newer value ([ADR-010](../architecture/adrs.md#adr-010-conflict-resolution--last-write-wins)). Unless a write opts out, the client shows it in its own subscriptions and listens before it commits, marked pending, and reverts it if it fails ([Optimistic Writes](#optimistic-writes)). Subscription callbacks are the authoritative source of committed observable state.
 
 ## Table of Contents
 
 1.  [Direct Path Access](#direct-path-access-crud)
 2.  [Query API (Path Filtering)](#query-api-path-filtering)
 3.  [Batch Operations](#batch-operations)
-4.  [Subscription Lifecycle](#subscription-lifecycle)
-5.  [Path Syntax](#path-syntax-strings-vs-arrays)
+4.  [Optimistic Writes](#optimistic-writes)
+5.  [Subscription Lifecycle](#subscription-lifecycle)
+6.  [Path Syntax](#path-syntax-strings-vs-arrays)
 
 ---
 
@@ -28,7 +29,7 @@ There are strict rules on what you can write based on the depth of the path:
 | **Document** (`'users.u1'`) | `2` | `get`, `set`, `remove`, `listen` | **Full CRUD**. `set` upserts the document, `remove` deletes it. |
 | **Field** (`'users.u1.name'`) | `3` | `get`, `set`, `listen` | **Updates only**. To clear a field, `set` it to `null`. `remove` is forbidden. |
 
-### `store.create(collection, value)`
+### `store.create(collection, value, options?)`
 Creates a new document within a collection. The SDK generates a canonical lowercase UUIDv7 string and calls `set` under the hood.
 
 ```typescript
@@ -42,7 +43,7 @@ const id = await client.store.create('elements', { type: 'rect', x: 10 })
 Custom document IDs are also supported when supplied in the path directly, but they must match the strict short-ID grammar: `[a-z0-9_-]{1,24}`.
 
 ### `store.get(path)`
-Read a value from the state tree.
+Read a committed value from the state tree; the client's pending writes are not applied.
 ```typescript
 const element = client.store.get('elements.rect-1')
 ```
@@ -90,7 +91,7 @@ await client.store.set('accounts.a1.balance', 900, {
 
 **Outcome**: Resolves when the writer commits the write, including a no-op. Rejects with `ZyncBaseError` when the server refuses the write (`details.phase: "accept"`) or the writer rejects it (`details.phase: "write"`). If no outcome arrives within `writeTimeoutMs` (default 30 s), it rejects with `TIMEOUT`; the write may still commit.
 
-**State Propagation**: Local subscription data changes only when the server emits subscription updates. A resolved write promise is not a substitute for subscription state.
+**State Propagation**: The write shows in the client's own subscriptions and listens synchronously, marked pending, unless it has `if` or `optimistic: false` ([Optimistic Writes](#optimistic-writes)). Committed state arrives through subscription updates; once the promise resolves, the client's subscriptions show the committed value.
 
 **Error Handling**: Every failure rejects the promise and is also emitted on `client.on('error')`; an un-awaited write does not raise an unhandled rejection. Writes are never retried automatically. See [Error Handling](./error-handling.md#error-propagation). A failed `if` rejects with `PRECONDITION_FAILED` (`state`, non-retryable); the application may retry after re-reading.
 
@@ -140,8 +141,8 @@ await client.store.increment('accounts.a1.coins', -100, {
 ### `store.listen(path, callback)`
 Listen to real-time updates at a specific path.
 ```typescript
-const { unlisten, getSnapshot } = await client.store.listen('elements.rect-1', (element) => {
-  render(element)
+const { unlisten, getSnapshot } = await client.store.listen('elements.rect-1', (element, { pending }) => {
+  render(element, pending)
 })
 
 // Synchronous read of the current value — no round trip
@@ -153,10 +154,13 @@ const current = getSnapshot()
 - **Object** when listening to a document
 - **Scalar** when listening to a field
 
+The second argument is `{ pending: boolean }`: whether the value shows a write not committed yet ([Optimistic Writes](#optimistic-writes)).
+
 **Returns**: `Promise<ListenHandle>`:
 
 - `unlisten(): Promise<void>` — detaches this consumer; its callback stops firing immediately ([teardown contract](#teardown-and-the-grace-window)).
 - `getSnapshot(): JsonValue | undefined` — last value delivered to callbacks for this path ([snapshot contract](#snapshots)).
+- `isPending: boolean` — whether that value shows a write not committed yet.
 
 The callback delivers the initial value and each change to the observed value. For a field path, a delta that leaves the projected value deep-equal — for example a write to a sibling field of the listened document — is not delivered. Document-level listens deliver each updated record.
 
@@ -172,7 +176,7 @@ For filtering, sorting, and searching through data collections.
 - Filtered real-time subscriptions
 
 ### `store.query(collection, options)`
-Execute a one-off query (non-real-time).
+Execute a one-off query (non-real-time). Like `get`, it returns committed state only; the client's pending writes are not applied.
 
 ```typescript
 const users = await client.store.query('users', {
@@ -209,8 +213,8 @@ Subscribe to filtered query results (real-time).
 const { unsubscribe, loadMore, hasMore } = await client.store.subscribe('tasks', {
   where: { status: { eq: 'active' } },
   limit: 50
-}, (tasks) => {
-  renderTaskList(tasks)
+}, (tasks, { pending }) => {
+  renderTaskList(tasks, pending)
 })
 
 // Load older history into the live view
@@ -220,7 +224,7 @@ if (hasMore) await loadMore()
 **Parameters:**
 - `collection` (string) - Name of the collection to query
 - `options` (object) - Query options (same as `query()`)
-- `callback` (function) - Called when results change
+- `callback` (function) - Called when results change, with `{ pending }`: the ids of delivered rows that show a write not committed yet ([Optimistic Writes](#optimistic-writes))
 
 **Returns**: `Promise<SubscriptionHandle>`:
 
@@ -228,6 +232,7 @@ if (hasMore) await loadMore()
 - `loadMore(): Promise<void>` — appends the next page ([shared per key](#keyed-sharing)).
 - `hasMore: boolean` — whether more pages exist ([shared per key](#keyed-sharing)).
 - `getSnapshot(): JsonValue[]` — current sorted results ([snapshot contract](#snapshots)).
+- `pendingIds: ReadonlySet<string>` — ids of rows in those results that show a write not committed yet.
 
 Initial and subsequent results are delivered through the callback.
 
@@ -239,7 +244,7 @@ Initial and subsequent results are delivered through the callback.
 
 Perform multiple write operations (`set`, `remove`, and `increment`) atomically.
 
-### `store.batch(operations)`
+### `store.batch(operations, options?)`
 Performs all operations atomically.
 ```typescript
 await client.store.batch([
@@ -271,6 +276,32 @@ If the first operation's precondition fails, the whole batch rolls back and reje
 - Only `set`, `remove`, and `increment` are allowed.
 
 **Error Details**: Batch failures include `details.batchIndex` when the failing operation can be identified.
+
+---
+
+## Optimistic Writes
+
+A write shows in the issuing client's subscriptions and listens before it commits ([ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes-and-optimistic-local-state)). The callbacks fire synchronously inside the write call, so a controlled input sees its own value in the same handler.
+
+```typescript
+await client.store.subscribe('tasks', { where: { done: false } }, (tasks, { pending }) => {
+  render(tasks, pending) // pending: ids of rows that show an uncommitted write
+})
+
+void client.store.set('tasks.t1.done', true) // t1 leaves the view now, not on commit
+```
+
+`set`, `remove`, `increment`, `create`, and `batch` accept `optimistic?: boolean` (default `true`).
+
+- **Pending marker**: subscription callbacks receive `{ pending }`, the ids of delivered rows that show an uncommitted write; listen callbacks receive `{ pending: boolean }`. Handles expose the same as `pendingIds` and `isPending`. A change to the marker alone is also delivered.
+- **Commit**: the row shows the committed value and leaves the pending set in one delivery.
+- **Failure**: any failure (accept phase, write phase, timeout, disconnect) reverts the row to its committed value before the promise rejects. A batch reverts as a whole.
+- **Membership**: a pending row is in a filtered view exactly when its local value matches the view's `where` under the server's [matching rules](./query-language.md), at its sorted position. A `create` appears in every matching view. `limit` does not bound pending rows, just as it does not bound live deltas.
+- **Shown only when known**: a `set` or `increment` on a document no subscription or listen of this client holds waits for the server, because the document's other fields are unknown.
+- **Never shown early**: writes with `if` and batches containing one, writes with `optimistic: false`, and writes issued while the session is not ready or a namespace switch is in flight.
+- **Scope**: a disconnect or a store namespace switch drops every pending write.
+- **Read rules** run on the server only. A local create that a view's read rule hides shows until it commits, then disappears.
+- `get` and `query` return committed state only.
 
 ---
 

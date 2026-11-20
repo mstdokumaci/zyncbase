@@ -20,6 +20,7 @@ import { run as runComboStress } from "./test-combo-stress";
 import { run as runConditional } from "./test-conditional";
 import { run as runCrash } from "./test-crash";
 import { run as runErrors } from "./test-errors";
+import { run as runFilterConformance } from "./test-filter-conformance";
 import { run as runFilters } from "./test-filters";
 import { run as runMigrations } from "./test-migrations";
 import { run as runObservability } from "./test-observability";
@@ -134,6 +135,22 @@ describe("ZyncBase E2E", () => {
 				async ({ port }) => {
 					await runFilters(port);
 					await runSorting(port);
+				},
+			);
+		});
+	});
+
+	test("server filter matching agrees with the SDK evaluator", async () => {
+		await runE2ETest("Filter conformance", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-filter-conformance.json"),
+					dataDir: ctx.dataPath("filter-conformance"),
+					configName: "zyncbase-config-filter-conformance.json",
+				},
+				async ({ port }) => {
+					await runFilterConformance(port);
 				},
 			);
 		});

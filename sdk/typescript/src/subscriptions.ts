@@ -1,3 +1,5 @@
+import type { RecordMatcher } from "./filter_eval.js";
+import { type OverlayKeys, PendingWrites } from "./optimistic.js";
 import { fieldPathToFlat, getDeepProperty, unflatten } from "./path.js";
 import type { JsonValue, StoreDelta, StoreSubscribe } from "./types.js";
 
@@ -11,33 +13,55 @@ export interface ListenProjection {
 
 /** Client-side materialized view for store.subscribe() registrations. */
 export interface MaterializedView {
-	/** Current records keyed by document id. Values are unflattened. */
+	/** Server records keyed by document id. Values are unflattened. */
 	records: Map<string, JsonValue>;
 	/** Total-order comparator applied to every snapshot. Never null. */
 	comparator: (a: JsonValue, b: JsonValue) => number;
+	/** The view's `where`; decides membership of locally overlaid records. */
+	matches: RecordMatcher;
 }
+
+/** Second argument of every subscription and listen callback. */
+export interface DeliveryMeta {
+	/** Views: ids of delivered rows with a pending local write. Listens: whether the document has one. */
+	pending: ReadonlySet<string> | boolean;
+}
+
+export type DeliveryCallback = (value: JsonValue, meta: DeliveryMeta) => void;
 
 /** A single registered subscription entry. */
 export interface SubscriptionEntry {
 	/** Original StoreSubscribe params — used for replay on reconnect. */
 	params: Omit<StoreSubscribe, "id">;
+	/** Collection the entry reads. */
+	collection: string;
 	/** Registered callbacks to invoke when a delta arrives. */
-	callbacks: Array<(value: JsonValue) => void>;
+	callbacks: DeliveryCallback[];
 	/** Projection info; null for store.subscribe (collection-level) registrations. */
 	projection: ListenProjection | null;
 	/** Optional materialized view for collection-level subscriptions. */
 	materializedView?: MaterializedView;
+	/** Listen only: the watched document id. */
+	docId?: string;
+	/** Listen only: the latest server record; null when the document is absent. */
+	serverRecord?: JsonValue;
 	/** Updates the caller's handle when a reconnect remaps the server subId. */
 	onRemap?: (newSubId: number) => void;
 	/** Private suppression baseline: an isolated copy of the last value. */
 	lastValue?: JsonValue;
 	/** Last value delivered to callbacks — what `getSnapshot()` returns. */
 	deliveredValue?: JsonValue;
+	/** Pending marker delivered with `deliveredValue`. */
+	deliveredPending?: ReadonlySet<string> | boolean;
 }
+
+export const NO_PENDING: ReadonlySet<string> = new Set();
 
 // ─── SubscriptionTracker ─────────────────────────────────────────────────────
 
 export class SubscriptionTracker {
+	/** Local writes shown before they commit. */
+	readonly pending = new PendingWrites();
 	private readonly subscriptions = new Map<number, SubscriptionEntry>();
 	private readonly deltaQueue: StoreDelta[] = [];
 	private pendingDeltas: StoreDelta[] = [];
@@ -48,6 +72,8 @@ export class SubscriptionTracker {
 	private flushScheduled = false;
 	private connected = true;
 	private debug = false;
+	/** Latest `updated_at` seen or issued, in microseconds. */
+	private clock = 0;
 
 	setDebug(debug: boolean): void {
 		this.debug = debug;
@@ -93,6 +119,15 @@ export class SubscriptionTracker {
 	 */
 	setDisconnected(): void {
 		this.connected = false;
+	}
+
+	/**
+	 * A timestamp for a local write: after every server timestamp seen, so a
+	 * local create sorts last in the default order, as it will on the server.
+	 */
+	provisionalTime(): number {
+		this.clock = Math.max(Date.now() * 1000, this.clock + 1);
+		return this.clock;
 	}
 
 	/**
@@ -170,6 +205,23 @@ export class SubscriptionTracker {
 	}
 
 	/**
+	 * Re-deliver the views and listens that show any of `keys` after a local
+	 * write is added or settles. Views update incrementally: only the
+	 * changed rows move, by binary insertion.
+	 */
+	refresh(keys: OverlayKeys): void {
+		for (const entry of this.subscriptions.values()) {
+			const ids = keys.get(entry.collection);
+			if (ids === undefined) continue;
+			if (entry.materializedView) {
+				this._refreshView(entry, ids);
+			} else if (entry.docId !== undefined && ids.has(entry.docId)) {
+				this._refreshListen(entry);
+			}
+		}
+	}
+
+	/**
 	 * Apply all pending deltas (per subscription, in arrival order) and
 	 * invoke each subscription's callbacks once with the current snapshot.
 	 */
@@ -210,17 +262,7 @@ export class SubscriptionTracker {
 			changed =
 				this._applyOpsToView(entry.materializedView, delta.ops) || changed;
 		}
-		if (!changed) return;
-		const value = this._snapshotView(entry.materializedView);
-		entry.lastValue = value;
-		entry.deliveredValue = value;
-		for (const cb of entry.callbacks) {
-			try {
-				cb(value);
-			} catch (err) {
-				console.error("[SDK] Subscription callback threw:", err);
-			}
-		}
+		if (changed) this._deliverSnapshot(entry);
 	}
 
 	dispatchInitialSnapshot(
@@ -233,25 +275,19 @@ export class SubscriptionTracker {
 			this.dispatch(delta);
 			return;
 		}
+		const entry = this.subscriptions.get(subId);
+		if (entry === undefined) return;
+		if (!entry.materializedView) {
+			// The listened document does not exist; a local create can still show.
+			entry.serverRecord = null;
+			this._refreshListen(entry);
+			return;
+		}
 		// An acknowledged empty collection (value: []) produces no ops. Deliver
 		// the empty snapshot so subscribers leave their loading state; the
 		// deliveredValue guard keeps an empty loadMore page from re-delivering
-		// an existing view. Listen entries keep their no-initial-delivery path:
-		// their ack value is a records array, not the projected value.
-		const entry = this.subscriptions.get(subId);
-		if (!entry?.materializedView || entry.deliveredValue !== undefined) {
-			return;
-		}
-		const snapshot = this._snapshotView(entry.materializedView);
-		entry.lastValue = snapshot;
-		entry.deliveredValue = snapshot;
-		for (const cb of entry.callbacks) {
-			try {
-				cb(snapshot);
-			} catch (err) {
-				console.error("[SDK] Subscription callback threw:", err);
-			}
-		}
+		// an existing view.
+		if (entry.deliveredValue === undefined) this._deliverSnapshot(entry);
 	}
 
 	/**
@@ -331,12 +367,14 @@ export class SubscriptionTracker {
 				// suppressed like a duplicate empty loadMore page.
 				entry.lastValue = undefined;
 				entry.deliveredValue = undefined;
+				entry.deliveredPending = undefined;
 			}
 		}
 	}
 
 	// ─── Private helpers ────────────────────────────────────────────────────────
 
+	/** Listen deltas: the latest server record, with local writes applied. */
 	private _dispatchDelta(delta: StoreDelta): void {
 		const entry = this.subscriptions.get(delta.subId);
 		if (!entry) {
@@ -344,14 +382,10 @@ export class SubscriptionTracker {
 			return;
 		}
 
-		let value: JsonValue;
-
-		if (entry.materializedView) {
-			this._applyOpsToView(entry.materializedView, delta.ops);
-			value = this._snapshotView(entry.materializedView);
-		} else {
-			value = this._project(delta, entry.projection);
-		}
+		entry.serverRecord = this._reconstructRecord(delta.ops);
+		this._observeTime(entry.serverRecord);
+		const pending = this._listenPending(entry);
+		const value = this._listenValue(entry, pending);
 
 		// Field projections extract one value out of each whole pushed record;
 		// sibling or system-field writes must not re-fire them. Scalars compare
@@ -360,6 +394,7 @@ export class SubscriptionTracker {
 		if (
 			entry.projection?.field != null &&
 			entry.lastValue !== undefined &&
+			pending === entry.deliveredPending &&
 			valuesEqual(value, entry.lastValue)
 		) {
 			return;
@@ -371,43 +406,63 @@ export class SubscriptionTracker {
 				JSON.stringify(value),
 			);
 		}
+		this._deliver(entry, value, pending);
+	}
 
+	private _refreshListen(entry: SubscriptionEntry): void {
+		if (entry.serverRecord === undefined) return;
+		const pending = this._listenPending(entry);
+		const value = this._listenValue(entry, pending);
+		const unchanged =
+			entry.deliveredValue === undefined
+				? value === null
+				: pending === entry.deliveredPending &&
+					valuesEqual(value, entry.lastValue as JsonValue);
+		if (!unchanged) this._deliver(entry, value, pending);
+	}
+
+	private _listenPending(entry: SubscriptionEntry): boolean {
+		return (
+			entry.docId !== undefined &&
+			this.pending.has(entry.collection, entry.docId)
+		);
+	}
+
+	private _listenValue(entry: SubscriptionEntry, pending: boolean): JsonValue {
+		const server = entry.serverRecord ?? null;
+		const record = pending
+			? this.pending.apply(entry.collection, entry.docId as string, server)
+			: server;
+		const field = entry.projection?.field;
+		if (field == null) return record;
+		return getDeepProperty(record, field.split(".")) ?? null;
+	}
+
+	private _deliverSnapshot(entry: SubscriptionEntry): void {
+		const { rows, pending } = this._snapshotView(entry);
+		this._deliver(entry, rows, pending);
+	}
+
+	/** Deliver `value` with its pending marker to every callback of `entry`. */
+	private _deliver(
+		entry: SubscriptionEntry,
+		value: JsonValue,
+		pending: ReadonlySet<string> | boolean,
+	): void {
 		// Suppression compares against lastValue; keep an isolated copy so a
 		// callback mutating the delivered value cannot corrupt the baseline.
 		entry.lastValue =
 			entry.projection?.field != null ? cloneValue(value) : value;
 		entry.deliveredValue = value;
+		entry.deliveredPending = pending;
+		const meta: DeliveryMeta = { pending };
 		for (const cb of entry.callbacks) {
 			try {
-				cb(value);
+				cb(value, meta);
 			} catch (err) {
 				console.error("[SDK] Subscription callback threw:", err);
 			}
 		}
-	}
-
-	/**
-	 * Apply SDK-side field projection for store.listen registrations.
-	 */
-	private _project(
-		delta: StoreDelta,
-		projection: ListenProjection | null,
-	): JsonValue {
-		if (projection === null) {
-			// Fallback — should not normally be reached with materialized view in place
-			return delta.ops;
-		}
-
-		const record = this._reconstructRecord(delta.ops);
-
-		if (projection.field === null) {
-			// Document-level listen — return the unflattened record
-			return record;
-		}
-
-		// Depth 3+ — extract the specific nested field
-		const field = getDeepProperty(record, projection.field.split("."));
-		return field !== undefined ? field : null;
 	}
 
 	private _applyRecordOp(
@@ -447,6 +502,7 @@ export class SubscriptionTracker {
 			const id = op.path[1] as string;
 			if (op.op === "set") {
 				view.records.set(id, op.value);
+				this._observeTime(op.value);
 				changed = true;
 			} else if (view.records.delete(id)) {
 				changed = true;
@@ -455,14 +511,157 @@ export class SubscriptionTracker {
 		return changed;
 	}
 
-	/**
-	 * Snapshot array from the view; always sorted by the view's comparator.
-	 */
-	private _snapshotView(view: MaterializedView): JsonValue[] {
-		const records = Array.from(view.records.values());
-		records.sort(view.comparator);
-		return records;
+	private _observeTime(record: JsonValue | undefined): void {
+		const time = isPlainRecord(record) ? record.updated_at : undefined;
+		if (typeof time === "number" && time > this.clock) this.clock = time;
 	}
+
+	/**
+	 * Every row of the view, local writes applied, sorted by its comparator,
+	 * with the ids of rows that have a pending local write.
+	 */
+	private _snapshotView(entry: SubscriptionEntry): {
+		rows: JsonValue[];
+		pending: ReadonlySet<string>;
+	} {
+		const view = entry.materializedView as MaterializedView;
+		if (!this.pending.touches(entry.collection)) {
+			const rows = Array.from(view.records.values());
+			rows.sort(view.comparator);
+			return { rows, pending: NO_PENDING };
+		}
+		const rows: JsonValue[] = [];
+		const pending = new Set<string>();
+		const add = (id: string, row: JsonValue | null): void => {
+			if (row === null) return;
+			rows.push(row);
+			if (this.pending.has(entry.collection, id)) pending.add(id);
+		};
+		for (const [id, record] of view.records) {
+			add(
+				id,
+				this.pending.has(entry.collection, id)
+					? this._viewRow(entry, id)
+					: record,
+			);
+		}
+		for (const id of this.pending.ids(entry.collection)) {
+			if (!view.records.has(id)) add(id, this._viewRow(entry, id));
+		}
+		rows.sort(view.comparator);
+		return { rows, pending: pending.size === 0 ? NO_PENDING : pending };
+	}
+
+	/** Incremental local update: move only the rows of `ids`. */
+	private _refreshView(
+		entry: SubscriptionEntry,
+		ids: ReadonlySet<string>,
+	): void {
+		const view = entry.materializedView as MaterializedView;
+		const current = entry.deliveredValue as JsonValue[] | undefined;
+		if (current === undefined) return;
+		const before = (entry.deliveredPending ??
+			NO_PENDING) as ReadonlySet<string>;
+		let rows: JsonValue[] | null = null;
+		let pending: Set<string> | null = null;
+		for (const id of ids) {
+			const next = this._viewRow(entry, id);
+			rows = withRow(current, rows, view.comparator, id, next);
+			const isPending = next !== null && this.pending.has(entry.collection, id);
+			if (isPending !== before.has(id)) {
+				pending = toggle(pending ?? new Set(before), id, isPending);
+			}
+		}
+		if (rows !== null || pending !== null) {
+			this._deliver(entry, rows ?? current, pending ?? before);
+		}
+	}
+
+	/**
+	 * The row `id` shows in a view, or null when it shows none: the server
+	 * record, or with pending local writes the overlaid record if it still
+	 * matches the view's `where`.
+	 */
+	private _viewRow(entry: SubscriptionEntry, id: string): JsonValue | null {
+		const view = entry.materializedView as MaterializedView;
+		const record = view.records.get(id);
+		if (!this.pending.has(entry.collection, id)) return record ?? null;
+		const base = record ?? this._serverRecord(entry.collection, id);
+		const value = this.pending.apply(entry.collection, id, base);
+		return value !== null && view.matches(value) ? value : null;
+	}
+
+	/** The server record of a document any view or listen holds, else null. */
+	private _serverRecord(collection: string, id: string): JsonValue | null {
+		for (const entry of this.subscriptions.values()) {
+			if (entry.collection !== collection) continue;
+			const record = entry.materializedView
+				? entry.materializedView.records.get(id)
+				: entry.docId === id
+					? entry.serverRecord
+					: undefined;
+			if (record != null) return record;
+		}
+		return null;
+	}
+}
+
+/**
+ * The delivered rows with the row of `id` set to `next` (null: none). The
+ * first change copies `current`, which consumers already hold; `rows` is
+ * that copy, or null while nothing changed.
+ */
+function withRow(
+	current: JsonValue[],
+	rows: JsonValue[] | null,
+	comparator: (a: JsonValue, b: JsonValue) => number,
+	id: string,
+	next: JsonValue | null,
+): JsonValue[] | null {
+	const list = rows ?? current;
+	const at = indexOfId(list, id);
+	if ((at === -1 ? null : list[at]) === next) return rows;
+	const copy = rows ?? current.slice();
+	placeRow(copy, comparator, at, next);
+	return copy;
+}
+
+function indexOfId(rows: JsonValue[], id: string): number {
+	for (let i = 0; i < rows.length; i += 1) {
+		if ((rows[i] as Record<string, JsonValue>).id === id) return i;
+	}
+	return -1;
+}
+
+/** Replace, remove or binary-insert the row at `at` (-1: none) in sorted `rows`. */
+function placeRow(
+	rows: JsonValue[],
+	comparator: (a: JsonValue, b: JsonValue) => number,
+	at: number,
+	next: JsonValue | null,
+): void {
+	if (at !== -1) {
+		if (next !== null && comparator(rows[at], next) === 0) {
+			rows[at] = next;
+			return;
+		}
+		rows.splice(at, 1);
+	}
+	if (next === null) return;
+	let low = 0;
+	let high = rows.length;
+	while (low < high) {
+		const mid = (low + high) >>> 1;
+		if (comparator(rows[mid], next) > 0) high = mid;
+		else low = mid + 1;
+	}
+	rows.splice(low, 0, next);
+}
+
+function toggle(set: Set<string>, id: string, on: boolean): Set<string> {
+	if (on) set.add(id);
+	else set.delete(id);
+	return set;
 }
 
 /** Deep equality where arrays and bytes are whole values. */

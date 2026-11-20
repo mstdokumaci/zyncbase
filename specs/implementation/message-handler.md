@@ -1,6 +1,6 @@
 # Message Handler
 
-**Drivers**: [Wire Protocol](./wire-protocol.md), [Threading](./threading.md), [Memory Strategy](./memory-strategy.md), [Error Taxonomy](./error-taxonomy.md), [ADR-015](../architecture/adrs.md#adr-015-scoped-session-management), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes)
+**Drivers**: [Wire Protocol](./wire-protocol.md), [Threading](./threading.md), [Memory Strategy](./memory-strategy.md), [Error Taxonomy](./error-taxonomy.md), [ADR-015](../architecture/adrs.md#adr-015-scoped-session-management), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes-and-optimistic-local-state)
 
 `MessageHandler` is the WebSocket request router. It decodes the envelope, enforces connection-local limits, gates operations on scoped session readiness, dispatches to store/presence/subscription/auth services, and encodes either an immediate response or an error.
 
