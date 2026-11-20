@@ -17,16 +17,14 @@ export async function run(ctx: E2ETestContext): Promise<void> {
 		const client = new ZyncBaseClient(`ws://127.0.0.1:${port}`);
 		await client.connect();
 		try {
-			await client.store.set(
-				["persistence", "before"],
-				{ status: "before", timestamp: 1 },
-				{ confirm: "committed" },
-			);
-			await client.store.set(
-				["persistence", "after"],
-				{ status: "after", timestamp: 2 },
-				{ confirm: "committed" },
-			);
+			await client.store.set(["persistence", "before"], {
+				status: "before",
+				timestamp: 1,
+			});
+			await client.store.set(["persistence", "after"], {
+				status: "after",
+				timestamp: 2,
+			});
 
 			expectOk(
 				runCli(["backup", backupPath, "--config", configPath]),
@@ -53,11 +51,10 @@ export async function run(ctx: E2ETestContext): Promise<void> {
 			}
 
 			// Written after the snapshot; must not survive the restore.
-			await client.store.set(
-				["persistence", "newer"],
-				{ status: "newer", timestamp: 3 },
-				{ confirm: "committed" },
-			);
+			await client.store.set(["persistence", "newer"], {
+				status: "newer",
+				timestamp: 3,
+			});
 		} finally {
 			client.close();
 		}

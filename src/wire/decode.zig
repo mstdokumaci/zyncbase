@@ -170,9 +170,9 @@ inline fn assignField(
 const FieldKind = enum { str, u64, bool, payload };
 
 const Field = struct {
-    key: []const u8, // wire-format name, e.g. "writeId"
+    key: []const u8, // wire-format name, e.g. "if"
     kind: FieldKind,
-    field: []const u8, // result-struct field name, e.g. "write_id"
+    field: []const u8, // result-struct field name, e.g. "if_predicate"
     required: bool,
 };
 
@@ -358,99 +358,37 @@ pub fn extractStoreLoadMoreFast(bytes: []const u8) !StoreLoadMoreRequest {
     return extractMap(StoreLoadMoreRequest, &store_load_more_table, bytes, undefined);
 }
 
-// === Write Acknowledgment Decoding ===
-
-pub const WriteId = [16]u8;
-
-pub fn decodeWriteAck(confirm_str: ?[]const u8, write_id_str: ?[]const u8) !?WriteId {
-    const confirm_val = confirm_str orelse {
-        // No confirm field — a writeId without confirm is a client bug.
-        if (write_id_str != null) return error.InvalidWriteAck;
-        return null;
-    };
-    if (!std.mem.eql(u8, confirm_val, "committed")) {
-        // "accepted" (or any other value) with a writeId is a client bug: the
-        // writeId would never be resolved, causing a silent hang on the client.
-        // Reject early so the client gets an immediate error instead.
-        if (write_id_str != null) return error.InvalidWriteAck;
-        return null;
-    }
-    // confirm == "committed": writeId is required and must be valid.
-    const wid_str = write_id_str orelse return error.InvalidWriteAck;
-    if (wid_str.len != 32) return error.InvalidWriteAck;
-    // SAFETY: hexToBytes writes all 16 bytes on success; on error we return immediately.
-    var write_id: WriteId = undefined;
-    _ = std.fmt.hexToBytes(&write_id, wid_str) catch return error.InvalidWriteAck;
-    return write_id;
-}
-
 // === Subtree Payload Extractors (for Group B handlers that need Payload) ===
 
 pub const StorePathPayloads = struct {
     path: Payload,
     value: ?Payload,
     if_predicate: ?Payload = null,
-    write_id: ?WriteId = null,
-};
-
-const StorePathRawFields = struct {
-    path: Payload,
-    value: ?Payload,
-    if_predicate: ?Payload = null,
-    confirm: ?[]const u8 = null,
-    write_id: ?[]const u8 = null,
 };
 
 const store_path_table = [_]Field{
     .{ .key = "path", .kind = .payload, .field = "path", .required = true },
     .{ .key = "value", .kind = .payload, .field = "value", .required = false },
     .{ .key = "if", .kind = .payload, .field = "if_predicate", .required = false },
-    .{ .key = "confirm", .kind = .str, .field = "confirm", .required = false },
-    .{ .key = "writeId", .kind = .str, .field = "write_id", .required = false },
 };
 
 pub fn extractStorePathPayloads(bytes: []const u8, allocator: std.mem.Allocator) !StorePathPayloads {
-    const raw = try extractMap(StorePathRawFields, &store_path_table, bytes, allocator);
-    errdefer {
-        raw.path.free(allocator);
-        if (raw.value) |v| v.free(allocator);
-        if (raw.if_predicate) |v| v.free(allocator);
-    }
-    return .{
-        .path = raw.path,
-        .value = raw.value,
-        .if_predicate = raw.if_predicate,
-        .write_id = try decodeWriteAck(raw.confirm, raw.write_id),
-    };
+    return extractMap(StorePathPayloads, &store_path_table, bytes, allocator);
 }
 
 pub const StoreBatchPayloads = struct {
     ops: Payload,
-    write_id: ?WriteId = null,
-};
-
-const StoreBatchRawFields = struct {
-    ops: Payload,
-    confirm: ?[]const u8 = null,
-    write_id: ?[]const u8 = null,
 };
 
 const store_batch_table = [_]Field{
     .{ .key = "ops", .kind = .payload, .field = "ops", .required = true },
-    .{ .key = "confirm", .kind = .str, .field = "confirm", .required = false },
-    .{ .key = "writeId", .kind = .str, .field = "write_id", .required = false },
 };
 
 pub fn extractStoreBatchPayloads(
     bytes: []const u8,
     allocator: std.mem.Allocator,
 ) !StoreBatchPayloads {
-    const raw = try extractMap(StoreBatchRawFields, &store_batch_table, bytes, allocator);
-    errdefer raw.ops.free(allocator);
-    return .{
-        .ops = raw.ops,
-        .write_id = try decodeWriteAck(raw.confirm, raw.write_id),
-    };
+    return extractMap(StoreBatchPayloads, &store_batch_table, bytes, allocator);
 }
 
 const AuthRefreshResult = struct { token: []const u8 };

@@ -86,11 +86,11 @@ export async function run(ctx: E2ETestContext): Promise<void> {
 				["c", 9],
 			];
 			for (const [id, priority] of rows) {
-				await client.store.set(
-					["tasks", id],
-					{ title: `task ${id}`, priority, assignee: "ann" },
-					{ confirm: "committed" },
-				);
+				await client.store.set(["tasks", id], {
+					title: `task ${id}`,
+					priority,
+					assignee: "ann",
+				});
 			}
 		} finally {
 			client.close();

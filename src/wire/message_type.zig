@@ -22,8 +22,8 @@ pub const MessageType = enum(u8) {
     store_unsubscribe = 0x16, // C->S stop a live query
     store_load_more = 0x17, // C->S page an active query
     store_delta = 0x18, // S->C push committed subscription changes
-    write_committed = 0x19, // S->C confirm a tracked write
-    write_error = 0x1a, // S->C fail a tracked write
+    write_committed = 0x19, // S->C confirm a committed write
+    write_error = 0x1a, // S->C fail a write
 
     // Presence (0x2x)
     presence_set_namespace = 0x20, // C->S establish presence scope

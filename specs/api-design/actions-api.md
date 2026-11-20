@@ -81,7 +81,7 @@ An action's operational mode is determined directly by the presence or absence o
 | **Peer Visibility** | Private (Delivered to worker only) | Private (Delivered to caller only) |
 
 > [!IMPORTANT]
-> Sync actions are **orchestration, not transaction management**. Single-document compare-and-set and atomic integer increments are available through the store (`if` and `store.increment`, ADR-023), but a multi-step action is not a transaction and a returned value is a claim — not committed state. Use `confirm: "committed"` for store writes whose outcome matters, use `if`/`increment` for per-document invariants, and never auto-retry a call whose first attempt may have executed.
+> Sync actions are **orchestration, not transaction management**. Single-document compare-and-set and atomic integer increments are available through the store (`if` and `store.increment`, ADR-023), but a multi-step action is not a transaction and a returned value is a claim — not committed state. Await store writes before replying so the reply follows the commit, use `if`/`increment` for per-document invariants, and never auto-retry a call whose first attempt may have executed.
 
 ---
 
@@ -219,7 +219,7 @@ await server.actions.handle('checkout', async (ctx, params) => {
 - Round-robin provides no sticky routing: handlers must be stateless across invocations or share state explicitly.
 
 > [!WARNING]
-> The `checkout` handler is safe for a single-document counter because `store.increment` + `if` is one atomic statement. It is still **not** a multi-step transaction: a handler that reads other documents, decides, and writes across them can interleave with another handler. Use a confirmed batch with per-op `if` for multi-document compare-and-set, or serialize that logic through a single worker. The returned `remaining_coins` is a post-commit read, not the value produced by this handler's write.
+> The `checkout` handler is safe for a single-document counter because `store.increment` + `if` is one atomic statement. It is still **not** a multi-step transaction: a handler that reads other documents, decides, and writes across them can interleave with another handler. Use a batch with per-op `if` for multi-document compare-and-set, or serialize that logic through a single worker. The returned `remaining_coins` is a post-commit read, not the value produced by this handler's write.
 
 ---
 

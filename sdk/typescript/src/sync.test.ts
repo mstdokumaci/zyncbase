@@ -4,7 +4,6 @@ import { ZyncBaseError } from "./errors";
 import { type StoreConnection, StoreImpl } from "./store";
 import { SubscriptionTracker } from "./subscriptions";
 import type {
-	InboundMessage,
 	JsonValue,
 	LifecycleEvent,
 	OkResponse,
@@ -22,7 +21,9 @@ function makeConn(
 ): MockConn {
 	return {
 		dispatch: mock(dispatchFn),
-		onMessage: (_handler: (msg: InboundMessage) => void) => {},
+		dispatchWrite: async (msg) => {
+			await dispatchFn(msg);
+		},
 		on: (_event: LifecycleEvent, _handler: (...args: unknown[]) => void) => {},
 		onDelta: onDeltaFn,
 	};

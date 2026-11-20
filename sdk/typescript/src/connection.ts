@@ -25,7 +25,6 @@ import type {
 } from "./types.js";
 
 type EventHandler = (...args: unknown[]) => void;
-type MessageHandler = (msg: InboundMessage) => void;
 type DeltaHandler = (delta: StoreDelta) => void;
 type PresenceBroadcastHandler = (
 	msg:
@@ -96,6 +95,26 @@ function resolveLivenessOptions(
 	return { enabled, intervalMs, timeoutMs };
 }
 
+function resolveWriteTimeoutMs(value: number | undefined): number {
+	const timeoutMs = value ?? 30_000;
+	if (
+		!Number.isSafeInteger(timeoutMs) ||
+		timeoutMs < 1 ||
+		timeoutMs > MAX_TIMER_DELAY_MS
+	) {
+		throw new RangeError(
+			"writeTimeoutMs must be an integer from 1 to 2147483647",
+		);
+	}
+	return timeoutMs;
+}
+
+const WRITE_TYPES: ReadonlySet<string> = new Set([
+	"StoreSet",
+	"StoreRemove",
+	"StoreBatch",
+]);
+
 export class ConnectionManager {
 	private readonly options: ClientOptions;
 	private readonly wire = new ConnectionWireCodec();
@@ -109,7 +128,6 @@ export class ConnectionManager {
 	>();
 	private readonly eventListeners = new Map<LifecycleEvent, EventHandler[]>();
 
-	private messageHandler: MessageHandler | null = null;
 	private deltaHandler: DeltaHandler | null = null;
 	private presenceBroadcastHandler: PresenceBroadcastHandler | null = null;
 	private presenceUserIdHandler: ((userId: string) => void) | null = null;
@@ -133,6 +151,7 @@ export class ConnectionManager {
 	private readonly livenessEnabled: boolean;
 	private readonly livenessIntervalMs: number;
 	private readonly livenessTimeoutMs: number;
+	private readonly writeTimeoutMs: number;
 	private livenessTimer: ReturnType<typeof setTimeout> | null = null;
 	private livenessPingId: number | null = null;
 	private pendingDisconnectError: ZyncBaseError | null = null;
@@ -144,6 +163,7 @@ export class ConnectionManager {
 		this.livenessEnabled = liveness.enabled;
 		this.livenessIntervalMs = liveness.intervalMs;
 		this.livenessTimeoutMs = liveness.timeoutMs;
+		this.writeTimeoutMs = resolveWriteTimeoutMs(options.writeTimeoutMs);
 		this.storeNamespace = options.storeNamespace ?? "public";
 		this.presenceNamespace = options.presenceNamespace ?? this.storeNamespace;
 	}
@@ -399,6 +419,15 @@ export class ConnectionManager {
 		return this.sendRequest(msg).result;
 	}
 
+	/**
+	 * Dispatch a store write. Resolves on WriteCommitted and rejects on any
+	 * failure or after `writeTimeoutMs`. Never retried: a retry could reorder
+	 * it relative to later writes.
+	 */
+	async dispatchWrite(msg: OutboundRequest): Promise<void> {
+		await this.sendRequest(msg, undefined, this.writeTimeoutMs).result;
+	}
+
 	/** Encode a one-way outbound message (ActionReply). The request id is unused. */
 	encodeOutbound(msg: OutboundRequest): Uint8Array {
 		return this.wire.encode(msg, 0).bytes;
@@ -407,6 +436,7 @@ export class ConnectionManager {
 	private sendRequest(
 		msg: OutboundRequest,
 		responseTableIndex?: number,
+		timeoutMs?: number,
 	): {
 		id: number;
 		result: Promise<OkResponse>;
@@ -422,7 +452,7 @@ export class ConnectionManager {
 			);
 		}
 
-		const result = this.pending.register(id, encoded.context);
+		const result = this.pending.register(id, encoded.context, timeoutMs);
 		const isNamespaceSetup =
 			msg.type === "StoreSetNamespace" || msg.type === "PresenceSetNamespace";
 		if (!isNamespaceSetup && this.currentStatus !== "connected") {
@@ -494,10 +524,6 @@ export class ConnectionManager {
 		return this.dispatch({ type: "AuthRefresh" as const, token }).then(
 			() => {},
 		);
-	}
-
-	onMessage(handler: MessageHandler): void {
-		this.messageHandler = handler;
 	}
 
 	onDelta(handler: DeltaHandler): void {
@@ -742,6 +768,27 @@ export class ConnectionManager {
 			case "StoreDelta":
 				this.handleDeltaPush(msg);
 				break;
+			case "WriteCommitted":
+				// Before resolve: liveness only re-arms for ids still pending.
+				this.noteCorrelatedResponse(msg.id);
+				this.pending.resolve(msg.id, { type: "ok", id: msg.id });
+				break;
+			case "WriteError":
+				this.noteCorrelatedResponse(msg.id);
+				this.pending.reject(
+					msg.id,
+					ZyncBaseError.fromServerResponse({
+						code: msg.code,
+						message: msg.message,
+						details: {
+							phase: msg.phase,
+							...(msg.batchIndex !== undefined
+								? { batchIndex: msg.batchIndex }
+								: {}),
+						},
+					}),
+				);
+				break;
 			case "PresenceBroadcast":
 			case "SharedStateBroadcast":
 				this.presenceBroadcastHandler?.(msg);
@@ -750,8 +797,6 @@ export class ConnectionManager {
 				this.actionForwardHandler?.(msg);
 				break;
 		}
-
-		this.messageHandler?.(msg);
 	}
 
 	private handleOkResponse(ok: OkResponse): boolean {
@@ -777,7 +822,13 @@ export class ConnectionManager {
 			this.noteCorrelatedResponse(err.id);
 			return true;
 		}
-		if (this.pending.reject(err.id, errorResponseToError(err))) {
+		const error = errorResponseToError(err);
+		const context = this.pending.context(err.id);
+		if (context && WRITE_TYPES.has(context.type)) {
+			// The server refused the write before it reached the writer.
+			error.details = { ...error.details, phase: "accept" };
+		}
+		if (this.pending.reject(err.id, error)) {
 			this.noteCorrelatedResponse(err.id);
 		}
 		return false;

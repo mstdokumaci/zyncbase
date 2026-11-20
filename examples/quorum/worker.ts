@@ -295,9 +295,7 @@ export async function startWorker(options: {
 		}
 		for (let index = 0; index < operations.length; index += 400) {
 			try {
-				await client.store.batch(operations.slice(index, index + 400), {
-					confirm: "committed",
-				});
+				await client.store.batch(operations.slice(index, index + 400));
 			} catch (error) {
 				// A concurrent start/join may have created the same rows.
 				if (!isUnique(error)) throw error;
@@ -512,7 +510,7 @@ export async function startWorker(options: {
 		if (demoData) operations.push(...demoData.operations);
 
 		try {
-			await client.store.batch(operations, { confirm: "committed" });
+			await client.store.batch(operations);
 		} catch (error) {
 			if (isUnique(error)) {
 				throw new ActionError("ROOM_EXISTS", "That room code is taken");
@@ -563,41 +561,38 @@ export async function startWorker(options: {
 		const name = cleanName(params.name);
 		const memberId = client.utils.id();
 		try {
-			await client.store.batch(
-				[
-					{
-						op: "set",
-						path: [MEMBER_COLLECTION, memberId],
-						value: {
-							room_code: code,
-							user_id: actor,
-							presence_id: presence,
-							name,
-							color: colorForIndex(room.members_count),
-							role: "member",
-						},
+			await client.store.batch([
+				{
+					op: "set",
+					path: [MEMBER_COLLECTION, memberId],
+					value: {
+						room_code: code,
+						user_id: actor,
+						presence_id: presence,
+						name,
+						color: colorForIndex(room.members_count),
+						role: "member",
 					},
-					{
-						op: "set",
-						path: [BUDGET_COLLECTION, memberId],
-						value: {
-							room_code: code,
-							user_id: actor,
-							votes_left: room.vote_budget,
-						},
+				},
+				{
+					op: "set",
+					path: [BUDGET_COLLECTION, memberId],
+					value: {
+						room_code: code,
+						user_id: actor,
+						votes_left: room.vote_budget,
 					},
-					{
-						op: "increment",
-						path: [ROOM_COLLECTION, room.id, "members_count"],
-						by: 1,
-						if: {
-							members_count: { lt: room.max_members },
-							phase: { in: ["collect", "vote"] },
-						},
+				},
+				{
+					op: "increment",
+					path: [ROOM_COLLECTION, room.id, "members_count"],
+					by: 1,
+					if: {
+						members_count: { lt: room.max_members },
+						phase: { in: ["collect", "vote"] },
 					},
-				],
-				{ confirm: "committed" },
-			);
+				},
+			]);
 		} catch (error) {
 			if (isUnique(error)) {
 				const raced = await memberByUser(code, actor);
@@ -664,25 +659,22 @@ export async function startWorker(options: {
 		const text = cleanCard(params.text);
 		const cardId = client.utils.id();
 		try {
-			await client.store.batch(
-				[
-					{
-						op: "set",
-						path: [CARD_COLLECTION, cardId],
-						value: { room_code: code, round: room.round, lane, text },
+			await client.store.batch([
+				{
+					op: "set",
+					path: [CARD_COLLECTION, cardId],
+					value: { room_code: code, round: room.round, lane, text },
+				},
+				{
+					op: "increment",
+					path: [ROOM_COLLECTION, room.id, "cards_count"],
+					by: 1,
+					if: {
+						phase: { eq: "collect" },
+						cards_count: { lt: room.max_cards },
 					},
-					{
-						op: "increment",
-						path: [ROOM_COLLECTION, room.id, "cards_count"],
-						by: 1,
-						if: {
-							phase: { eq: "collect" },
-							cards_count: { lt: room.max_cards },
-						},
-					},
-				],
-				{ confirm: "committed" },
-			);
+				},
+			]);
 		} catch (error) {
 			if (isPrecondition(error)) {
 				const fresh = await roomByCode(code);
@@ -713,25 +705,22 @@ export async function startWorker(options: {
 			);
 		}
 		try {
-			await client.store.batch(
-				[
-					{
-						op: "remove",
-						path: [CARD_COLLECTION, card.id],
-						if: { room_code: { eq: code } },
+			await client.store.batch([
+				{
+					op: "remove",
+					path: [CARD_COLLECTION, card.id],
+					if: { room_code: { eq: code } },
+				},
+				{
+					op: "increment",
+					path: [ROOM_COLLECTION, room.id, "cards_count"],
+					by: -1,
+					if: {
+						phase: { eq: "collect" },
+						cards_count: { gte: 1 },
 					},
-					{
-						op: "increment",
-						path: [ROOM_COLLECTION, room.id, "cards_count"],
-						by: -1,
-						if: {
-							phase: { eq: "collect" },
-							cards_count: { gte: 1 },
-						},
-					},
-				],
-				{ confirm: "committed" },
-			);
+				},
+			]);
 		} catch (error) {
 			if (isPrecondition(error)) {
 				const fresh = await roomByCode(code);
@@ -765,27 +754,24 @@ export async function startWorker(options: {
 		const now = Date.now();
 		const endsAt = now + clampDuration(params.duration_ms);
 		try {
-			await client.store.batch(
-				[
-					{
-						op: "set",
-						path: [ROOM_COLLECTION, room.id, "vote_started_at"],
-						value: now,
-					},
-					{
-						op: "set",
-						path: [ROOM_COLLECTION, room.id, "vote_ends_at"],
-						value: endsAt,
-					},
-					{
-						op: "set",
-						path: [ROOM_COLLECTION, room.id, "phase"],
-						value: "vote",
-						if: { phase: { eq: "collect" }, cards_count: { gt: 0 } },
-					},
-				],
-				{ confirm: "committed" },
-			);
+			await client.store.batch([
+				{
+					op: "set",
+					path: [ROOM_COLLECTION, room.id, "vote_started_at"],
+					value: now,
+				},
+				{
+					op: "set",
+					path: [ROOM_COLLECTION, room.id, "vote_ends_at"],
+					value: endsAt,
+				},
+				{
+					op: "set",
+					path: [ROOM_COLLECTION, room.id, "phase"],
+					value: "vote",
+					if: { phase: { eq: "collect" }, cards_count: { gt: 0 } },
+				},
+			]);
 		} catch (error) {
 			if (isPrecondition(error)) {
 				const fresh = await roomByCode(code);
@@ -812,7 +798,6 @@ export async function startWorker(options: {
 					[ROOM_COLLECTION, room.id, "vote_ends_at"],
 					endsAt,
 					{
-						confirm: "committed",
 						if: { phase: { eq: "vote" }, vote_ends_at: { eq: observed } },
 					},
 				);
@@ -853,17 +838,13 @@ export async function startWorker(options: {
 			const ballotId = client.utils.id();
 			let created = false;
 			try {
-				await client.store.set(
-					[BALLOT_COLLECTION, ballotId],
-					{
-						room_code: code,
-						round: room.round,
-						user_id: actor,
-						card_id: cardId,
-						count: 0,
-					},
-					{ confirm: "committed" },
-				);
+				await client.store.set([BALLOT_COLLECTION, ballotId], {
+					room_code: code,
+					round: room.round,
+					user_id: actor,
+					card_id: cardId,
+					count: 0,
+				});
 				created = true;
 			} catch (error) {
 				if (!isUnique(error)) {
@@ -892,35 +873,32 @@ export async function startWorker(options: {
 		}
 
 		try {
-			await client.store.batch(
-				[
-					{
-						op: "increment",
-						path: [BALLOT_COLLECTION, ballot.id, "count"],
-						by: 1,
-						if: { count: { lt: room.max_per_card } },
-					},
-					{
-						op: "increment",
-						path: [BUDGET_COLLECTION, budget.id, "votes_left"],
-						by: -1,
-						if: { votes_left: { gte: 1 } },
-					},
-					{
-						op: "increment",
-						path: [ROOM_COLLECTION, room.id, "votes_cast"],
-						by: 1,
-						if: { phase: { eq: "vote" } },
-					},
-					{
-						op: "increment",
-						path: [ROOM_COLLECTION, room.id, "votes_version"],
-						by: 1,
-						if: { phase: { eq: "vote" } },
-					},
-				],
-				{ confirm: "committed" },
-			);
+			await client.store.batch([
+				{
+					op: "increment",
+					path: [BALLOT_COLLECTION, ballot.id, "count"],
+					by: 1,
+					if: { count: { lt: room.max_per_card } },
+				},
+				{
+					op: "increment",
+					path: [BUDGET_COLLECTION, budget.id, "votes_left"],
+					by: -1,
+					if: { votes_left: { gte: 1 } },
+				},
+				{
+					op: "increment",
+					path: [ROOM_COLLECTION, room.id, "votes_cast"],
+					by: 1,
+					if: { phase: { eq: "vote" } },
+				},
+				{
+					op: "increment",
+					path: [ROOM_COLLECTION, room.id, "votes_version"],
+					by: 1,
+					if: { phase: { eq: "vote" } },
+				},
+			]);
 		} catch (error) {
 			if (isPrecondition(error)) {
 				const fresh = await roomByCode(code);
@@ -957,34 +935,31 @@ export async function startWorker(options: {
 			throw new ActionError("NO_VOTE", "You have not voted for that idea");
 		}
 		try {
-			await client.store.batch(
-				[
-					{
-						op: "increment",
-						path: [BALLOT_COLLECTION, ballot.id, "count"],
-						by: -1,
-						if: { count: { gte: 1 } },
-					},
-					{
-						op: "increment",
-						path: [BUDGET_COLLECTION, budget.id, "votes_left"],
-						by: 1,
-					},
-					{
-						op: "increment",
-						path: [ROOM_COLLECTION, room.id, "votes_cast"],
-						by: -1,
-						if: { phase: { eq: "vote" }, votes_cast: { gte: 1 } },
-					},
-					{
-						op: "increment",
-						path: [ROOM_COLLECTION, room.id, "votes_version"],
-						by: 1,
-						if: { phase: { eq: "vote" } },
-					},
-				],
-				{ confirm: "committed" },
-			);
+			await client.store.batch([
+				{
+					op: "increment",
+					path: [BALLOT_COLLECTION, ballot.id, "count"],
+					by: -1,
+					if: { count: { gte: 1 } },
+				},
+				{
+					op: "increment",
+					path: [BUDGET_COLLECTION, budget.id, "votes_left"],
+					by: 1,
+				},
+				{
+					op: "increment",
+					path: [ROOM_COLLECTION, room.id, "votes_cast"],
+					by: -1,
+					if: { phase: { eq: "vote" }, votes_cast: { gte: 1 } },
+				},
+				{
+					op: "increment",
+					path: [ROOM_COLLECTION, room.id, "votes_version"],
+					by: 1,
+					if: { phase: { eq: "vote" } },
+				},
+			]);
 		} catch (error) {
 			if (isPrecondition(error)) {
 				const fresh = await roomByCode(code);
@@ -1095,7 +1070,7 @@ export async function startWorker(options: {
 				})),
 			];
 			try {
-				await client.store.batch(resultOperations, { confirm: "committed" });
+				await client.store.batch(resultOperations);
 				return { closed: true, results_count: ranked.length };
 			} catch (error) {
 				if (isPrecondition(error)) continue;
@@ -1117,22 +1092,19 @@ export async function startWorker(options: {
 		const results = await allResults(code, room.round);
 		const focus = results[0]?.card_id ?? "";
 		try {
-			await client.store.batch(
-				[
-					{
-						op: "set",
-						path: [ROOM_COLLECTION, room.id, "focus_card_id"],
-						value: focus,
-					},
-					{
-						op: "set",
-						path: [ROOM_COLLECTION, room.id, "phase"],
-						value: "discuss",
-						if: { phase: { eq: "results" } },
-					},
-				],
-				{ confirm: "committed" },
-			);
+			await client.store.batch([
+				{
+					op: "set",
+					path: [ROOM_COLLECTION, room.id, "focus_card_id"],
+					value: focus,
+				},
+				{
+					op: "set",
+					path: [ROOM_COLLECTION, room.id, "phase"],
+					value: "discuss",
+					if: { phase: { eq: "results" } },
+				},
+			]);
 		} catch (error) {
 			if (isPrecondition(error)) {
 				const fresh = await roomByCode(code);
@@ -1164,7 +1136,7 @@ export async function startWorker(options: {
 			await client.store.set(
 				[ROOM_COLLECTION, room.id, "focus_card_id"],
 				cardId,
-				{ confirm: "committed", if: { phase: { eq: "discuss" } } },
+				{ if: { phase: { eq: "discuss" } } },
 			);
 		} catch (error) {
 			if (isPrecondition(error)) {
@@ -1186,28 +1158,25 @@ export async function startWorker(options: {
 		const text = cleanCard(params.text);
 		const decisionId = client.utils.id();
 		try {
-			await client.store.batch(
-				[
-					{
-						op: "set",
-						path: [DECISION_COLLECTION, decisionId],
-						value: {
-							room_code: code,
-							round: room.round,
-							card_id: room.focus_card_id ?? "",
-							text,
-							author_name: member.name,
-						},
+			await client.store.batch([
+				{
+					op: "set",
+					path: [DECISION_COLLECTION, decisionId],
+					value: {
+						room_code: code,
+						round: room.round,
+						card_id: room.focus_card_id ?? "",
+						text,
+						author_name: member.name,
 					},
-					{
-						op: "increment",
-						path: [ROOM_COLLECTION, room.id, "decisions_count"],
-						by: 1,
-						if: { phase: { eq: "discuss" } },
-					},
-				],
-				{ confirm: "committed" },
-			);
+				},
+				{
+					op: "increment",
+					path: [ROOM_COLLECTION, room.id, "decisions_count"],
+					by: 1,
+					if: { phase: { eq: "discuss" } },
+				},
+			]);
 		} catch (error) {
 			if (isPrecondition(error)) {
 				const fresh = await roomByCode(code);
@@ -1225,7 +1194,6 @@ export async function startWorker(options: {
 		requireHost(room, ctx);
 		try {
 			await client.store.set([ROOM_COLLECTION, room.id, "phase"], "closed", {
-				confirm: "committed",
 				if: { phase: { in: ["results", "discuss"] } },
 			});
 		} catch (error) {

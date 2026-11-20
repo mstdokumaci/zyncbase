@@ -603,10 +603,7 @@ async function publish(forceRosters = false) {
 	// uncommitted operations instead of silently dropping them.
 	const started = performance.now();
 	try {
-		await runPublishBatches(
-			(batch) => client.store.batch(batch, { confirm: "committed" }),
-			operations,
-		);
+		await runPublishBatches((batch) => client.store.batch(batch), operations);
 	} catch (error) {
 		restorePublishState(world, snapshot);
 		if (bulkAtPublish) world.bulkCapturePending = true;
@@ -699,10 +696,7 @@ async function wipeWorldRows(
 		...meta.map((row) => ({ op: "remove" as const, path: ["meta", row.id] })),
 	];
 	if (!operations.length) return;
-	await runPublishBatches(
-		(batch) => client.store.batch(batch, { confirm: "committed" }),
-		operations,
-	);
+	await runPublishBatches((batch) => client.store.batch(batch), operations);
 }
 
 function startRound(number: number) {
@@ -838,7 +832,7 @@ try {
 	// Coordinates are live state: rows from a previous process never survive.
 	if (userChunks.length)
 		await runPublishBatches(
-			(batch) => client.store.batch(batch, { confirm: "committed" }),
+			(batch) => client.store.batch(batch),
 			userChunks.map((row) => ({
 				op: "remove" as const,
 				path: ["user_chunks", row.id],

@@ -245,7 +245,7 @@ async function commitBatch(
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		await Promise.race([
-			client.store.batch(operations, { confirm: "committed" }),
+			client.store.batch(operations),
 			new Promise<never>((_, reject) => {
 				timer = setTimeout(
 					() =>

@@ -1,6 +1,6 @@
 # Message Handler
 
-**Drivers**: [Wire Protocol](./wire-protocol.md), [Threading](./threading.md), [Memory Strategy](./memory-strategy.md), [Error Taxonomy](./error-taxonomy.md), [ADR-015](../architecture/adrs.md#adr-015-scoped-session-management), [ADR-018](../architecture/adrs.md#adr-018-mutation-acknowledgement-and-consistency-semantics)
+**Drivers**: [Wire Protocol](./wire-protocol.md), [Threading](./threading.md), [Memory Strategy](./memory-strategy.md), [Error Taxonomy](./error-taxonomy.md), [ADR-015](../architecture/adrs.md#adr-015-scoped-session-management), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes)
 
 `MessageHandler` is the WebSocket request router. It decodes the envelope, enforces connection-local limits, gates operations on scoped session readiness, dispatches to store/presence/subscription/auth services, and encodes either an immediate response or an error.
 
@@ -10,7 +10,7 @@
 |------|----------------|
 | `src/message_handler.zig` | Main request lifecycle, routing, scoped session gates, rate-limit enforcement, and response/error send path. |
 | `src/wire/decode.zig` | Zero/low-allocation envelope and payload extractors for supported message types. |
-| `src/wire/encode.zig` | Success, query, schema sync, write acknowledgement, presence, and error encoders. |
+| `src/wire/encode.zig` | Success, query, schema sync, write outcome, presence, and error encoders. |
 | `src/connection/state.zig` | Per-connection state, direct uWS send behavior, scoped session fields, and subscription ownership. |
 | `src/connection/request_context.zig` | `RequestContext` (per-request snapshot of connection identity/scope), shared `Scope`, and the unset-namespace sentinel. |
 | `src/authorization/session_resolver.zig` | Background namespace/user resolution completion and stale-result protection. |
@@ -44,7 +44,7 @@ Before ordinary request rate limiting or arena acquisition, `MessageHandler` att
 4. Convert the envelope `type` ID to `MessageType` via `std.enums.fromInt`; unknown or server-only IDs return `error.UnknownMessageType` → `INVALID_MESSAGE_TYPE`.
 5. Route to the store, auth, presence, or action handler with an exhaustive `switch` over `MessageType` (adding a registry member is a compile-time routing decision).
 6. Send an immediate response when the route completes synchronously.
-7. Return `null` for asynchronous read, subscribe, load-more, presence, or scope-resolution paths; the relevant worker later sends the response if the connection state is still current. Action paths settle as follows:
+7. Return `null` for store writes and for asynchronous read, subscribe, load-more, presence, or scope-resolution paths; the relevant worker later sends the response if the connection state is still current. Action paths settle as follows:
    - Async `ActionCall` answers immediately with `0x00 OK` once admitted to the forward path; it has no deferred response.
    - Sync `ActionCall` records a pending entry and answers only when the worker's `ActionReply` resolves it, or fails it with `ACTION_TIMEOUT` / `WORKER_DISCONNECTED` / `REQUEST_SUPERSEDED`.
    - `ActionRegister` completes on the event loop and answers immediately.
@@ -81,7 +81,7 @@ Before ordinary request rate limiting or arena acquisition, `MessageHandler` att
 - Public codes and retry categories are owned by [Error Taxonomy](./error-taxonomy.md).
 - Message format and parser-limit failures are recorded in `ConnectionViolationTracker`.
 - Repeated security-sensitive violations close the WebSocket instead of allowing unbounded error responses.
-- Write operations that request committed acknowledgement complete through `WriteCommitted` or `WriteError` pushes after the immediate request phase. The writer thread encodes the outcome after the transaction commits or rejects, pushes owned bytes to `SendQueue`, and wakes the event loop.
+- Store writes (`StoreSet`, `StoreRemove`, `StoreBatch`) get no `ok`. They complete through `WriteCommitted` or `WriteError` pushes correlated by request `id`; an accept-phase failure gets an `error` response instead. An empty `StoreBatch` commits nothing, so the handler answers it with `WriteCommitted` directly. The writer thread encodes the outcome after the transaction commits or rejects, pushes owned bytes to `SendQueue`, and wakes the event loop.
 
 ## Error Propagation
 
@@ -94,11 +94,11 @@ Errors flow through four distinct paths depending on when they occur:
 3. `wire.encodeError()` builds the MessagePack error response with the request `id`.
 4. `conn.send()` delivers the response; uWS backpressure is accepted/buffered, while a dropped send closes the connection.
 
-### Asynchronous Write Errors
+### Asynchronous Write Outcomes
 
-1. Event loop enqueues the write operation with `conn_id` and `write_id`.
+1. Event loop enqueues the write operation with its `WriteAck` (`conn_id` and request `msg_id`) and sends no immediate response.
 2. Writer thread commits or rejects the transaction after durable ordering is known.
-3. Writer encodes `WriteCommitted` (success) or `WriteError` (failure) with the original `write_id` and optional `batch_index`.
+3. Writer encodes `WriteCommitted` (success) or `WriteError` (failure) with the request `msg_id` as `id` and optional `batch_index`.
 4. Writer pushes owned encoded bytes to `SendQueue` and wakes the event loop.
 5. The event loop drains `SendQueue` and delivers the encoded push to the origin connection via `Connection.send()`.
 

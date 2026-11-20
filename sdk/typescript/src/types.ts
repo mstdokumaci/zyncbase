@@ -207,10 +207,6 @@ export interface ClientEvents {
 /** Lifecycle events emitted by the Connection Manager. */
 export type LifecycleEvent = keyof ClientEvents;
 
-export interface WriteOptions {
-	confirm?: "accepted" | "committed";
-}
-
 // ─── Client configuration ────────────────────────────────────────────────────
 
 export type AuthConfig =
@@ -238,6 +234,7 @@ export interface ClientOptions {
 		intervalMs?: number; // default: 15_000; minimum: 1_000
 		timeoutMs?: number; // default: 10_000; range: 1..2_147_483_647
 	};
+	writeTimeoutMs?: number; // default: 30_000; range: 1..2_147_483_647 — reject a write whose outcome has not arrived
 	retryRateLimits?: boolean; // default: true — auto-retry RATE_LIMITED
 	retryServerErrors?: boolean; // default: true — auto-retry INTERNAL_ERROR, ENGINE_UNHEALTHY
 	maxServerRetries?: number; // default: 3 — max attempts for server errors
@@ -340,17 +337,14 @@ type CollectionOfPath<S, P> = P extends readonly [
 		? C
 		: CollectionsOf<S>;
 
-/** Options for conditional writes; `if` requires committed confirmation. */
-export type ConditionalWriteOptions<
-	S extends object = SchemaLike,
-	P = Path,
-> = WriteOptions & {
+/** Options for conditional writes; `if` is checked against the stored row at commit. */
+export type ConditionalWriteOptions<S extends object = SchemaLike, P = Path> = {
 	if?: IsLooseSchema<S> extends true
 		? QueryOptions["where"]
 		: TypedWhere<S, Extract<CollectionOfPath<S, P>, keyof S & string>>;
 };
 
-/** Options for atomic increments; increments always commit and cannot be un-confirmed. */
+/** Options for atomic increments. */
 export type IncrementOptions<S extends object = SchemaLike, P = Path> = {
 	if?: IsLooseSchema<S> extends true
 		? QueryOptions["where"]
@@ -409,19 +403,19 @@ export interface ListenHandle<S extends object = SchemaLike, P = Path> {
 // ─── Store interface ──────────────────────────────────────────────────────────
 
 export interface Store<S extends object = SchemaLike> {
-	/** Set a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
+	/** Set a value at a specific path. Resolves when the write commits. */
 	set<const P extends WritePath<S>>(
 		path: P,
 		value: SetValue<S, P>,
 		options?: ConditionalWriteOptions<S, P>,
 	): Promise<void>;
-	/** Remove a value at a specific path. Returns a Promise that resolves when the server acknowledges. */
+	/** Remove a value at a specific path. Resolves when the write commits. */
 	remove<const P extends DocumentPath<S>>(
 		path: P,
 		options?: ConditionalWriteOptions<S, P>,
 	): Promise<void>;
 	/**
-	 * Atomically add `by` to an integer field. Always waits for commit.
+	 * Atomically add `by` to an integer field. Resolves when the write commits.
 	 * Use `if` to make the update conditional on the current row.
 	 */
 	increment<const P extends WritePath<S>>(
@@ -429,11 +423,10 @@ export interface Store<S extends object = SchemaLike> {
 		by: number,
 		options?: IncrementOptions<S, P>,
 	): Promise<void>;
-	/** Create a new document in a collection with an auto-generated UUIDv7. Returns a Promise of the ID. */
+	/** Create a document with an auto-generated UUIDv7. Resolves with the ID when the write commits. */
 	create<C extends CollectionsOf<S>>(
 		collection: C,
 		value: CreateValue<S, C>,
-		options?: WriteOptions,
 	): Promise<string>;
 	/** Get current value(s) in a one-off read. */
 	get<const P extends GetPath<S>>(path: P): Promise<GetValue<S, P>>;
@@ -448,8 +441,8 @@ export interface Store<S extends object = SchemaLike> {
 		options: QueryOptionsFor<S, C>,
 		callback: (results: RowsOf<S, C>) => void,
 	): Promise<SubscriptionHandle<S, C>>;
-	// Batch — async
-	batch(operations: BatchOperation[], options?: WriteOptions): Promise<void>;
+	/** Apply operations atomically. Resolves when the batch commits. */
+	batch(operations: BatchOperation[]): Promise<void>;
 	query<C extends CollectionsOf<S>>(
 		collection: C,
 		options?: QueryOptionsFor<S, C>,
@@ -485,8 +478,6 @@ export interface StoreSet {
 	path: string[];
 	value: JsonValue;
 	if?: IfWire;
-	confirm?: "accepted" | "committed";
-	writeId?: string;
 }
 
 export interface StoreRemove {
@@ -494,8 +485,6 @@ export interface StoreRemove {
 	id: number;
 	path: string[];
 	if?: IfWire;
-	confirm?: "accepted" | "committed";
-	writeId?: string;
 }
 
 /**
@@ -512,8 +501,6 @@ export interface StoreBatch {
 		| ["r", string[], IfWire?]
 		| ["i", string[], string, number, IfWire?]
 	)[];
-	confirm?: "accepted" | "committed";
-	writeId?: string;
 }
 
 export interface StoreSetNamespace {
@@ -728,14 +715,16 @@ export interface SchemaSync {
 	actionFlags?: number[];
 }
 
+/** A write committed; `id` is the write's request id. */
 export interface WriteCommitted {
 	type: "WriteCommitted";
-	writeId: string;
+	id: number;
 }
 
+/** A write failed in the writer; `id` is the write's request id. */
 export interface WriteError {
 	type: "WriteError";
-	writeId: string;
+	id: number;
 	code: string;
 	message: string;
 	/** Always "write" — async writer-thread failures. Accept-phase failures are synchronous request errors. */

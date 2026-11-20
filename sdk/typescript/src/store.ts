@@ -28,7 +28,6 @@ import {
 import type {
 	BatchOperation,
 	ConditionalWriteOptions,
-	InboundMessage,
 	IncrementOptions,
 	JsonValue,
 	LifecycleEvent,
@@ -38,7 +37,6 @@ import type {
 	QueryOptions,
 	StoreSubscribe,
 	SubscriptionHandle,
-	WriteOptions,
 } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
 
@@ -65,8 +63,7 @@ export interface StoreConnection {
 		msg: OutboundRequest,
 		responseTableIndex?: number,
 	): Promise<OkResponse>;
-	dispatchNoRetry?(msg: OutboundRequest): Promise<OkResponse>;
-	onMessage(handler: (msg: InboundMessage) => void): void;
+	dispatchWrite(msg: OutboundRequest): Promise<void>;
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
 	readonly schemaDictionary: SchemaDictionary;
 }
@@ -125,10 +122,6 @@ interface SortEntry {
 }
 
 export class StoreImpl {
-	private readonly inFlightWrites = new Map<
-		string,
-		{ resolve: () => void; reject: (err: Error) => void }
-	>();
 	/** Keyed shared subscriptions, canonical key → live state. */
 	private readonly keys = new Map<string, RegistrationKey>();
 	/** Registrations whose promises have not settled yet. */
@@ -146,85 +139,50 @@ export class StoreImpl {
 		private readonly tracker: SubscriptionTracker,
 		private readonly emitError: (err: ZyncBaseError) => void = () => {},
 	) {
-		this.conn.onMessage((msg) => this.handleInboundMessage(msg));
-		this.conn.on("disconnected", () => {
-			this.markNotReady();
-			this.rejectAllInFlight();
-		});
-		this.conn.on("reconnecting", () => this.rejectAllInFlight());
+		this.conn.on("disconnected", () => this.markNotReady());
 	}
 
-	async set(
+	set(
 		path: Path,
 		value: JsonValue,
 		options?: ConditionalWriteOptions,
 	): Promise<void> {
-		const command = buildSet(path, value, options);
-		await this.dispatchWrite(
-			command.message,
-			command.message.writeId,
-			options,
+		return this.write(
+			() => buildSet(path, value, options).message,
 			"Set failed",
 		);
 	}
 
-	async remove(path: Path, options?: ConditionalWriteOptions): Promise<void> {
-		const command = buildRemove(path, options);
-		await this.dispatchWrite(
-			command.message,
-			command.message.writeId,
-			options,
+	remove(path: Path, options?: ConditionalWriteOptions): Promise<void> {
+		return this.write(
+			() => buildRemove(path, options).message,
 			"Remove failed",
 		);
 	}
 
-	async increment(
-		path: Path,
-		by: number,
-		options?: IncrementOptions,
-	): Promise<void> {
-		const message = buildBatch(
-			[
-				{
-					op: "increment",
-					path,
-					by,
-					...(options?.if ? { if: options.if } : {}),
-				},
-			],
-			{ confirm: "committed" },
-		);
-		await this.dispatchWrite(
-			message,
-			message.writeId,
-			{ confirm: "committed" },
+	increment(path: Path, by: number, options?: IncrementOptions): Promise<void> {
+		return this.write(
+			() =>
+				buildBatch([
+					{
+						op: "increment",
+						path,
+						by,
+						...(options?.if ? { if: options.if } : {}),
+					},
+				]),
 			"Increment failed",
-			true,
 		);
 	}
 
-	async create(
-		collection: string,
-		value: JsonValue,
-		options?: WriteOptions,
-	): Promise<string> {
-		this.validateRequiredFields(collection, value);
-		if (options && "if" in options) {
-			throw new ZyncBaseError("store.create does not support 'if'", {
-				code: ErrorCodes.INVALID_MESSAGE,
-				category: "client",
-				retryable: false,
-			});
-		}
+	create(collection: string, value: JsonValue): Promise<string> {
 		const id = generateUUIDv7();
-		const command = buildCreate(collection, value, id, options);
-		await this.dispatchWrite(
-			command.message,
-			command.message.writeId,
-			options,
-			"Create failed",
-		);
-		return id;
+		const result = this.write(() => {
+			this.validateRequiredFields(collection, value);
+			return buildCreate(collection, value, id).message;
+		}, "Create failed").then(() => id);
+		result.catch(() => {}); // see write()
+		return result;
 	}
 
 	async get(path: Path): Promise<JsonValue | null | undefined> {
@@ -250,12 +208,8 @@ export class StoreImpl {
 		}
 	}
 
-	async batch(
-		operations: BatchOperation[],
-		options?: WriteOptions,
-	): Promise<void> {
-		const message = buildBatch(operations, options);
-		await this.dispatchWrite(message, message.writeId, options, "Batch failed");
+	batch(operations: BatchOperation[]): Promise<void> {
+		return this.write(() => buildBatch(operations), "Batch failed");
 	}
 
 	listen(
@@ -756,53 +710,27 @@ export class StoreImpl {
 			compareRecords(entries, a, b);
 	}
 
-	private async dispatchWrite(
-		message: OutboundRequest,
-		writeId: string | undefined,
-		options: WriteOptions | undefined,
+	/**
+	 * Build and send a write synchronously, so writes and reads issued
+	 * back-to-back reach the server in call order. Failures emit on('error');
+	 * the returned promise is marked handled so un-awaited writes do not raise
+	 * unhandled rejections.
+	 */
+	private write(
+		build: () => OutboundRequest,
 		fallbackMessage: string,
-		noRetry = false,
 	): Promise<void> {
-		if (options?.confirm === "committed") {
-			if (!writeId) {
-				throw new ZyncBaseError(
-					"writeId is required for committed confirmation",
-					{
-						code: ErrorCodes.INVALID_MESSAGE,
-						category: "client",
-						retryable: false,
-					},
-				);
-			}
-			let commitResolve: () => void = () => {};
-			let commitReject: (err: Error) => void = () => {};
-			const commitPromise = new Promise<void>((resolve, reject) => {
-				commitResolve = resolve;
-				commitReject = reject;
-			});
-			this.inFlightWrites.set(writeId, {
-				resolve: commitResolve,
-				reject: commitReject,
-			});
-			try {
-				const noRetryDispatch = this.conn.dispatchNoRetry?.bind(this.conn);
-				if (noRetry && noRetryDispatch) {
-					await noRetryDispatch(message);
-				} else {
-					await this.conn.dispatch(message);
-				}
-			} catch (err) {
-				this.inFlightWrites.delete(writeId);
-				this.emitAndThrow(err, fallbackMessage);
-			}
-			try {
-				await commitPromise;
-			} catch (err) {
-				this.emitAndThrow(err, fallbackMessage);
-			}
-		} else {
-			await this.dispatchVoid(message, fallbackMessage);
+		let sent: Promise<void>;
+		try {
+			sent = this.conn.dispatchWrite(build());
+		} catch (err) {
+			sent = Promise.reject(err);
 		}
+		const result = sent.catch((err: unknown) =>
+			this.emitAndThrow(err, fallbackMessage),
+		);
+		result.catch(() => {});
+		return result;
 	}
 
 	private async dispatchVoid(
@@ -818,22 +746,6 @@ export class StoreImpl {
 
 	private async dispatchUnsubscribe(subId: number): Promise<void> {
 		await this.dispatchVoid(buildUnsubscribe(subId), "Unsubscribe failed");
-	}
-
-	private rejectAllInFlight(): void {
-		if (this.inFlightWrites.size === 0) return;
-		const err = new ZyncBaseError(
-			"Connection closed before write was confirmed",
-			{
-				code: ErrorCodes.CONNECTION_FAILED,
-				category: "network",
-				retryable: true,
-			},
-		);
-		for (const pending of this.inFlightWrites.values()) {
-			pending.reject(err);
-		}
-		this.inFlightWrites.clear();
 	}
 
 	private validateRequiredFields(collection: string, value: JsonValue): void {
@@ -885,31 +797,6 @@ export class StoreImpl {
 			}
 		}
 		return missing;
-	}
-
-	private handleInboundMessage(msg: InboundMessage): void {
-		if (msg.type === "WriteCommitted") {
-			const pending = this.inFlightWrites.get(msg.writeId);
-			if (pending) {
-				pending.resolve();
-				this.inFlightWrites.delete(msg.writeId);
-			}
-		} else if (msg.type === "WriteError") {
-			const pending = this.inFlightWrites.get(msg.writeId);
-			if (pending) {
-				const details: Record<string, string | number> = {
-					phase: msg.phase ?? "write",
-				};
-				if (msg.batchIndex !== undefined) details.batchIndex = msg.batchIndex;
-				const error = ZyncBaseError.fromServerResponse({
-					code: msg.code,
-					message: msg.message,
-					details,
-				});
-				pending.reject(error);
-				this.inFlightWrites.delete(msg.writeId);
-			}
-		}
 	}
 
 	private emitAndThrow(err: unknown, fallbackMessage: string): never {

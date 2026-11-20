@@ -237,16 +237,8 @@ test "MessageHandler: StoreSet document with auth predicate persists and is read
     const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, table.index, 1, doc_value);
     defer allocator.free(message);
 
-    const response = try routeWithArena(&app.handler, allocator, conn, message);
-    defer allocator.free(response);
-    const result = try parseResponse(allocator, response);
-
-    defer if (result.code) |code| allocator.free(code);
-
-    try testing.expectEqual(MessageType.ok, result.resp_type);
-
-    // Flush writes to ensure persistence
-    try app.storage_engine.flushPendingWrites();
+    try expectNoImmediateResponse(&app, conn, allocator, message);
+    try expectWriteCommitted(&app, conn.id, &.{1});
 
     // Read back via storage engine
     const record = try sth.readDoc(allocator, &app.storage_engine, table.index, 1, conn.namespace_id);
@@ -291,13 +283,8 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
         const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 1, 1, table.index, 1, doc_val);
         defer allocator.free(message);
 
-        const response = try routeWithArena(&app.handler, allocator, conn, message);
-        defer allocator.free(response);
-        const result = try parseResponse(allocator, response);
-
-        defer if (result.code) |code| allocator.free(code);
-
-        try testing.expectEqual(MessageType.ok, result.resp_type);
+        try expectNoImmediateResponse(&app, conn, allocator, message);
+        try expectWriteCommitted(&app, conn.id, &.{1});
     }
 
     {
@@ -327,56 +314,36 @@ test "MessageHandler: StoreSet routes and maps StoreService errors" {
     }
 }
 
-test "MessageHandler: StoreSet with confirm=accepted and writeId returns INVALID_MESSAGE" {
+test "MessageHandler: empty StoreBatch commits synchronously" {
     const allocator = std.heap.smp_allocator;
     var app: AppTestContext = undefined;
-    try app.init(allocator, "mh-invalid-write-ack", &.{
+    try app.init(allocator, "mh-empty-batch", &.{
         .{ .name = "items", .fields = &.{"val"} },
     });
     defer app.deinit();
 
     const sc = try app.setupMockConnection();
     defer sc.deinit();
-    const conn = sc.conn;
-    const table = try app.tableMetadata("items");
 
-    // Build a StoreSet message with confirm="accepted" + a writeId.
-    // The server must reject this combination immediately.
     var buf = std.Io.Writer.Allocating.init(allocator);
     defer buf.deinit();
     const writer = &buf.writer;
-
-    try writer.writeByte(0x86); // fixmap(6)
+    try writer.writeByte(0x83); // fixmap(3)
     try msgpack.writeMsgPackStr(writer, "type");
-    try writer.writeByte(@intFromEnum(MessageType.store_set));
+    try writer.writeByte(@intFromEnum(MessageType.store_batch));
     try msgpack.writeMsgPackStr(writer, "id");
     try writer.writeByte(0xcf);
-    try writer.writeInt(u64, 1, .big);
-    try msgpack.writeMsgPackStr(writer, "path");
-    try writer.writeByte(0x92); // fixarray(2)
-    try writer.writeByte(0xcf);
-    try writer.writeInt(u64, table.index, .big);
-    const doc_id_bytes = typed_doc_id.toBytes(1);
-    try msgpack.writeMsgPackBin(writer, &doc_id_bytes);
-    try msgpack.writeMsgPackStr(writer, "value");
-    try msgpack.writeMsgPackStr(writer, "hello");
-    try msgpack.writeMsgPackStr(writer, "confirm");
-    try msgpack.writeMsgPackStr(writer, "accepted");
-    try msgpack.writeMsgPackStr(writer, "writeId");
-    // 32-char hex string (valid format)
-    try msgpack.writeMsgPackStr(writer, "00000000000000000000000000000000");
-
+    try writer.writeInt(u64, 9, .big);
+    try msgpack.writeMsgPackStr(writer, "ops");
+    try writer.writeByte(0x90); // fixarray(0)
     const message = try buf.toOwnedSlice();
     defer allocator.free(message);
 
-    const response = try routeWithArena(&app.handler, allocator, conn, message);
+    const response = try routeBytes(&app, sc.conn, allocator, message);
     defer allocator.free(response);
-    const result = try parseResponse(allocator, response);
-
-    defer if (result.code) |code| allocator.free(code);
-
-    try testing.expectEqual(MessageType.@"error", result.resp_type);
-    try testing.expectEqualStrings("INVALID_MESSAGE", result.code.?);
+    try expectResponseType(allocator, response, MessageType.write_committed);
+    try expectResponseId(allocator, response, 9);
+    try expectWriteCommitted(&app, sc.conn.id, &.{});
 }
 
 // ─── Namespace switching enforcement tests ────────────────────────────────
@@ -680,6 +647,32 @@ fn expectResponseId(allocator: std.mem.Allocator, response: []const u8, expected
     try testing.expectEqual(expected, value.uint);
 }
 
+/// Store writes have no synchronous response; the writer answers later.
+fn expectNoImmediateResponse(app: *AppTestContext, conn: anytype, allocator: std.mem.Allocator, message: []const u8) !void {
+    const response = try routeBytesOptional(app, conn, allocator, message);
+    defer if (response) |bytes| allocator.free(bytes);
+    try testing.expect(response == null);
+}
+
+/// Flush the writer and assert the connection's WriteCommitted request ids in send order.
+fn expectWriteCommitted(app: *AppTestContext, conn_id: u64, expected_ids: []const u64) !void {
+    const allocator = std.heap.smp_allocator;
+    try app.storage_engine.flushPendingWrites();
+
+    var ids = std.ArrayListUnmanaged(u64).empty;
+    defer ids.deinit(allocator);
+    while (app.test_context.send_queue.?.pop()) |entry| {
+        defer entry.deinit();
+        if (entry.conn_id != conn_id) continue;
+        try expectResponseType(allocator, entry.data, MessageType.write_committed);
+        const parsed = try decodeResponse(allocator, entry.data);
+        defer parsed.free(allocator);
+        const id_value = (try msgpack_helpers.getMapValue(parsed, "id")) orelse return error.TestExpectedError;
+        try ids.append(allocator, id_value.uint);
+    }
+    try testing.expectEqualSlices(u64, expected_ids, ids.items);
+}
+
 fn expectErrorCode(allocator: std.mem.Allocator, response: []const u8, expected: []const u8) !void {
     const parsed = try decodeResponse(allocator, response);
     defer parsed.free(allocator);
@@ -711,11 +704,8 @@ test "message: representative frames route at protocol boundary" {
         const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 11, 1, table.index, 1, val);
         defer allocator.free(message);
 
-        const response = try routeBytes(&app, sc.conn, allocator, message);
-        defer allocator.free(response);
-
-        try expectResponseType(allocator, response, MessageType.ok);
-        try expectResponseId(allocator, response, 11);
+        try expectNoImmediateResponse(&app, sc.conn, allocator, message);
+        try expectWriteCommitted(&app, sc.conn.id, &.{11});
     }
 
     {
@@ -757,9 +747,8 @@ test "message: response id is preserved across routed requests" {
         const message = try store_helpers.createStoreSetMessageWithPayload(allocator, 101, 1, table.index, 1, val);
         defer allocator.free(message);
 
-        const response = try routeBytes(&app, sc.conn, allocator, message);
-        defer allocator.free(response);
-        try expectResponseId(allocator, response, 101);
+        try expectNoImmediateResponse(&app, sc.conn, allocator, message);
+        try expectWriteCommitted(&app, sc.conn.id, &.{101});
     }
 
     {
@@ -807,8 +796,8 @@ test "message: repeated routed requests release per-message allocations" {
     defer sc.deinit();
     const table = try app.tableMetadata("items");
 
-    var i: usize = 0;
-    while (i < 32) : (i += 1) {
+    var expected_ids: [32]u64 = undefined;
+    for (&expected_ids, 0..) |*expected_id, i| {
         const msg_id: u64 = @intCast(i + 1);
         const doc_id: typed_doc_id.DocId = @intCast(i + 1);
         const val = try store_helpers.createDocumentMapPayload(allocator, table, .{
@@ -818,12 +807,10 @@ test "message: repeated routed requests release per-message allocations" {
         const message = try store_helpers.createStoreSetMessageWithPayload(allocator, msg_id, 1, table.index, doc_id, val);
         defer allocator.free(message);
 
-        const response = try routeBytes(&app, sc.conn, allocator, message);
-        defer allocator.free(response);
-
-        try expectResponseType(allocator, response, MessageType.ok);
-        try expectResponseId(allocator, response, msg_id);
+        try expectNoImmediateResponse(&app, sc.conn, allocator, message);
+        expected_id.* = msg_id;
     }
+    try expectWriteCommitted(&app, sc.conn.id, &expected_ids);
 }
 
 test "message: concurrent routed requests release response allocations" {
@@ -841,6 +828,7 @@ test "message: concurrent routed requests release response allocations" {
         thread_index: usize,
         iterations: usize,
         failure: ?anyerror = null,
+        conn_id: u64 = 0,
 
         fn run(ctx: *@This()) void {
             runInternal(ctx) catch |err| {
@@ -853,6 +841,7 @@ test "message: concurrent routed requests release response allocations" {
             const thread_allocator = ctx.app.allocator;
             const sc = try ctx.app.setupMockConnection();
             defer sc.deinit();
+            ctx.conn_id = sc.conn.id;
 
             var i: usize = 0;
             while (i < ctx.iterations) : (i += 1) {
@@ -874,11 +863,7 @@ test "message: concurrent routed requests release response allocations" {
                 );
                 defer thread_allocator.free(message);
 
-                const response = try routeBytes(ctx.app, sc.conn, thread_allocator, message);
-                defer thread_allocator.free(response);
-
-                try expectResponseType(thread_allocator, response, MessageType.ok);
-                try expectResponseId(thread_allocator, response, msg_id);
+                try expectNoImmediateResponse(ctx.app, sc.conn, thread_allocator, message);
             }
         }
     };
@@ -903,6 +888,43 @@ test "message: concurrent routed requests release response allocations" {
 
     for (contexts) |ctx| {
         if (ctx.failure) |err| return err;
+    }
+
+    const Outcome = struct {
+        conn_id: u64,
+        id: u64,
+    };
+
+    // Each thread writes from its own connection, so per-thread outcome order is
+    // preserved but threads interleave; compare (conn_id, id) as a sorted set.
+    try app.storage_engine.flushPendingWrites();
+    var outcomes = std.ArrayListUnmanaged(Outcome).empty;
+    defer outcomes.deinit(allocator);
+    while (app.test_context.send_queue.?.pop()) |entry| {
+        defer entry.deinit();
+        try expectResponseType(allocator, entry.data, MessageType.write_committed);
+        const parsed = try decodeResponse(allocator, entry.data);
+        defer parsed.free(allocator);
+        const id_value = (try msgpack_helpers.getMapValue(parsed, "id")) orelse return error.TestExpectedError;
+        try outcomes.append(allocator, .{ .conn_id = entry.conn_id, .id = id_value.uint });
+    }
+    std.mem.sort(Outcome, outcomes.items, {}, struct {
+        fn lessThan(_: void, a: Outcome, b: Outcome) bool {
+            return a.id < b.id;
+        }
+    }.lessThan);
+    var expected_outcomes: [32]Outcome = undefined;
+    for (&expected_outcomes, 0..) |*expected_outcome, i| {
+        const thread_index = i / 8;
+        expected_outcome.* = .{
+            .conn_id = contexts[thread_index].conn_id,
+            .id = @intCast(thread_index * 1000 + (i % 8) + 1),
+        };
+    }
+    try testing.expectEqual(@as(usize, expected_outcomes.len), outcomes.items.len);
+    for (expected_outcomes, outcomes.items) |expected_outcome, actual_outcome| {
+        try testing.expectEqual(expected_outcome.conn_id, actual_outcome.conn_id);
+        try testing.expectEqual(expected_outcome.id, actual_outcome.id);
     }
 }
 

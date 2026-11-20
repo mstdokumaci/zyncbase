@@ -632,60 +632,52 @@ ADR-022 adds `client.actions.*` / `server.actions.*` as a third, independent sur
 
 ---
 
-## ADR-018: Mutation Acknowledgement and Consistency Semantics
+## ADR-018: Mutation Outcomes
 
-Client-visible state in a real-time system is observed through subscriptions, not through write responses. These are related but distinct events. Their semantics must be explicit.
+Client-visible state in a real-time system is observed through subscriptions, but the client that issued a write needs its own definite outcome: to report a failed save, and to read its own write once it resolves.
 
-**Decision**: Default writes (`store.set`, `store.remove`, `store.batch`) are accepted/eventual. Subscriptions are the authoritative source of committed client-visible state. Clients may opt in to committed confirmation. There is no optimistic local state and no local rollback.
+**Decision**: Every store write (`store.set`, `store.remove`, `store.increment`, `store.create`, `store.batch`) is tracked. Its promise resolves when the writer commits the write and rejects on any failure. Subscriptions deliver committed state to every observer; the write promise reports the outcome to the client that issued it. There is no optimistic local state and no local rollback.
 
-### The Three-Concept Separation
+### Outcome Reporting
 
-Three concerns are deliberately kept distinct:
+The server answers every write with exactly one terminal message, correlated by the write's request `id`:
 
-1. **Request acceptance** — the server parsed, validated, and accepted the mutation into the write pipeline.
-2. **State observation** — subscriptions delivered committed observable state.
-3. **Write outcome reporting** — optional operation-level status and error feedback.
+| Message | Meaning |
+|---|---|
+| `WriteCommitted {id}` | The writer committed the write, including committed no-ops. |
+| `WriteError {id, code, message, phase: "write", batchIndex?}` | The writer rejected the write. |
+| `error {id, code, message}` | The server refused the write before it reached the writer. |
 
-Default writes participate in (1) and eventually produce (2). They do not block on (3). This is the model that keeps default writes low-latency.
-
-### Confirmation Levels
-
-```ts
-await store.set(path, value);
-// await store.set(path, value, { confirm: 'accepted' });
-// Resolves when the server accepts the mutation into the write pipeline.
-
-await store.set(path, value, { confirm: 'committed' });
-// Resolves when the writer commits the mutation (or produces an accepted no-op).
-// Rejects when the writer reports failure.
-```
-
-`confirm: 'accepted'` is the default. `confirm: 'committed'` applies to `store.set`, `store.remove`, and `store.batch`.
+Store writes never receive an `ok` response. An empty batch commits nothing, so the server answers it with `WriteCommitted` immediately.
 
 ### Terminology
 
-- **accepted** — server parsed, validated, authorized pre-enqueue, and admitted the mutation.
-- **committed** — writer-thread result succeeded, including accepted no-ops.
-- **writeId** — correlation ID for tracked or confirmed writer-thread outcomes. Distinct from the request `id`, which correlates only the immediate accept/reject response.
-- **WriteError** — the name for async writer failure messages. Not "NACK" — there is no speculative local state to roll back.
+- **committed** — the writer transaction containing the write committed, or the write was a no-op.
+- **WriteError** — the name for writer failure messages. Not "NACK" — there is no speculative local state to roll back.
 
 ### Error Phases
 
 Errors fall into two phases:
 - **accept** — rejection before the writer owns the operation (malformed message, invalid path/field, schema validation failure, session not ready, pre-enqueue authorization failure, queue admission failure).
-- **write** — writer-thread failure after acceptance (storage error, constraint violation, post-read authorization failure against a stored row).
+- **write** — writer-thread failure (storage error, constraint violation, precondition failure, post-read authorization failure against a stored row).
 
-Both use `ZyncBaseError` with a `details.phase: 'accept' | 'write'` discriminant.
+Both use `ZyncBaseError` with a `details.phase: 'accept' | 'write'` discriminant. The server sends accept-phase failures as `error {id}`; the SDK tags them with `phase: 'accept'`.
 
 ### Batch Semantics
 
-`store.batch(..., { confirm: 'committed' })` is atomic: resolves only if the full batch commits; rejects if any operation fails; no partial success; no partial writes on failure.
+`store.batch(...)` is atomic: resolves only if the full batch commits; rejects if any operation fails; no partial success; no partial writes on failure.
 
 Failed batch operations include `batchIndex` when the failing operation is identifiable. For transaction-level failures where no single operation is culpable, `batchIndex` is omitted.
 
 Outside an explicit batch, the writer groups queued writes into opportunistic flush transactions. In a flush, guard, precondition, and constraint rejections fail only their own write; storage-level failures (I/O, disk full, allocation, commit) fail every write in the flush.
 
-Subscription observation is transaction-endpoint based. Explicit batches and opportunistic writer flush transactions may coalesce repeated changes to one record into one final delta without changing per-operation confirmation outcomes. Subscriptions are state replication, not a mutation event log.
+Subscription observation is transaction-endpoint based. Explicit batches and opportunistic writer flush transactions may coalesce repeated changes to one record into one final delta without changing per-write outcomes. Subscriptions are state replication, not a mutation event log.
+
+### Retries and Timeouts
+
+The SDK never retries a write automatically, for any error code: a resent write could commit after a later write from the same client.
+
+Each write has a timeout (`writeTimeoutMs`, default 30 s). A `TIMEOUT` rejection means the outcome was not received — not that the write failed to commit.
 
 ### Authorization Semantics for Creates
 
@@ -703,20 +695,20 @@ Ownership rules such as `{ "$doc.owner_id": { "eq": "$session.userId" } }` natur
 
 ### Connection Failures
 
-Confirmed write promises are scoped to the originating live connection. On disconnect, the SDK rejects pending confirmed promises with a connection error. The write may still commit. After reconnect, subscriptions are the source of truth for final state.
-
-Confirmed writes require a timeout. A timeout means confirmation was not received — not that the write failed to commit.
+Write promises are scoped to the originating live connection. On disconnect, the SDK rejects pending write promises with a connection error. The write may still commit. After reconnect, subscriptions are the source of truth for final state.
 
 **Rejected alternatives**:
-- **Make every write block until committed** — rejected as the default; changes the programming model to request/response semantics and adds latency for all writes that only require eventual propagation.
+- **Acknowledge writes on acceptance by default** — rejected; write-phase failures (constraint violations, precondition failures, post-read authorization, storage errors) would be invisible to the caller, and a resolved write would not guarantee that a following read sees it.
+- **A client-generated write id** — rejected; the request id already identifies the write, and the SDK never resends one.
+- **Report only writer failures** — rejected; without a success message the client cannot tell when a write has settled.
+- **No writer failure reporting** — rejected; ambiguous missing deltas cannot support user-facing save-failure feedback.
 - **Optimistic local writes** — rejected; requires rollback machinery, conflict handling, and speculative materialized-view logic that the subscription-first model avoids entirely.
 - **NACK messages as rollback commands** — rejected; there is no speculative local state to roll back.
-- **No writer failure reporting** — rejected; ambiguous missing deltas cannot support user-facing save-failure feedback.
-- **Reuse request id for writer outcomes** — rejected; request ids correlate immediate responses; writer outcomes need a distinct `writeId`.
 
 **Consequences**:
-- Default writes resolve fast with accepted semantics; subscriptions deliver committed state.
-- Applications needing precise save confirmation use `confirm: 'committed'`.
+- A resolved write is durable, and a read issued after it resolves observes it.
+- Write latency includes the writer's batch window and commit.
+- Every write failure reaches the caller; un-awaited writes surface failures on `on('error')`.
 - The SDK never speculatively mutates local state; subscriptions are the single source of truth.
 
 **Principles**: P-RTF, P-SAT, P-TSF, P-SOT
@@ -737,7 +729,7 @@ Errors from a real-time system span connection failures, authorization denials, 
 | **State** | Session not ready, namespace switch rejected | Surface to application; do not retry |
 | **Validation** | Schema violation, invalid payload shape | Surface to application; do not retry |
 | **Client** | Path format invalid, message too large | Surface to application; do not retry |
-| **Rate-Limit** | Too many requests | Respect server `retry-after`; retry after indicated delay |
+| **Rate-Limit** | Too many requests | Reads retry after the server's `retry-after` delay; writes are never retried (ADR-018) |
 | **Server** | Storage failure, engine error | Surface to application; optional retry |
 
 Every ZyncBase error is typed as `ZyncBaseError` with `code` (machine-readable string), `message` (human-readable), `category`, and optional `details` (including `phase`, `batchIndex`, etc., as applicable).
@@ -817,7 +809,7 @@ Shared state is RAM-only. It does not survive server restart, regardless of grac
 
 ### Presence Writes are Fire-and-Forget
 
-Neither `PresenceSet` nor `PresenceSetShared` accepts a `confirm` option. Presence writes are always accepted/eventual. Type and field index validation occurs at accept time; invalid payloads are rejected with `SCHEMA_VALIDATION_FAILED`. Write pipeline confirmation is not meaningful for ephemeral state.
+`PresenceSet` and `PresenceSetShared` resolve when the server accepts them; they never pass through the storage writer, so there is no commit to report. Type and field index validation occurs at accept time; invalid payloads are rejected with `SCHEMA_VALIDATION_FAILED`.
 
 ### Wire Protocol Summary
 
@@ -863,7 +855,7 @@ Every generated index begins with `namespace_id`: equal values may coexist acros
 
 ### Write Behavior
 
-The upsert conflict target remains `ON CONFLICT("id")`; a conflict on a user unique index therefore aborts the write instead of updating another row. An explicit batch rolls back as a whole, preserving all-or-nothing semantics; in a coalesced writer flush only the colliding write fails and the other writes commit. Because default `confirm: "accepted"` writes only confirm queue admission, applications that branch on duplicates must use `confirm: "committed"`; confirmed failures surface as public code `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Constraint names are not part of the wire contract.
+The upsert conflict target remains `ON CONFLICT("id")`; a conflict on a user unique index therefore aborts the write instead of updating another row. An explicit batch rolls back as a whole, preserving all-or-nothing semantics; in a coalesced writer flush only the colliding write fails and the other writes commit. The colliding write rejects with public code `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Constraint names are not part of the wire contract.
 
 ### Migration Behavior
 
@@ -880,7 +872,7 @@ Adding, removing, reordering, or changing a constraint is an index migration. It
 **Consequences**:
 - Uniqueness holds under any level of client concurrency with no application coordination.
 - Startup owns index lifecycle: migrations are the sole DDL owner, so index changes are atomic and persisted together with the schema they belong to.
-- Duplicate rejection is observable only on committed confirmations; accepted writes give no delivery guarantee by design (ADR-018).
+- Every duplicate rejection reaches the writing client as a rejected write promise (ADR-018).
 
 **Principles**: P-SBD, P-TSF
 
@@ -940,7 +932,7 @@ Input validation runs inside the Zig engine before forwarding to workers; invali
    - The server tracks the call by a server-minted execution id, routes it to a registered worker, awaits the worker's `ActionReply`, validates return fields, and forwards the response back to the client.
    - The SDK returns `Promise<unknown>`; the return shape is validated at runtime and typed action outputs await a future codegen pass.
 
-Sync actions are orchestration, not transaction management. A multi-step action is not a transaction, and a sync reply remains a worker claim — not committed state. Workers that mutate store must use `confirm: "committed"` where the outcome matters and must design around last-write-wins. The SDK never auto-retries action calls because a retried call may have already executed.
+Sync actions are orchestration, not transaction management. A multi-step action is not a transaction, and a sync reply remains a worker claim — not committed state. Workers that mutate store should await each write before replying, so the reply follows the commit, and must design around last-write-wins. The SDK never auto-retries action calls because a retried call may have already executed.
 
 ### Namespace Scope Binding
 
@@ -1013,14 +1005,14 @@ Last-write-wins (ADR-010) is the right default for collaborative fields, but it 
 1. **Conditional writes** — `store.set`, `store.remove`, and each batch operation accept an optional `if` predicate (`conditions` / `orConditions`, the existing query grammar). The write applies only if the predicate holds against the **existing** row.
 2. **Atomic increments** — a single-field relative update, `SET field = field + delta`, for integer fields. The result must remain inside the field's declared `minimum` / `maximum` and must not be NULL or overflow.
 
-Both require `confirm: "committed"` and a `writeId`. Both are reported as write-phase outcomes (`WriteCommitted` / `WriteError`); state still reaches clients only through subscriptions (P-SAT).
+Like every store write, both report write-phase outcomes (`WriteCommitted` / `WriteError`, ADR-018); state still reaches clients only through subscriptions (P-SAT).
 
 ### Conditional Write Semantics
 
 - A conditional write is a compare-and-set on an existing row. It **never creates**. A conditional `set` on a missing row returns `PRECONDITION_FAILED`; an unconditional `set` keeps its upsert behavior. A conditional `remove` on a missing row returns `PRECONDITION_FAILED`; an unconditional `remove` keeps its success/no-op behavior.
 - The predicate is evaluated against the pre-update row. `SET x = ? WHERE x = ?` sees the old value, as in standard CAS.
 - The write guard is the AND of the collection's write rule and its **read** rule. A conditional write therefore requires read visibility on the target row. This prevents `if` from being used as a value oracle on rows the write rule exposes but the read rule hides. Classification is auth-first: a denied row returns `PERMISSION_DENIED` without evaluating the client predicate.
-- A confirmed batch with per-op `if` is a multi-document compare-and-set: operations run in order, later operations see earlier uncommitted effects, and the first rejected operation rolls back the whole batch and reports its `batchIndex`.
+- A batch with per-op `if` is a multi-document compare-and-set: operations run in order, later operations see earlier uncommitted effects, and the first rejected operation rolls back the whole batch and reports its `batchIndex`.
 - Conditional writes do not change LWW for unconditional writes, do not add a version column, and cost nothing on writes that do not use them.
 
 ### Atomic Increment Semantics
@@ -1031,11 +1023,10 @@ Both require `confirm: "committed"` and a `writeId`. Both are reported as write-
 - Increments never create. A missing row, a NULL stored value, an overflow, or a range violation is `PRECONDITION_FAILED`.
 - The new value is delivered through the subscription delta, not the write response (P-SAT). An action that needs the resulting balance performs a post-commit read; that read is "balance now", possibly after later writes.
 
-### Confirmation and Error Semantics
+### Error Semantics
 
-- `if` or an increment without `confirm: "committed"` is rejected at accept with `INVALID_MESSAGE`. Under `confirm: "accepted"` a rejection has no outcome channel, so a precondition would silently do nothing — worse than no precondition.
-- The public code is `PRECONDITION_FAILED`, category `state`, non-retryable. It covers a failed `if`, a missing row, a NULL field, an overflow, and a range violation. The application may retry after re-reading and re-evaluating; the SDK must never auto-retry a write. Increments are not idempotent, and no `writeId` dedupe exists: a manual retry after an ambiguous connection failure may apply twice.
-- A rejected operation produces no subscription delta. In the coalesced flush path a rejection is per-operation and other operations commit; in a confirmed batch it rolls back the batch.
+- The public code is `PRECONDITION_FAILED`, category `state`, non-retryable. It covers a failed `if`, a missing row, a NULL field, an overflow, and a range violation. The application may retry after re-reading and re-evaluating; the SDK must never auto-retry a write. Increments are not idempotent, and no write dedupe exists: a manual retry after an ambiguous connection failure or timeout may apply twice.
+- A rejected operation produces no subscription delta. In the coalesced flush path a rejection is per-operation and other operations commit; in an explicit batch it rolls back the batch.
 
 ### Authorization and `$value`
 
@@ -1044,17 +1035,17 @@ Both require `confirm: "committed"` and a `writeId`. Both are reported as write-
 ### Wire and SDK Surface
 
 - `StoreSet` / `StoreRemove` gain an optional `if` map. `StoreBatch` set/remove tuples gain an optional trailing `if`; the new increment tuple is `["i", path, fieldIndex, delta, if?]`.
-- The SDK exposes `store.set` / `store.remove` / `store.batch` with `if`, and `store.increment(path, by, { if })`. Increment is a one-op batch and always commits. There is no `{ increment: n }` value form: nested write values are flattened by the SDK, and a map in value position would corrupt the field name.
+- The SDK exposes `store.set` / `store.remove` / `store.batch` with `if`, and `store.increment(path, by, { if })`. Increment is a one-op batch. There is no `{ increment: n }` value form: nested write values are flattened by the SDK, and a map in value position would corrupt the field name.
 - `store.create` does not accept `if`; creates are governed by schema constraints and `$value` authorization.
 
 ### Explicitly Rejected Alternatives
 
 - **Version columns / OCC as the only primitive** — a user-declared `version` field plus `if: { version: { eq: n } }` already gives OCC without a system column. A built-in version adds a column, a migration, and a schema surface for what one predicate expresses.
 - **Pre-read then write** — reintroduces the check-then-write race the writer exists to remove.
-- **Post-write validation with rollback for increments** — a validation error in the coalesced flush transaction rolls back unrelated accepted writes, and untracked writes receive no error. The bounds check belongs in the same `WHERE`, where failure is local and the statement count is unchanged.
-- **Returning the resulting record from a confirmed write** — widens P-SAT into a second state channel. The caller reads after commit.
+- **Post-write validation with rollback for increments** — a validation error in the coalesced flush transaction rolls back unrelated writes in the same flush. The bounds check belongs in the same `WHERE`, where failure is local and the statement count is unchanged.
+- **Returning the resulting record from a write** — widens P-SAT into a second state channel. The caller reads after commit.
 - **Floating-point increments** — deferred; integer counters are the concrete need and avoid drift and NaN semantics.
-- **`writeId` dedupe / idempotent retries** — deferred. Documented as a limitation; SDK does not auto-retry increments.
+- **Write dedupe / idempotent retries** — deferred. Documented as a limitation; SDK does not auto-retry increments.
 
 ### Consequences
 

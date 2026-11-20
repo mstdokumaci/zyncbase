@@ -26,6 +26,7 @@ fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
             .store_namespace = "public",
             .store_namespace_id = namespace_id,
         },
+        .msg_id = 1,
     };
 }
 
@@ -882,7 +883,7 @@ test "StoreService: batchWrite - multi-set inserts documents atomically" {
     ops_arr[1] = t2;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try service.batchWrite(writeCtx(1), ops_payload);
+    _ = try service.batchWrite(writeCtx(1), ops_payload);
     try app.storage_engine.flushPendingWrites();
 
     // Verify both documents exist
@@ -941,7 +942,7 @@ test "StoreService: batchWrite - mixed set and remove" {
     ops_arr[1] = set_op;
     const ops_payload = msgpack.Payload{ .arr = ops_arr };
 
-    try service.batchWrite(writeCtx(1), ops_payload);
+    _ = try service.batchWrite(writeCtx(1), ops_payload);
     try app.storage_engine.flushPendingWrites();
 
     // Doc 1 should be gone
@@ -1012,7 +1013,7 @@ test "StoreService: batchWrite coalesces transaction changes to first-old and la
         initialized_ops += 1;
     }
 
-    try service.batchWrite(writeCtx(1), .{ .arr = ops });
+    _ = try service.batchWrite(writeCtx(1), .{ .arr = ops });
     try app.storage_engine.flushPendingWrites();
 
     var seen = [_]bool{false} ** 7;
@@ -1093,8 +1094,8 @@ test "StoreService: batchWrite - empty ops is a no-op" {
     defer allocator.free(empty_arr);
     const ops_payload = msgpack.Payload{ .arr = empty_arr };
 
-    // Should succeed silently
-    try app.store_service.batchWrite(writeCtx(1), ops_payload);
+    // An empty batch commits nothing, so nothing is enqueued.
+    try testing.expect(!try app.store_service.batchWrite(writeCtx(1), ops_payload));
 }
 
 test "StoreService: batchWrite - rejects invalid kind" {
@@ -1371,12 +1372,6 @@ test "StoreService: create requires all required fields but update does not" {
     }
 }
 
-fn writeCtxCommitted(namespace_id: i64, write_id: [16]u8) store_service.StoreService.WriteContext {
-    var ctx = writeCtx(namespace_id);
-    ctx.write_id = write_id;
-    return ctx;
-}
-
 fn makePrecondition(
     allocator: std.mem.Allocator,
     field_index: usize,
@@ -1438,7 +1433,7 @@ test "StoreService: conditional set applies when the precondition holds" {
 
     const value = try store_helpers.createDocumentMapPayload(allocator, accounts.metadata, .{.{ "balance", @as(i64, 7) }});
     defer value.free(allocator);
-    try service.setPath(writeCtxCommitted(1, .{1} ** 16), path, value, if_payload);
+    try service.setPath(writeCtx(1), path, value, if_payload);
     try app.storage_engine.flushPendingWrites();
 
     const rec = try sth.readDoc(allocator, &app.storage_engine, accounts.metadata.index, 1, 1);
@@ -1465,34 +1460,12 @@ test "StoreService: conditional set never creates a missing document" {
 
     const value = try store_helpers.createDocumentMapPayload(allocator, accounts.metadata, .{.{ "balance", @as(i64, 7) }});
     defer value.free(allocator);
-    try service.setPath(writeCtxCommitted(1, .{2} ** 16), path, value, if_payload);
+    try service.setPath(writeCtx(1), path, value, if_payload);
     try app.storage_engine.flushPendingWrites();
 
     const rec = try sth.readDoc(allocator, &app.storage_engine, accounts.metadata.index, 1, 1);
     defer if (rec) |r| r.deinit(allocator);
     try testing.expect(rec == null);
-}
-
-test "StoreService: conditional write without committed confirmation is rejected" {
-    const allocator = std.heap.smp_allocator;
-    var app: helpers.AppTestContext = undefined;
-    try app.init(allocator, "store-conditional-confirm", &.{
-        .{ .name = "accounts", .fields = &.{"balance"}, .types = &.{.integer} },
-    });
-    defer app.deinit();
-
-    const service = &app.store_service;
-    const accounts = try app.table("accounts");
-    const balance_idx = accounts.metadata.fieldIndex("balance") orelse return error.TestExpectedValue;
-    const path = try documentPath(allocator, accounts.metadata.index, 1);
-    defer path.free(allocator);
-
-    var if_payload = try makePrecondition(allocator, balance_idx, .gte, msgpack.Payload.intToPayload(0));
-    defer if_payload.free(allocator);
-
-    const value = try store_helpers.createDocumentMapPayload(allocator, accounts.metadata, .{.{ "balance", @as(i64, 7) }});
-    defer value.free(allocator);
-    try testing.expectError(error.InvalidWriteAck, service.setPath(writeCtx(1), path, value, if_payload));
 }
 
 test "StoreService: batch increment op applies" {
@@ -1520,35 +1493,12 @@ test "StoreService: batch increment op applies" {
     defer allocator.free(ops);
     ops[0] = inc_op;
 
-    try service.batchWrite(writeCtxCommitted(1, .{3} ** 16), .{ .arr = ops });
+    _ = try service.batchWrite(writeCtx(1), .{ .arr = ops });
     try app.storage_engine.flushPendingWrites();
 
     const rec = try sth.readDoc(allocator, &app.storage_engine, accounts.metadata.index, 1, 1);
     defer if (rec) |r| r.deinit(allocator);
     try testing.expectEqual(@as(i64, 5), rec.?.values[balance_idx].scalar.integer);
-}
-
-test "StoreService: batch increment without committed confirmation is rejected" {
-    const allocator = std.heap.smp_allocator;
-    var app: helpers.AppTestContext = undefined;
-    try app.init(allocator, "store-increment-confirm", &.{
-        .{ .name = "accounts", .fields = &.{"balance"}, .types = &.{.integer} },
-    });
-    defer app.deinit();
-
-    const service = &app.store_service;
-    const accounts = try app.table("accounts");
-    const balance_idx = accounts.metadata.fieldIndex("balance") orelse return error.TestExpectedValue;
-    const path = try documentPath(allocator, accounts.metadata.index, 1);
-    defer path.free(allocator);
-
-    const inc_op = try makeIncrementOp(allocator, path, balance_idx, -5);
-    defer freeIncrementOp(allocator, inc_op);
-    const ops = try allocator.alloc(msgpack.Payload, 1);
-    defer allocator.free(ops);
-    ops[0] = inc_op;
-
-    try testing.expectError(error.InvalidWriteAck, service.batchWrite(writeCtx(1), .{ .arr = ops }));
 }
 
 test "StoreService: increment on a non-integer field is rejected" {
@@ -1571,7 +1521,7 @@ test "StoreService: increment on a non-integer field is rejected" {
     defer allocator.free(ops);
     ops[0] = inc_op;
 
-    try testing.expectError(StorageError.TypeMismatch, service.batchWrite(writeCtxCommitted(1, .{4} ** 16), .{ .arr = ops }));
+    try testing.expectError(StorageError.TypeMismatch, service.batchWrite(writeCtx(1), .{ .arr = ops }));
 }
 
 test "StoreService: increment on enum and unique fields is rejected" {
@@ -1606,7 +1556,7 @@ test "StoreService: increment on enum and unique fields is rejected" {
         const ops = try allocator.alloc(msgpack.Payload, 1);
         defer allocator.free(ops);
         ops[0] = inc_op;
-        try testing.expectError(StorageError.IncrementNotSupported, service.batchWrite(writeCtxCommitted(1, .{5} ** 16), .{ .arr = ops }));
+        try testing.expectError(StorageError.IncrementNotSupported, service.batchWrite(writeCtx(1), .{ .arr = ops }));
     }
 }
 
@@ -1646,7 +1596,7 @@ test "StoreService: conditional write on an unreadable row returns PermissionDen
 
     // Seed an unreadable row: owner 999, while the session user is 0.
     const seed = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "original" } } }};
-    try sth.enqueueUpsert(&app.storage_engine, items.index, 1, 1, 999, &seed, null, null, null);
+    try sth.enqueueUpsert(&app.storage_engine, items.index, 1, 1, 999, &seed, null, null);
     try app.storage_engine.flushPendingWrites();
 
     var if_payload = try makePrecondition(allocator, val_idx, .eq, try msgpack.Payload.strToPayload("different", allocator));
@@ -1654,7 +1604,7 @@ test "StoreService: conditional write on an unreadable row returns PermissionDen
     const value = try store_helpers.createDocumentMapPayload(allocator, items, .{.{ "val", "updated" }});
     defer value.free(allocator);
 
-    var ctx = writeCtxCommitted(1, .{6} ** 16);
+    var ctx = writeCtx(1);
     ctx.request.user_doc_id = typed_doc_id.zero;
     try service.setPath(ctx, path, value, if_payload);
     try app.storage_engine.flushPendingWrites();
@@ -1713,7 +1663,7 @@ test "StoreService: increment is rejected when the write rule references $value"
 
     try testing.expectError(
         StorageError.IncrementValueAuthUnsupported,
-        service.batchWrite(writeCtxCommitted(1, .{7} ** 16), .{ .arr = ops }),
+        service.batchWrite(writeCtx(1), .{ .arr = ops }),
     );
 }
 
@@ -1744,7 +1694,7 @@ test "StoreService: increment remains allowed with a $doc-only write rule" {
     defer path.free(allocator);
 
     const seed = [_]sth.ColumnValue{.{ .index = balance_idx, .value = .{ .scalar = .{ .integer = 10 } } }};
-    try sth.enqueueUpsert(&app.storage_engine, accounts.metadata.index, 1, 1, 0, &seed, null, null, null);
+    try sth.enqueueUpsert(&app.storage_engine, accounts.metadata.index, 1, 1, 0, &seed, null, null);
     try app.storage_engine.flushPendingWrites();
 
     const inc_op = try makeIncrementOp(allocator, path, balance_idx, -3);
@@ -1753,7 +1703,7 @@ test "StoreService: increment remains allowed with a $doc-only write rule" {
     defer allocator.free(ops);
     ops[0] = inc_op;
 
-    try service.batchWrite(writeCtxCommitted(1, .{8} ** 16), .{ .arr = ops });
+    _ = try service.batchWrite(writeCtx(1), .{ .arr = ops });
     try app.storage_engine.flushPendingWrites();
 
     const rec = try sth.readDoc(allocator, &app.storage_engine, accounts.metadata.index, 1, 1);

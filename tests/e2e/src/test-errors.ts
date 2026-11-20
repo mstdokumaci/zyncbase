@@ -29,15 +29,11 @@ export async function run(port: number = 3000) {
 async function testForeignKeys(client: ZyncBaseClient, ns: string) {
 	console.log("Testing foreign-key enforcement and delete actions...");
 	await client.setNamespace(ns);
-	const committed = { confirm: "committed" } as const;
-
 	let orphanError: { code?: string } | undefined;
 	try {
-		await client.store.set(
-			["fk_restrict_children", "orphan"],
-			{ parent_id: "missing" },
-			committed,
-		);
+		await client.store.set(["fk_restrict_children", "orphan"], {
+			parent_id: "missing",
+		});
 	} catch (err: unknown) {
 		orphanError = err as { code?: string };
 	}
@@ -50,15 +46,13 @@ async function testForeignKeys(client: ZyncBaseClient, ns: string) {
 		);
 	}
 
-	await client.store.set(["fk_parents", "restricted"], {}, committed);
-	await client.store.set(
-		["fk_restrict_children", "restricted-child"],
-		{ parent_id: "restricted" },
-		committed,
-	);
+	await client.store.set(["fk_parents", "restricted"], {});
+	await client.store.set(["fk_restrict_children", "restricted-child"], {
+		parent_id: "restricted",
+	});
 	let restrictedDeleteError: { code?: string } | undefined;
 	try {
-		await client.store.remove(["fk_parents", "restricted"], committed);
+		await client.store.remove(["fk_parents", "restricted"]);
 	} catch (err: unknown) {
 		restrictedDeleteError = err as { code?: string };
 	}
@@ -71,18 +65,14 @@ async function testForeignKeys(client: ZyncBaseClient, ns: string) {
 		);
 	}
 
-	await client.store.set(["fk_parents", "actions"], {}, committed);
-	await client.store.set(
-		["fk_cascade_children", "cascade-child"],
-		{ parent_id: "actions" },
-		committed,
-	);
-	await client.store.set(
-		["fk_nullable_children", "nullable-child"],
-		{ parent_id: "actions" },
-		committed,
-	);
-	await client.store.remove(["fk_parents", "actions"], committed);
+	await client.store.set(["fk_parents", "actions"], {});
+	await client.store.set(["fk_cascade_children", "cascade-child"], {
+		parent_id: "actions",
+	});
+	await client.store.set(["fk_nullable_children", "nullable-child"], {
+		parent_id: "actions",
+	});
+	await client.store.remove(["fk_parents", "actions"]);
 
 	const cascaded = await client.store.get([
 		"fk_cascade_children",
@@ -106,31 +96,21 @@ async function testForeignKeys(client: ZyncBaseClient, ns: string) {
 async function testUniqueConstraints(client: ZyncBaseClient) {
 	console.log("Testing user-defined unique constraints...");
 	await client.setNamespace("public");
-	const committed = { confirm: "committed" } as const;
-
 	// Single-field constraint: same slug in one namespace rejects.
-	await client.store.set(
-		["unique_projects", "proj-1"],
-		{
-			slug: "e2e-taken",
-			provider: "github",
-			externalId: "1001",
-			profile: { handle: "handle-one" },
-		},
-		committed,
-	);
+	await client.store.set(["unique_projects", "proj-1"], {
+		slug: "e2e-taken",
+		provider: "github",
+		externalId: "1001",
+		profile: { handle: "handle-one" },
+	});
 
 	let duplicateError: { code?: string } | undefined;
 	try {
-		await client.store.set(
-			["unique_projects", "proj-2"],
-			{
-				slug: "e2e-taken",
-				provider: "gitlab",
-				externalId: "1002",
-			},
-			committed,
-		);
+		await client.store.set(["unique_projects", "proj-2"], {
+			slug: "e2e-taken",
+			provider: "gitlab",
+			externalId: "1002",
+		});
 	} catch (err: unknown) {
 		duplicateError = err as { code?: string };
 	}
@@ -145,29 +125,21 @@ async function testUniqueConstraints(client: ZyncBaseClient) {
 
 	// Same key in another namespace commits.
 	await client.setNamespace("unique-alt");
-	await client.store.set(
-		["unique_projects", "proj-3"],
-		{
-			slug: "e2e-taken",
-			provider: "github",
-			externalId: "1001",
-		},
-		committed,
-	);
+	await client.store.set(["unique_projects", "proj-3"], {
+		slug: "e2e-taken",
+		provider: "github",
+		externalId: "1001",
+	});
 	await client.setNamespace("public");
 
 	// Compound collision rejects.
 	let compoundError: { code?: string } | undefined;
 	try {
-		await client.store.set(
-			["unique_projects", "proj-4"],
-			{
-				slug: "other-slug",
-				provider: "github",
-				externalId: "1001",
-			},
-			committed,
-		);
+		await client.store.set(["unique_projects", "proj-4"], {
+			slug: "other-slug",
+			provider: "github",
+			externalId: "1001",
+		});
 	} catch (err: unknown) {
 		compoundError = err as { code?: string };
 	}
@@ -181,24 +153,20 @@ async function testUniqueConstraints(client: ZyncBaseClient) {
 	}
 
 	// Update into another row's key rejects.
-	await client.store.set(
-		["unique_projects", "upd-a"],
-		{ slug: "upd-a", provider: "u", externalId: "ua" },
-		committed,
-	);
-	await client.store.set(
-		["unique_projects", "upd-b"],
-		{ slug: "upd-b", provider: "u", externalId: "ub" },
-		committed,
-	);
+	await client.store.set(["unique_projects", "upd-a"], {
+		slug: "upd-a",
+		provider: "u",
+		externalId: "ua",
+	});
+	await client.store.set(["unique_projects", "upd-b"], {
+		slug: "upd-b",
+		provider: "u",
+		externalId: "ub",
+	});
 
 	let requiredNullError: { code?: string } | undefined;
 	try {
-		await client.store.set(
-			["unique_projects", "upd-a", "slug"],
-			null,
-			committed,
-		);
+		await client.store.set(["unique_projects", "upd-a", "slug"], null);
 	} catch (err: unknown) {
 		requiredNullError = err as { code?: string };
 	}
@@ -213,11 +181,7 @@ async function testUniqueConstraints(client: ZyncBaseClient) {
 
 	let updateCollisionError: { code?: string } | undefined;
 	try {
-		await client.store.set(
-			["unique_projects", "upd-a", "slug"],
-			"upd-b",
-			committed,
-		);
+		await client.store.set(["unique_projects", "upd-a", "slug"], "upd-b");
 	} catch (err: unknown) {
 		updateCollisionError = err as { code?: string };
 	}
@@ -231,31 +195,31 @@ async function testUniqueConstraints(client: ZyncBaseClient) {
 	}
 
 	// Two omitted optional values commit, proving SQLite null semantics.
-	await client.store.set(
-		["unique_projects", "null-1"],
-		{ slug: "null-a", provider: "gh", externalId: "n1" },
-		committed,
-	);
-	await client.store.set(
-		["unique_projects", "null-2"],
-		{ slug: "null-b", provider: "gh", externalId: "n2" },
-		committed,
-	);
+	await client.store.set(["unique_projects", "null-1"], {
+		slug: "null-a",
+		provider: "gh",
+		externalId: "n1",
+	});
+	await client.store.set(["unique_projects", "null-2"], {
+		slug: "null-b",
+		provider: "gh",
+		externalId: "n2",
+	});
 	const nullTwo = await client.store.get(["unique_projects", "null-2"]);
 	if (nullTwo == null)
 		throw new Error("Optional-constrained doc did not commit");
 
 	// Omitting the nested optional unique field twice is fine.
-	await client.store.set(
-		["unique_projects", "no-handle-1"],
-		{ slug: "nh-1", provider: "x", externalId: "y1" },
-		committed,
-	);
-	await client.store.set(
-		["unique_projects", "no-handle-2"],
-		{ slug: "nh-2", provider: "x", externalId: "y2" },
-		committed,
-	);
+	await client.store.set(["unique_projects", "no-handle-1"], {
+		slug: "nh-1",
+		provider: "x",
+		externalId: "y1",
+	});
+	await client.store.set(["unique_projects", "no-handle-2"], {
+		slug: "nh-2",
+		provider: "x",
+		externalId: "y2",
+	});
 
 	console.log("Unique constraint enforcement verified.");
 }

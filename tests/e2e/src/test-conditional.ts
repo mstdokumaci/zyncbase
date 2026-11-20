@@ -1,8 +1,6 @@
 import type { JsonValue } from "@zyncbase/client";
 import { ZyncBaseClient } from "./client";
 
-const committed = { confirm: "committed" } as const;
-
 function balanceOf(value: JsonValue | null | undefined): number {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) {
 		throw new Error(`Expected an account record, got ${JSON.stringify(value)}`);
@@ -42,7 +40,7 @@ async function readBalance(
 }
 
 async function testConcurrentIncrements(client: ZyncBaseClient): Promise<void> {
-	await client.store.set(["accounts", "acct-1"], { balance: 50 }, committed);
+	await client.store.set(["accounts", "acct-1"], { balance: 50 });
 	await Promise.all(
 		Array.from({ length: 50 }, () =>
 			client.store.increment(["accounts", "acct-1", "balance"], -1),
@@ -57,7 +55,7 @@ async function testConcurrentIncrements(client: ZyncBaseClient): Promise<void> {
 async function testConditionalIncrements(
 	client: ZyncBaseClient,
 ): Promise<void> {
-	await client.store.set(["accounts", "acct-2"], { balance: 5 }, committed);
+	await client.store.set(["accounts", "acct-2"], { balance: 5 });
 	const results = await Promise.allSettled(
 		Array.from({ length: 10 }, () =>
 			client.store.increment(["accounts", "acct-2", "balance"], -1, {
@@ -86,9 +84,8 @@ async function testConditionalIncrements(
 }
 
 async function testConditionalSet(client: ZyncBaseClient): Promise<void> {
-	await client.store.set(["accounts", "acct-3"], { balance: 10 }, committed);
+	await client.store.set(["accounts", "acct-3"], { balance: 10 });
 	await client.store.set(["accounts", "acct-3", "balance"], 7, {
-		confirm: "committed",
 		if: { balance: { eq: 10 } },
 	});
 	if ((await readBalance(client, "acct-3")) !== 7) {
@@ -96,7 +93,6 @@ async function testConditionalSet(client: ZyncBaseClient): Promise<void> {
 	}
 	await expectCode("conditional set mismatch", "PRECONDITION_FAILED", () =>
 		client.store.set(["accounts", "acct-3", "balance"], 3, {
-			confirm: "committed",
 			if: { balance: { eq: 10 } },
 		}),
 	);
@@ -114,7 +110,6 @@ async function testMissingRows(client: ZyncBaseClient): Promise<void> {
 				["accounts", "acct-missing"],
 				{ balance: 1 },
 				{
-					confirm: "committed",
 					if: { balance: { eq: 0 } },
 				},
 			),
@@ -127,27 +122,23 @@ async function testMissingRows(client: ZyncBaseClient): Promise<void> {
 		"PRECONDITION_FAILED",
 		() =>
 			client.store.remove(["accounts", "acct-missing"], {
-				confirm: "committed",
 				if: { balance: { eq: 0 } },
 			}),
 	);
 }
 
 async function testBatchTransfer(client: ZyncBaseClient): Promise<void> {
-	await client.store.set(["accounts", "acct-4"], { balance: 100 }, committed);
-	await client.store.set(["accounts", "acct-5"], { balance: 0 }, committed);
-	await client.store.batch(
-		[
-			{
-				op: "increment",
-				path: ["accounts", "acct-4", "balance"],
-				by: -40,
-				if: { balance: { gte: 40 } },
-			},
-			{ op: "increment", path: ["accounts", "acct-5", "balance"], by: 40 },
-		],
-		committed,
-	);
+	await client.store.set(["accounts", "acct-4"], { balance: 100 });
+	await client.store.set(["accounts", "acct-5"], { balance: 0 });
+	await client.store.batch([
+		{
+			op: "increment",
+			path: ["accounts", "acct-4", "balance"],
+			by: -40,
+			if: { balance: { gte: 40 } },
+		},
+		{ op: "increment", path: ["accounts", "acct-5", "balance"], by: 40 },
+	]);
 	if ((await readBalance(client, "acct-4")) !== 60) {
 		throw new Error("Expected source balance 60 after transfer");
 	}
@@ -158,18 +149,15 @@ async function testBatchTransfer(client: ZyncBaseClient): Promise<void> {
 	// The destination credit executes first, then the source decrement fails
 	// its condition. The balance assertions prove the executed credit rolled back.
 	await expectCode("failed transfer", "PRECONDITION_FAILED", () =>
-		client.store.batch(
-			[
-				{ op: "increment", path: ["accounts", "acct-5", "balance"], by: 1 },
-				{
-					op: "increment",
-					path: ["accounts", "acct-4", "balance"],
-					by: -1000,
-					if: { balance: { gte: 1000 } },
-				},
-			],
-			committed,
-		),
+		client.store.batch([
+			{ op: "increment", path: ["accounts", "acct-5", "balance"], by: 1 },
+			{
+				op: "increment",
+				path: ["accounts", "acct-4", "balance"],
+				by: -1000,
+				if: { balance: { gte: 1000 } },
+			},
+		]),
 	);
 	if ((await readBalance(client, "acct-4")) !== 60) {
 		throw new Error("Failed batch changed source balance");
@@ -177,17 +165,6 @@ async function testBatchTransfer(client: ZyncBaseClient): Promise<void> {
 	if ((await readBalance(client, "acct-5")) !== 40) {
 		throw new Error("Failed batch changed destination balance");
 	}
-}
-
-async function testConfirmation(client: ZyncBaseClient): Promise<void> {
-	await expectCode(
-		"conditional write without committed",
-		"INVALID_MESSAGE",
-		() =>
-			client.store.set(["accounts", "acct-3", "balance"], 1, {
-				if: { balance: { eq: 7 } },
-			}),
-	);
 }
 
 export async function run(port: number = 3000) {
@@ -202,7 +179,6 @@ export async function run(port: number = 3000) {
 		await testConditionalSet(client);
 		await testMissingRows(client);
 		await testBatchTransfer(client);
-		await testConfirmation(client);
 
 		console.log("Conditional write and increment tests passed!");
 	} finally {

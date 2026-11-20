@@ -41,9 +41,9 @@ ZyncBaseClient.prototype.connect = async function () {
 	if (wrapped.has(this.store)) return connect.call(this);
 	wrapped.add(this.store);
 	const batch = this.store.batch.bind(this.store);
-	this.store.batch = async (operations, options) => {
+	this.store.batch = async (operations) => {
 		const started = performance.now();
-		const result = await batch(operations, options);
+		const result = await batch(operations);
 		commits.push({
 			at: Date.now(),
 			ms: performance.now() - started,

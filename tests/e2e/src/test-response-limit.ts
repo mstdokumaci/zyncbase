@@ -24,9 +24,8 @@ async function testResponseTooLarge(client: ZyncBaseClient) {
 	await client.setNamespace("public");
 
 	const title = "x".repeat(120);
-	const committed = { confirm: "committed" } as const;
 	for (let i = 0; i < 12; i++) {
-		await client.store.set(["tasks", `task-${i}`], { title }, committed);
+		await client.store.set(["tasks", `task-${i}`], { title });
 	}
 
 	let tooLargeError: { code?: string } | undefined;
