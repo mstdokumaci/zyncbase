@@ -17,11 +17,13 @@ function registerView(
 ): void {
 	tracker.register(subId, {
 		params,
+		collection: String(params.table_index),
 		callbacks: [callback],
 		projection: null,
 		materializedView: {
 			records: new Map(),
 			comparator: createCreatedAtComparator(),
+			matches: () => true,
 		},
 	});
 }
@@ -31,7 +33,7 @@ function registerView(
  * Validates: Requirements 3.6, 8.2
  */
 describe("SubscriptionTracker", () => {
-	test("Property 9: dispatching a StoreDelta invokes the registered callback exactly once with the delta ops", () => {
+	test("Property 9: dispatching a StoreDelta invokes the registered callback exactly once with the record", () => {
 		fc.assert(
 			fc.property(fc.integer({ min: 1, max: 100000 }), (subId) => {
 				const tracker = new SubscriptionTracker();
@@ -46,20 +48,20 @@ describe("SubscriptionTracker", () => {
 
 				tracker.register(subId, {
 					params,
+					collection: "users",
+					docId: "u1",
 					callbacks: [callback],
-					projection: null, // store.subscribe style
+					projection: createListenProjection(["users", "u1"]),
 				});
 
-				const delta: StoreDelta = {
+				const record = { id: "u1", name: "Alice" };
+				tracker.dispatch({
 					type: "StoreDelta",
 					subId,
-					ops: [{ op: "set", path: ["name"], value: "Alice" }],
-				};
+					ops: [{ op: "set", path: ["users", "u1"], value: record }],
+				});
 
-				tracker.dispatch(delta);
-
-				// Callback invoked exactly once with the delta's ops
-				return received.length === 1 && received[0] === delta.ops;
+				return received.length === 1 && received[0] === record;
 			}),
 			{ numRuns: 100 },
 		);
@@ -434,6 +436,53 @@ describe("SubscriptionTracker - field projection delivery", () => {
 		push([9, 2, 3]); // genuine change: delivered
 		expect(seen).toHaveLength(2);
 		expect(seen[1]).toEqual(new Uint8Array([9, 2, 3]));
+	});
+
+	test("a nested delivery stops the superseded outer callback loop", () => {
+		const tracker = new SubscriptionTracker();
+		const first: JsonValue[] = [];
+		const second: JsonValue[] = [];
+		let nested = false;
+
+		tracker.register(308, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			docId: "u1",
+			callbacks: [
+				(value) => {
+					first.push(value);
+					if (nested) return;
+					nested = true;
+					tracker.dispatch({
+						type: "StoreDelta",
+						subId: 308,
+						ops: [
+							{
+								op: "set",
+								path: ["users", "u1"],
+								value: { id: "u1", name: "second", updated_at: 2 },
+							},
+						],
+					});
+				},
+				(value) => second.push(value),
+			],
+			projection: createListenProjection(["users", "u1", "name"]),
+		});
+
+		tracker.dispatch({
+			type: "StoreDelta",
+			subId: 308,
+			ops: [
+				{
+					op: "set",
+					path: ["users", "u1"],
+					value: { id: "u1", name: "first", updated_at: 1 },
+				},
+			],
+		});
+
+		expect(first).toEqual(["first", "second"]);
+		expect(second).toEqual(["second"]);
 	});
 
 	test("own __proto__ keys survive the suppression baseline clone", () => {

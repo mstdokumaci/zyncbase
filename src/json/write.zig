@@ -65,6 +65,12 @@ pub const Writer = struct {
     }
 
     fn appendFloat(self: *Writer, value: anytype) !void {
+        // JSONB keeps the number text, so normalize signed zero: -0.0 and 0.0
+        // must serialize identically for array equality.
+        if (value == 0) {
+            try self.buf.appendSlice(self.allocator, "0.0");
+            return;
+        }
         var buf: [64]u8 = undefined;
         const s = std.fmt.bufPrint(&buf, "{d}", .{value}) catch return error.WriteFailed;
         if (std.mem.indexOfAny(u8, s, ".eE") == null) {

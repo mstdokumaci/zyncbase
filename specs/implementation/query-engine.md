@@ -60,6 +60,22 @@ SQL lowering (`filter_sql.zig`) and in-memory evaluation (`eval.zig`) implement 
 
 - **NULL fields.** A field that is NULL (or absent from the record) matches only `isNull`. Every other operator, `ne` and non-empty `notIn` included, evaluates to false — SQL's three-valued comparison, where `NULL != x` is not true. An empty `notIn` list is the exception: normalization removes `notIn([])` as trivially true, so the resulting filter includes rows with NULL fields.
 - **NULL operands.** The parser rejects a `null` operand (`NullOperandUnsupported`); `isNull` / `isNotNull` are the only way to test for NULL.
+- **Array equality.** Arrays are stored as JSONB in sorted-set form, and an array `eq` / `ne` operand is parsed into the same form and bound through `jsonb(?)`, so SQL compares like for like.
+
+### Client Evaluation
+
+The SDK evaluates the same rules for its optimistic overlay (ADR-018): `sdk/typescript/src/filter_eval.ts` decides whether a locally changed record belongs in a view. A filter matches when every `conditions` entry holds and, when `orConditions` is present, at least one of them holds.
+
+| Operator | Holds when the field is non-null and… |
+|---|---|
+| `eq` / `ne` | equal / not equal, exactly: text is case-sensitive, numbers compare by value (`0` equals `-0`), arrays compare as sorted sets |
+| `gt` / `gte` / `lt` / `lte` | ordered: numbers numerically, text by UTF-8 bytes, booleans `false < true`, document ids in packed order (short ids before UUIDv7) |
+| `startsWith` / `endsWith` / `contains` on text | the substring test holds after folding ASCII `A`–`Z` only; other letters compare exactly; an empty operand matches |
+| `contains` on an array | the array has an element exactly equal to the operand |
+| `in` / `notIn` | the value is / is not a member; `in []` holds for no row and `notIn []` for every row, NULL included |
+| `isNull` / `isNotNull` | the field is / is not NULL or absent (no non-null requirement) |
+
+The vectors in `sdk/typescript/src/filter_eval.vectors.ts` are the conformance suite: `filter_eval.test.ts` runs them against the evaluator, and the e2e suite `tests/e2e/src/test-filter-conformance.ts` runs them against a live server's snapshot (SQL) and delta (in-memory) paths.
 
 ## Invariants
 

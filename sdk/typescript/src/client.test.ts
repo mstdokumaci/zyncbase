@@ -338,7 +338,7 @@ describe("ZyncBaseClient", () => {
 		);
 		const handle = await pendingListen;
 		await new Promise((r) => setTimeout(r, 0));
-		expect(values).toEqual([]);
+		expect(values).toEqual([null]);
 
 		// A namespace switch re-runs the replay path without dropping the socket.
 		const switching = client.setStoreNamespace("other");
@@ -375,6 +375,7 @@ describe("ZyncBaseClient", () => {
 
 		// The remapped document listen receives its snapshot again.
 		expect(values).toEqual([
+			null,
 			{
 				id: userId,
 				namespace_id: 1,
@@ -442,8 +443,9 @@ describe("ZyncBaseClient", () => {
 				],
 			}),
 		);
-		await waitFor(() => values.length === 1);
-		expect(values[0]).toMatchObject({ name: "Ada" });
+		await waitFor(() => values.length === 2);
+		expect(values[0]).toBeNull();
+		expect(values[1]).toMatchObject({ name: "Ada" });
 
 		client.disconnect();
 		restoreWebSocket();

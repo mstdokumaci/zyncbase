@@ -166,4 +166,121 @@ describe("React hooks E2E", () => {
 			);
 		});
 	});
+
+	test("optimistic writes render before the round trip, revert on failure, and converge", async () => {
+		await runE2ETest("React optimistic writes", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-sync.json"),
+					dataDir: ctx.dataPath("react-optimistic"),
+					configName: "zyncbase-config-react-optimistic.json",
+					authPath: ctx.schemaPath("auth-allow-all.json"),
+				},
+				async ({ port }) => {
+					const url = `ws://127.0.0.1:${port}`;
+					const client = createClient({ url, auth: { anonymous: true } });
+					const peer = createClient({ url, auth: { anonymous: true } });
+
+					const renders: OverlayRender[] = [];
+					function Probe() {
+						const query = useQuery("unique_projects", {});
+						renders.push({
+							isLoading: query.isLoading,
+							slugs: Object.fromEntries(
+								query.data.map((row) => {
+									const { id, slug } = row as { id?: unknown; slug?: unknown };
+									return [String(id), String(slug)];
+								}),
+							),
+							pending: [...query.pending],
+						});
+						return null;
+					}
+					const last = () => renders[renders.length - 1];
+
+					const tree = render(
+						createElement(ZyncBaseProvider, { client }, createElement(Probe)),
+					);
+					try {
+						await act(async () => {
+							await client.connect();
+							await peer.connect();
+						});
+						await waitFor(() => expect(last()?.isLoading).toBe(false), {
+							timeout: 10_000,
+						});
+						await act(async () => {
+							await client.store.set("unique_projects.p1", {
+								slug: "taken",
+								provider: "gh",
+								externalId: "1",
+							});
+							await client.store.set("unique_projects.p2", {
+								slug: "free",
+								provider: "gh",
+								externalId: "2",
+							});
+						});
+						expect(last()?.slugs).toEqual({ p1: "taken", p2: "free" });
+
+						// A synchronous act renders before any server reply can be read.
+						let edit: Promise<void> = Promise.resolve();
+						act(() => {
+							edit = client.store.set("unique_projects.p2.slug", "renamed");
+						});
+						expect(last()?.slugs.p2).toBe("renamed");
+						expect(last()?.pending).toEqual(["p2"]);
+						await act(async () => {
+							await edit;
+						});
+						expect(last()?.slugs.p2).toBe("renamed");
+						expect(last()?.pending).toEqual([]);
+
+						// A unique violation shows until the server rejects it.
+						let duplicate: Promise<void> = Promise.resolve();
+						act(() => {
+							duplicate = client.store.set("unique_projects.p2.slug", "taken");
+						});
+						expect(last()?.slugs.p2).toBe("taken");
+						let code: string | undefined;
+						await act(async () => {
+							await duplicate.catch((err: { code?: string }) => {
+								code = err.code;
+							});
+						});
+						expect(code).toBe("UNIQUE_CONSTRAINT_VIOLATED");
+						expect(last()?.slugs).toEqual({ p1: "taken", p2: "renamed" });
+						expect(last()?.pending).toEqual([]);
+
+						// Concurrent edits converge on the server's apply order.
+						await act(async () => {
+							await Promise.all([
+								client.store.set("unique_projects.p1.slug", "mine"),
+								peer.store.set("unique_projects.p1.slug", "theirs"),
+							]);
+						});
+						const committed = await peer.store.get("unique_projects.p1.slug");
+						await waitFor(
+							() => expect(last()?.slugs.p1).toBe(String(committed)),
+							{
+								timeout: 10_000,
+							},
+						);
+						expect(last()?.pending).toEqual([]);
+					} finally {
+						tree.unmount();
+						client.disconnect();
+						peer.disconnect();
+					}
+				},
+			);
+		});
+	});
 });
+
+interface OverlayRender {
+	isLoading: boolean;
+	slugs: Record<string, string>;
+	pending: string[];
+}

@@ -121,6 +121,7 @@ pub fn appendConditionSql(
         .eq, .ne, .gt, .lt, .gte, .lte => {
             const val = try requireValue(cond);
             try buf.appendSlice(allocator, cmpOpSql(cond.op));
+            if (cond.field_type == .array) try buf.appendSlice(allocator, "jsonb(?)") else try buf.append(allocator, '?');
             try appendClonedValue(allocator, values, val);
         },
         .contains => {
@@ -157,12 +158,12 @@ fn requireValue(cond: *const query_ast.Condition) !Value {
 
 fn cmpOpSql(op: query_ast.Operator) []const u8 {
     return switch (op) {
-        .eq => " = ?",
-        .ne => " != ?",
-        .gt => " > ?",
-        .lt => " < ?",
-        .gte => " >= ?",
-        .lte => " <= ?",
+        .eq => " = ",
+        .ne => " != ",
+        .gt => " > ",
+        .lt => " < ",
+        .gte => " >= ",
+        .lte => " <= ",
         else => unreachable,
     };
 }

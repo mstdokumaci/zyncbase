@@ -35,6 +35,7 @@ export type {
 	JsonValue,
 	LifecycleEvent,
 	ListenHandle,
+	ListenMeta,
 	Path,
 	Presence,
 	PresenceEntry,
@@ -47,10 +48,12 @@ export type {
 	StatusDetail,
 	Store,
 	SubscriptionHandle,
+	SubscriptionMeta,
 	TicketResponse,
 	TypedOrderClause,
 	TypedQueryOptions,
 	TypedWhere,
 	WhereOperators,
+	WriteOptions,
 } from "./types.js";
 export { generateUUIDv7 } from "./uuid.js";

@@ -122,6 +122,7 @@ pub fn fromPayload(allocator: Allocator, ft: schema_types.FieldType, items_type:
     if (value == .nil) return .nil;
     return switch (ft) {
         .array => {
+            if (value != .arr) return error.TypeMismatch;
             const it = items_type orelse return error.TypeMismatch;
             return buildArrayValue(allocator, msgpack.Payload, value.arr, it, scalarFromPayload, struct {
                 fn f(v: msgpack.Payload) bool {

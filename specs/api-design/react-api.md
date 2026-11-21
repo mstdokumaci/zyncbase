@@ -34,11 +34,11 @@ Locked during competitive research (session 2026-11-10), with receipts. Cite the
 | :--- | :--- | :--- |
 | Package layout | Same package, `/react` subpath (not a second package) | Convex (`convex/react`), Zero (`@rocicorp/zero/react`). At 0.x protocol churn, a second package doubles version choreography; splitting later is easy, merging is not. |
 | React target | `^19.0.0` peer dependency, **optional** so non-React consumers are unaffected | React 19 covers the audience; `peerDependenciesMeta.optional` keeps Node/bun CLI users of the core package clean. |
-| Query hook return | `{ data, isLoading, error }` triad (not a tuple, not `undefined`-punning) | InstantDB, PowerSync (`+isFetching`), Liveblocks all use the triad. Majority of the cohort; friendlier than Convex's `undefined`-while-loading. |
+| Query hook return | `{ data, isLoading, error }` triad plus the `pending` marker (not a tuple, not `undefined`-punning) | InstantDB, PowerSync (`+isFetching`), Liveblocks all use the triad. Majority of the cohort; friendlier than Convex's `undefined`-while-loading. |
 | Conditional queries | `"skip"` sentinel argument (not `enabled: false`) | Convex's documented pattern; one-line semantics, no config object growth. |
 | Presence hook shape | `{ mine, peers, publish }` with merge-on-publish | InstantDB `db.rooms.usePresence`. Almost identical to our `Presence` client primitive (`localUserId`, unordered `PresenceEntry[]`, `set`). |
 | Status hook shape | `{ status, synced }` over `ConnectionStatus` + lifecycle events | Liveblocks' richer `lost/restored/failed` vocabulary requires client-side lost-detection the client does not expose yet; keep the hook mapped to existing primitives. |
-| Optimistic writes | Out of scope; subscription-first propagation stays (ADR-018) | Local echo is a client-store product decision, not a hooks concern. Mentioned here so it is not rediscovered. |
+| Optimistic writes | Applied by the client store (ADR-018); hooks surface `pending` (`useQuery`) and `isPending` (`useListen`) | Local echo is a client-store concern, so every consumer sees the same overlay; hooks only expose which rows are not committed yet. |
 | Suspense variant | Deferred to a future dual export | Liveblocks ships root + `/suspense`; Zero builds suspense-first. Both validate that this can be added without renaming anything. |
 
 ## Package & Exports
@@ -77,25 +77,26 @@ import { ZyncBaseProvider } from "@zyncbase/client/react";
 
 ## Hooks
 
-Six hooks, in dependency-free order. All return-triad members are stable between deliveries.
+Six hooks, in dependency-free order. All returned fields are stable between deliveries.
 
 ### `useQuery(collection, options | "skip")`
 
 Reactive collection query over `store.subscribe`.
 
 ```typescript
-const { data, isLoading, error } = useQuery("tasks", {
+const { data, pending, isLoading, error } = useQuery("tasks", {
   where: { done: false },
   orderBy: [{ createdAt: "desc" }],
 });
 const nothing = useQuery("tasks", "skip");
 ```
 
-- `data: RowsOf<S, C>` — current rows, synchronously available from the first server delivery; `[]` before it and while skipped.
+- `data: RowsOf<S, C>` — current rows, synchronously available from the first server delivery; `[]` before it and while skipped. The client's own writes show here before they commit (ADR-018).
+- `pending: ReadonlySet<string>` — ids of rows in `data` that show a write not committed yet; empty before the first delivery and while skipped.
 - `isLoading` — `true` until **any** snapshot has been delivered since the hook's subscription began; `false` thereafter, also when skipped.
 - `error: ZyncBaseError | null` — subscription-registration failures land here; render never throws.
 - Subscribes on mount, `unsubscribe()` on unmount. Re-subscription happens only when the canonical query changes: options are key-serialized (sorted-key canonical form), so callers may pass inline object literals safely.
-- `"skip"` registers nothing and resets the triad — the Convex conditional-query idiom for hooks under early returns.
+- `"skip"` registers nothing and resets every field — the Convex conditional-query idiom for hooks under early returns.
 - Pagination (`handle.loadMore`, `hasMore`) is **not** exposed by this hook yet; see [Deliberately Not Included](#deliberately-not-included).
 
 ### `useListen(path)`
@@ -103,11 +104,12 @@ const nothing = useQuery("tasks", "skip");
 Reactive single-path value over `store.listen`.
 
 ```typescript
-const { value, isLoading, error } = useListen("users.alice.status");
+const { value, isPending, isLoading, error } = useListen("users.alice.status");
 ```
 
 - `value: GetValue<S, P>` — last value, or `undefined` before the first delivery (matches `ListenHandle.getSnapshot` semantics exactly).
-- Same triad, subscribe/unmount, and canonical-keying rules as `useQuery`.
+- `isPending: boolean` — whether `value` shows a write not committed yet.
+- Same `isLoading` / `error`, subscribe/unmount, and canonical-keying rules as `useQuery`.
 - Changing `path` between renders unlistens the old path and listens the new one; the hook must tolerate the async `unlisten` rejection race by ignoring late deliveries from a detached handle.
 
 ### `useAction(name, options?)`
@@ -196,7 +198,7 @@ This section binds what the React layer must and must not do:
 - **Reconnection:** the client restores all active subscriptions and emits `synced`/`reconnected`. Hooks must not unsubscribe/resubscribe on connection events. If a hook re-subscribes on anything, it is wrong.
 - **Schema change:** the client invalidates active subscriptions and re-registers them itself; hooks again do nothing. Any new data arrives through the same callback.
 - **Strict Mode:** double mount/unmount must leak neither wires subscriptions nor callbacks. Handles are disposable; late async acks after unmount are ignored, not unawaited garbage.
-- **Never read-and-throw:** registration methods whose promise rejects mid-render windows resolve in effect scope, not render scope. The triad fields are the only render-visible effect.
+- **Never read-and-throw:** registration methods whose promise rejects mid-render windows resolve in effect scope, not render scope. The returned fields are the only render-visible effect.
 
 ## Deliberately Not Included
 
@@ -205,7 +207,6 @@ Named so absence is a decision, not an omission. Each is a cheap follow-up in ve
 - **`/react/suspense` dual export** — Liveblocks-style; hooks get suspense twins sharing semantics with these names.
 - **Infinite query hook** — `SubscriptionHandle.loadMore`/`hasMore` exist client-side; a hook will come with cursor UX rather than wrapping them ad hoc.
 - **Selector + shallow rerender control** (`useOthers(selector, shallow)`, `rowComparator`) — mirror Liveblocks/PowerSync if real apps show over-render pain our snapshot diffing does not already cure.
-- **`useMutation`-style write hooks and optimistic local echo** — blocked on an ADR-level product decision in the store, not React.
 - **TanStack Query adapter** — InstantDB ships one after their React SDK hardened (`start-tanstack` guide), a good precedent for when to add one.
 - **React Native** — the client library is runtime-agnostic, but hooks stay browser/worker-targeted until someone asks.
 - **Devtools** — not a spec artifact until the API stabilizes.
@@ -215,10 +216,14 @@ Named so absence is a decision, not an omission. Each is a cheap follow-up in ve
 Creation of `@zyncbase/client/react` is complete; these remain its acceptance criteria. Hook tests run under `@testing-library/react` with happy-dom via Bun; per repo convention, no production code is added to accommodate tests:
 
 1. Provider missing → every hook throws a descriptive dev error.
-2. `useQuery` triad transitions: `isLoading` true → false on first delivery; skip sentinel registers nothing; inline option literals do not re-subscribe.
-3. `useListen` path change re-binds; late detached deliveries ignored.
+2. `useQuery` transitions: `isLoading` true → false on first delivery; `pending` follows each delivery; skip sentinel registers nothing; inline option literals do not re-subscribe.
+3. `useListen` path change re-binds; late detached deliveries ignored; `isPending` follows each delivery.
 4. `useAction` returns a stable identity; rejects propagate.
 5. `usePresence`: `publish` reaches `presence.set`; peers exclude self; two consumers share one wire subscription (registry asserted); last unmount unsubscribes.
 6. `useSyncStatus`: maps `statusChange` and `synced`/`reconnected` exactly; correct SSR defaults.
 7. Unmount/Strict-Mode double-invoke leaks nothing (mock handles count calls).
-8. **One live e2e** against a running server: provider + `useQuery` + `useListen` + real `store.set` round-trip, verifying the hook's `data` matches the plain client's `getSnapshot()` for the same query (existing e2e harness). Protocol changes (if any) re-run `bun run test:e2e` per repo convention.
+8. **Live e2e** against a running server (existing e2e harness):
+   - provider + `useQuery` + `useListen` + real `store.set` round-trip, verifying the hook's `data` matches the plain client's `getSnapshot()` for the same query
+   - an optimistic write renders, marked pending, before the server round trip; a unique violation renders, then reverts; two clients' concurrent edits converge
+
+   Protocol changes (if any) re-run `bun run test:e2e` per repo convention.

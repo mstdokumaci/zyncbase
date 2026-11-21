@@ -28,33 +28,43 @@ afterEach(() => {
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
+type QueryCallback = (
+	rows: unknown[],
+	meta: { pending: ReadonlySet<string> },
+) => void;
+type ListenCallback = (value: unknown, meta: { pending: boolean }) => void;
+
 class FakeSubscription {
 	unsubscribed = 0;
 	snapshot: unknown[] = [];
+	pendingIds: ReadonlySet<string> = new Set();
 	loadMore = async () => {};
 	hasMore = false;
-	constructor(private readonly callback: (rows: unknown[]) => void) {}
+	constructor(private readonly callback: QueryCallback) {}
 	getSnapshot = () => this.snapshot;
 	unsubscribe = async () => {
 		this.unsubscribed += 1;
 	};
-	push(rows: unknown[]) {
+	push(rows: unknown[], pending: ReadonlySet<string> = new Set()) {
 		this.snapshot = rows;
-		this.callback(rows);
+		this.pendingIds = pending;
+		this.callback(rows, { pending });
 	}
 }
 
 class FakeListener {
 	unlistened = 0;
 	snapshot: unknown = undefined;
-	constructor(private readonly callback: (value: unknown) => void) {}
+	isPending = false;
+	constructor(private readonly callback: ListenCallback) {}
 	getSnapshot = () => this.snapshot;
 	unlisten = async () => {
 		this.unlistened += 1;
 	};
-	push(value: unknown) {
+	push(value: unknown, pending = false) {
 		this.snapshot = value;
-		this.callback(value);
+		this.isPending = pending;
+		this.callback(value, { pending });
 	}
 }
 
@@ -82,13 +92,13 @@ function makeClient() {
 			subscribe: async (
 				_collection: string,
 				_options: unknown,
-				callback: (rows: unknown[]) => void,
+				callback: QueryCallback,
 			) => {
 				const subscription = new FakeSubscription(callback);
 				querySubs.push(subscription);
 				return subscription;
 			},
-			listen: async (path: string, callback: (value: unknown) => void) => {
+			listen: async (path: string, callback: ListenCallback) => {
 				const listener = new FakeListener(callback);
 				listenSubs.push({ path, listener });
 				return listener;
@@ -207,10 +217,29 @@ describe("useQuery", () => {
 
 		expect(result.current).toEqual({
 			data: [],
+			pending: new Set(),
 			isLoading: false,
 			error: null,
 		});
 		expect(querySubs.length).toBe(0);
+	});
+
+	test("pending follows the delivered rows", async () => {
+		const { client, querySubs } = makeClient();
+		const { result } = renderHook(() => useQuery("tasks", {}), {
+			wrapper: wrapperFor(client),
+		});
+		await waitFor(() => expect(querySubs.length).toBe(1));
+
+		act(() => {
+			querySubs[0].push([{ id: "a", title: "local" }], new Set(["a"]));
+		});
+		expect([...result.current.pending]).toEqual(["a"]);
+
+		act(() => {
+			querySubs[0].push([{ id: "a", title: "local" }]);
+		});
+		expect(result.current.pending.size).toBe(0);
 	});
 
 	test("inline option literals do not re-subscribe", async () => {
@@ -334,6 +363,24 @@ describe("useListen", () => {
 
 		expect(result.current.value).toBe("online");
 		expect(result.current.isLoading).toBe(false);
+	});
+
+	test("isPending follows the delivered value", async () => {
+		const { client, listenSubs } = makeClient();
+		const { result } = renderHook(() => useListen("users.alice.status"), {
+			wrapper: wrapperFor(client),
+		});
+		await waitFor(() => expect(listenSubs.length).toBe(1));
+
+		act(() => {
+			listenSubs[0].listener.push("away", true);
+		});
+		expect(result.current).toMatchObject({ value: "away", isPending: true });
+
+		act(() => {
+			listenSubs[0].listener.push("away");
+		});
+		expect(result.current.isPending).toBe(false);
 	});
 
 	test("path change re-binds and ignores late deliveries", async () => {

@@ -40,7 +40,7 @@ ZyncBase is built on thirteen core principles that guide every architectural dec
 
 12. **P-SOT — SQLite as the Source of Truth**: All persistent state lives in SQLite. In-memory structures (subscription engine, lock-free cache, namespace maps) are performance derivatives, never independent sources of truth. On restart, SQLite alone must be sufficient to reconstruct all application state.
 
-13. **P-SAT — Subscriptions as Authority for Client State**: Client-visible committed state is observed through subscriptions, not through write outcomes. A write outcome reports whether that write committed; it does not deliver state. The SDK must not mutate local subscription state speculatively — subscriptions are the source of truth for what the server has committed.
+13. **P-SAT — Subscriptions as Authority for Client State**: Client-visible committed state is observed through subscriptions, not through write outcomes. A write outcome reports whether that write committed; it does not deliver state. The SDK may show the client's own pending writes as an overlay, but never changes committed records with them: the overlay is a pending, revertible projection on top of what subscriptions deliver (ADR-018).
 
 ---
 

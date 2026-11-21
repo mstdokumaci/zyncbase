@@ -1,6 +1,6 @@
 # TypeScript SDK
 
-**Drivers**: [Wire Protocol](./wire-protocol.md), [Error Taxonomy](./error-taxonomy.md), [ADR-017](../architecture/adrs.md#adr-017-strict-sdk-api-surface--store-vs-presence), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes)
+**Drivers**: [Wire Protocol](./wire-protocol.md), [Error Taxonomy](./error-taxonomy.md), [ADR-017](../architecture/adrs.md#adr-017-strict-sdk-api-surface--store-vs-presence), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes-and-optimistic-local-state)
 
 The TypeScript SDK owns the browser/application API surface, connection lifecycle, wire translation, local subscription materialization, presence API, retry behavior, and client-side validation before requests reach the server.
 
@@ -14,7 +14,10 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 | `sdk/typescript/src/pending_requests.ts` | Pending request registry, timeout handling, and write-outcome correlation. |
 | `sdk/typescript/src/store.ts` | Public store API, subscription registry (keyed sharing, readiness queue, grace teardown), and namespace-aware store connection wrapper. |
 | `sdk/typescript/src/store_wire.ts` | Store command construction for set/remove/create/get/query/batch/listen/subscribe/loadMore. |
-| `sdk/typescript/src/subscriptions.ts` | Local materialized views, listen projections, sorting, pagination, and delta application. |
+| `sdk/typescript/src/subscriptions.ts` | Local materialized views, listen projections, sorting, pagination, delta application, and overlay delivery. |
+| `sdk/typescript/src/optimistic.ts` | Pending local writes (`PendingWrites`): overlay ops built from sent write messages, apply and settle rules. |
+| `sdk/typescript/src/filter_eval.ts` | Client filter evaluator deciding overlay membership in views; vectors in `filter_eval.vectors.ts`. |
+| `sdk/typescript/src/value_order.ts` | Server value order: UTF-8 text, packed doc ids, sorted-set arrays. |
 | `sdk/typescript/src/presence.ts` | Public presence API, user/shared subscriptions, and presence event delivery. |
 | `sdk/typescript/src/schema_dictionary.ts` | `SchemaSync` dictionary decoding and integer table/field lookup. |
 | `sdk/typescript/src/errors.ts` | SDK `ErrorCodes`, `ZyncBaseError`, category derivation, and retryability. |
@@ -36,7 +39,8 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 | `PendingRequests` | timers, request ids | Resolves/rejects request promises, including store writes by request id, and enforces the write timeout. |
 | `StoreImpl` | `StoreCommand`, subscriptions, connection | Implements store reads, writes, batches, listens, load-more behavior, and the keyed subscription registry. The registry shares one server subscription per key across consumers and sits above `SubscriptionTracker` (which remains the subId→entry layer). |
 | `PresenceImpl` | connection, schema dictionary | Implements user and shared presence APIs. |
-| `SubscriptionTracker` | materialized view, comparator, cursor state | Tracks local subscription state and applies `StoreDelta` pushes. |
+| `SubscriptionTracker` | materialized view, comparator, cursor state, `PendingWrites` | Tracks local subscription state, applies `StoreDelta` pushes, and delivers committed state with pending writes applied. |
+| `PendingWrites` | overlay ops | Pending writes per document in send order; applies them over committed records and settles them. |
 | `SchemaDictionary` | `SchemaSync` payload | Maps names to integer table/field ids and decodes server records. |
 | `ZyncBaseError` | `ErrorCodes` | Stable SDK error object and retry metadata. |
 
@@ -65,7 +69,7 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 1. Public store/presence method validates SDK inputs and builds a semantic command.
 2. `ConnectionManager` ensures the connection and required namespace scope are ready.
 3. `ConnectionWireCodec` encodes the command using current schema dictionaries and replaces the logical `type` name with its numeric wire ID from the shared registry (`WireMessageType`); `decodeMessage` maps numeric IDs back to the logical `InboundMessage` type names, so the rest of the SDK never sees numeric wire IDs.
-4. `PendingRequests` records the request id; store writes also get the `writeTimeoutMs` timer.
+4. `PendingRequests` records the request id; store writes also get the `writeTimeoutMs` timer. Once a write is sent, `StoreImpl` adds it to the overlay and delivers it ([Optimistic Overlay](#optimistic-overlay)).
 5. An `ok` or `error` response resolves/rejects the request. A store write gets no `ok`: `WriteCommitted` resolves it, `WriteError` or `error` rejects it, and writes are never retried.
 6. Server pushes update subscription and presence listeners. While the subscription tracker is synced, a write's deltas arrive before `WriteCommitted` for subscriptions registered before the writer checks the active subscription count for that write; subscriptions registered after that check are not guaranteed delta-before-`WriteCommitted`. The SDK delivers pending subscription snapshots before the `StoreImpl.write` promise resolves for the deltas that were produced and delivered; a write that produces no delta fires no callback. A write made while the tracker is disconnected can resolve before its queued deltas are delivered on reconnect; `reconnect()` drains and applies them. `flushNow()` flushes only pending batched snapshots, not the disconnected queue.
 
@@ -84,9 +88,22 @@ Recovery orchestration lives in `client.ts` (resolve-at-`synced`, emit `synced`/
 - `StoreImpl` and `SubscriptionTracker` receive final nested records. They must not reinterpret positional rows or unflatten complete records.
 - A malformed correlated record rejects its pending request. A malformed delta push is dropped without preventing later complete messages in the same frame from being processed.
 
+## Optimistic Overlay
+
+Contract: [ADR-018 → Optimistic Local State](../architecture/adrs.md#optimistic-local-state) and [Store API → Optimistic Writes](../api-design/store-api.md#optimistic-writes).
+
+- `StoreImpl.write` sends the message first, then `showLocally` builds overlay ops from that sent message (`overlayOps`), so the overlay sees exactly the field paths and values the server does. Delivering after the send keeps a callback that writes from reordering writes on the wire.
+- Shaping goes through `SchemaDictionary`: `expandNullNamespaces`, shared with `encodeValue`, clears object namespaces; arrays take the server's sorted-set form; a create gets every schema field plus provisional system fields from `tracker.provisionalTime()`, which stays above the largest `updated_at` the tracker has seen.
+- `PendingWrites` holds each entry's ops per document in send order; `apply` replays them over the flattened committed record. Committed records stay untouched in `MaterializedView.records` and `SubscriptionEntry.serverRecord`.
+- A document's committed base comes from the entry itself, else from any view or listen of the collection that holds it. Without one, only a pending create produces a row.
+- A view admits an overlaid row when `MaterializedView.matches` holds; `compileWhere` builds it once per entry from the subscribe message.
+- `refresh(keys)` updates delivered arrays incrementally: copy, find the row by id, replace it in place when the comparator ranks old and new equal, else remove it and binary-insert. Full sorts happen only for server delta flushes and initial snapshots, which apply the overlay too.
+- `settle` drops the entry (`commit` or `fail`), calls `flushNow()` on commit, then `refresh`. `markNotReady` (disconnect, namespace commit) clears the overlay and refreshes.
+- Each delivery stores `deliveredPending` (views: id set; listens: boolean) next to `deliveredValue`; callbacks receive it as `meta.pending` and handles read it through `pendingIds` / `isPending`.
+
 ## Subscription Delivery Contract
 
-- `store.subscribe` callbacks receive the current full snapshot of matching records and fire **at most once per event-loop tick** while deltas arrive. Deltas within a tick are applied to the local materialized view in arrival order, then one snapshot is delivered. A tick whose ops applied nothing (e.g. removes of absent records) fires no callback. The view state read inside a callback is always current; only the callback timing is batched (≈1 tick, sub-ms to a few ms under load). Unchanged records keep their object reference across snapshots.
+- `store.subscribe` callbacks receive the current full snapshot of matching records and fire **at most once per event-loop tick** while deltas arrive. Local writes add a synchronous delivery from the write call (and one when they settle). Deltas within a tick are applied to the local materialized view in arrival order, then one snapshot is delivered. A tick whose ops applied nothing (e.g. removes of absent records) fires no callback. The view state read inside a callback is always current; only the callback timing is batched (≈1 tick, sub-ms to a few ms under load). Unchanged records keep their object reference across snapshots.
 - `store.listen` callbacks are synchronous per emitted committed delta within the message handling task (single-record projection, O(1) per delta). A field-path delta whose projected value is deep-equal to the last delivered value is not delivered; document-level listens deliver each updated record. A delta represents one record's transaction endpoints, not one write: repeated writes to a record in one writer transaction may yield one callback, and create-then-delete may yield none.
 - Both preserve per-subscription arrival order; there is no cross-subscription ordering contract.
 - Delivery is per server subscription, not per consumer: all consumers of a shared key observe the same snapshots at the same times — no per-consumer buffering or divergence.
@@ -97,7 +114,7 @@ Recovery orchestration lives in `client.ts` (resolve-at-`synced`, emit `synced`/
 - **Keyed sharing.** One server subscription per key (key definition: [Store API → Keyed sharing](../api-design/store-api.md#keyed-sharing)). `StoreImpl`'s keyed registry owns key→subId, refcounts, per-key pagination state (`nextCursor`, `hasMore`), and grace timers. Establishment races use the presence generation-guard pattern (`presence.ts` establish loop): detach-during-establishment re-checks the refcount when the wire response lands and unsubscribes immediately if it is zero.
 - **Deltas before the ack.** The server registers a subscription before it reads the snapshot, so deltas can arrive before the `ok` that reveals their subId, and the snapshot may predate them. While any subscribe is in flight, `SubscriptionTracker` holds deltas for unknown subIds. `acceptAck` registers the entry, delivers the snapshot, then replays that subId's held deltas in arrival order into the same flush. When no subscribe is in flight the held deltas are discarded; deltas for unknown subIds are then dropped with a warning.
 - **Grace teardown.** Last-consumer detach schedules the wire unsubscribe after the contract's grace window via a single `setTimeout` per key, cancelled on re-attach.
-- **Snapshots.** Collection entries read the sorted `materializedView.records`; listen entries retain a `lastValue` field (projection dispatch stores what it delivers — new field on `SubscriptionEntry`), which `getSnapshot()` returns.
+- **Snapshots.** `getSnapshot()` returns the entry's `deliveredValue`: for collections the sorted `materializedView.records` with the overlay applied, for listens the last projected value.
 - **Namespace switch.** `setStoreNamespace` flushes every live store key against the new namespace through the registry before resolving; registry refcounts are preserved across re-dispatch. Presence and action replay is scoped to `setPresenceNamespace`.
 
 ## Error And Retry Rules

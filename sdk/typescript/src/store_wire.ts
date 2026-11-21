@@ -31,7 +31,7 @@ export interface StoreCommand<TMessage> {
 
 export type WireCondition = [string, number] | [string, number, JsonValue];
 
-const OP_CODES: Record<string, number> = {
+export const OP_CODES: Record<string, number> = {
 	eq: 0,
 	ne: 1,
 	gt: 2,

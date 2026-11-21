@@ -1,6 +1,6 @@
 # Storage
 
-**Drivers**: [ADR-005](../architecture/adrs.md#adr-005-sqlite-as-the-storage-engine), [ADR-010](../architecture/adrs.md#adr-010-conflict-resolution--last-write-wins), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes), [Threading](./threading.md), [Query Engine](./query-engine.md)
+**Drivers**: [ADR-005](../architecture/adrs.md#adr-005-sqlite-as-the-storage-engine), [ADR-010](../architecture/adrs.md#adr-010-conflict-resolution--last-write-wins), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes-and-optimistic-local-state), [Threading](./threading.md), [Query Engine](./query-engine.md)
 
 The storage layer persists store data in SQLite with WAL mode. It owns schema-to-DDL generation, reader/writer connection roles, typed value encoding, write serialization, query execution, and committed change production. Migration execution runs on the storage engine's setup connection. Its contract lives in [Schema Migrations](./schema-migrations.md).
 

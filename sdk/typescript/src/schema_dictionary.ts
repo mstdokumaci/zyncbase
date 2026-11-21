@@ -472,72 +472,49 @@ export class SchemaDictionary {
 			);
 		}
 
-		const entries = Object.entries(value);
-
-		// Fast path: no namespace clear, so preserve insertion order and avoid
-		// the Map/sort allocation on ordinary writes.
-		const needsExpansion = entries.some(
-			([key, val]) => val === null && !fieldMap.has(key),
-		);
-		if (!needsExpansion) {
-			const result: SparseFieldArray = [];
-			for (const [key, val] of entries) {
-				const fieldIndex = fieldMap.get(key);
-				if (fieldIndex === undefined) {
-					throw this.unknownFieldError(tableIndex, key);
-				}
-				result.push(
-					fieldIndex,
-					this.encodeFieldValue(tableIndex, fieldIndex, val),
-				);
-			}
-			return result;
-		}
-
-		const encoded = new Map<number, unknown>();
-		this.expandNullNamespaces(tableIndex, value, fieldMap, encoded);
-		this.applyDirectFields(tableIndex, value, fieldMap, encoded);
-		return this.toSparseArray(encoded);
-	}
-
-	/** Expands a null namespace key to every leaf beneath it. */
-	private expandNullNamespaces(
-		tableIndex: number,
-		value: Record<string, unknown>,
-		fieldMap: Map<string, number>,
-		encoded: Map<number, unknown>,
-	): void {
-		for (const [key, val] of Object.entries(value)) {
-			if (fieldMap.has(key) || val !== null) continue;
-			const prefix = `${key}__`;
-			let matched = false;
-			for (const [name, index] of fieldMap) {
-				if (!name.startsWith(prefix)) continue;
-				encoded.set(index, null);
-				matched = true;
-			}
-			if (!matched) throw this.unknownFieldError(tableIndex, key);
-		}
-	}
-
-	/** Applies direct leaf keys after namespace clears so they always win. */
-	private applyDirectFields(
-		tableIndex: number,
-		value: Record<string, unknown>,
-		fieldMap: Map<string, number>,
-		encoded: Map<number, unknown>,
-	): void {
-		for (const [key, val] of Object.entries(value)) {
+		const result: SparseFieldArray = [];
+		const expanded = this.expandNullNamespaces(tableIndex, value);
+		for (const [key, val] of Object.entries(expanded)) {
 			const fieldIndex = fieldMap.get(key);
 			if (fieldIndex === undefined) {
-				if (val === null) continue;
 				throw this.unknownFieldError(tableIndex, key);
 			}
-			encoded.set(
+			result.push(
 				fieldIndex,
 				this.encodeFieldValue(tableIndex, fieldIndex, val),
 			);
 		}
+		return result;
+	}
+
+	/**
+	 * Replaces each null key that names an object namespace with a null for
+	 * every leaf beneath it. Explicit leaves win regardless of key order;
+	 * other keys, known or not, pass through. Returns `value` itself when
+	 * there is nothing to expand.
+	 */
+	expandNullNamespaces<V>(
+		tableIndex: number,
+		value: Record<string, V | null>,
+	): Record<string, V | null> {
+		const fieldMap = this.fieldToIndex.get(tableIndex);
+		if (fieldMap === undefined) return value;
+		const expanded: Record<string, V | null> = {};
+		const namespaces = new Set<string>();
+		for (const [key, val] of Object.entries(value)) {
+			if (val !== null || fieldMap.has(key)) continue;
+			const prefix = `${key}__`;
+			for (const name of fieldMap.keys()) {
+				if (!name.startsWith(prefix)) continue;
+				expanded[name] = null;
+				namespaces.add(key);
+			}
+		}
+		if (namespaces.size === 0) return value;
+		for (const [key, val] of Object.entries(value)) {
+			if (!namespaces.has(key)) expanded[key] = val;
+		}
+		return expanded;
 	}
 
 	private unknownFieldError(tableIndex: number, key: string): SchemaError {
@@ -545,16 +522,6 @@ export class SchemaDictionary {
 			`SchemaDictionary: unknown field "${key}" in table index ${tableIndex}`,
 			"FIELD_NOT_FOUND",
 		);
-	}
-
-	private toSparseArray(encoded: Map<number, unknown>): SparseFieldArray {
-		const result: SparseFieldArray = [];
-		for (const [index, val] of [...encoded.entries()].sort(
-			([a], [b]) => a - b,
-		)) {
-			result.push(index, val);
-		}
-		return result;
 	}
 
 	/** Decode a complete positional record into its final nested SDK shape. */

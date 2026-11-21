@@ -1,8 +1,9 @@
 // Store API
 
 import type { OutboundRequest } from "./connection_wire.js";
-import { compareDocIds } from "./doc_id.js";
 import { ErrorCodes, toZyncError, ZyncBaseError } from "./errors.js";
+import { compileWhere } from "./filter_eval.js";
+import { overlayOps, type PendingEntry } from "./optimistic.js";
 import { flatten, getDeepProperty, splitFieldPath } from "./path.js";
 import type { SchemaDictionary } from "./schema_dictionary.js";
 import {
@@ -22,6 +23,8 @@ import {
 import {
 	createCreatedAtComparator,
 	createListenProjection,
+	type DeliveryCallback,
+	NO_PENDING,
 	type SubscriptionEntry,
 	type SubscriptionTracker,
 } from "./subscriptions.js";
@@ -37,8 +40,10 @@ import type {
 	QueryOptions,
 	StoreSubscribe,
 	SubscriptionHandle,
+	WriteOptions,
 } from "./types.js";
 import { generateUUIDv7 } from "./uuid.js";
+import { compareScalars } from "./value_order.js";
 
 /** How long a keyed subscription outlives its last consumer before teardown. */
 const GRACE_TEARDOWN_MS = 300;
@@ -66,6 +71,8 @@ export interface StoreConnection {
 	dispatchWrite(msg: OutboundRequest): Promise<void>;
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
 	readonly schemaDictionary: SchemaDictionary;
+	/** The connection's internal user id; owner of the rows it creates. */
+	readonly userId: string | null;
 }
 
 /**
@@ -93,7 +100,7 @@ interface RegistrationKey {
 	/** Query options for the comparator (subscribe only). */
 	options: QueryOptions | null;
 	/** Shared consumer callbacks — the tracker entry holds this same array. */
-	callbacks: Array<(value: JsonValue) => void>;
+	callbacks: DeliveryCallback[];
 	/** Server subId once accepted; null while queued or establishing. */
 	subId: number | null;
 	/** Establishment promise; null once settled (accepted or dropped). */
@@ -110,7 +117,7 @@ interface RegistrationKey {
 /** A registration whose promise has not settled yet. */
 interface PendingConsumer {
 	state: RegistrationKey;
-	callback: (value: JsonValue) => void;
+	callback: DeliveryCallback;
 	settled: boolean;
 	reject: (err: unknown) => void;
 }
@@ -150,6 +157,7 @@ export class StoreImpl {
 		return this.write(
 			() => buildSet(path, value, options).message,
 			"Set failed",
+			options,
 		);
 	}
 
@@ -157,6 +165,7 @@ export class StoreImpl {
 		return this.write(
 			() => buildRemove(path, options).message,
 			"Remove failed",
+			options,
 		);
 	}
 
@@ -172,15 +181,25 @@ export class StoreImpl {
 					},
 				]),
 			"Increment failed",
+			options,
 		);
 	}
 
-	create(collection: string, value: JsonValue): Promise<string> {
+	create(
+		collection: string,
+		value: JsonValue,
+		options?: WriteOptions,
+	): Promise<string> {
 		const id = generateUUIDv7();
-		const result = this.write(() => {
-			this.validateRequiredFields(collection, value);
-			return buildCreate(collection, value, id).message;
-		}, "Create failed").then(() => id);
+		const result = this.write(
+			() => {
+				this.validateRequiredFields(collection, value);
+				return buildCreate(collection, value, id).message;
+			},
+			"Create failed",
+			options,
+			true,
+		).then(() => id);
 		result.catch(() => {}); // see write()
 		return result;
 	}
@@ -208,13 +227,13 @@ export class StoreImpl {
 		}
 	}
 
-	batch(operations: BatchOperation[]): Promise<void> {
-		return this.write(() => buildBatch(operations), "Batch failed");
+	batch(operations: BatchOperation[], options?: WriteOptions): Promise<void> {
+		return this.write(() => buildBatch(operations), "Batch failed", options);
 	}
 
 	listen(
 		path: Path,
-		callback: (value: JsonValue) => void,
+		callback: (value: JsonValue, meta: { pending: boolean }) => void,
 	): Promise<ListenHandle> {
 		const command = buildListen(path);
 		const state = this.acquireKey(`l:${JSON.stringify(command.segments)}`, {
@@ -224,15 +243,20 @@ export class StoreImpl {
 			collection: null,
 			options: null,
 		});
-		return this.attach(state, callback, () => {
+		const deliver = callback as DeliveryCallback;
+		const pending = () => this.pendingOf(state);
+		return this.attach(state, deliver, () => {
 			let released = false;
 			return {
 				unlisten: () => {
 					if (released) return Promise.resolve();
 					released = true;
-					return this.release(state, callback);
+					return this.release(state, deliver);
 				},
 				getSnapshot: () => this.snapshotOf(state),
+				get isPending() {
+					return pending() === true;
+				},
 			};
 		});
 	}
@@ -240,7 +264,10 @@ export class StoreImpl {
 	subscribe(
 		collection: string,
 		options: QueryOptions,
-		callback: (results: JsonValue[]) => void,
+		callback: (
+			results: JsonValue[],
+			meta: { pending: ReadonlySet<string> },
+		) => void,
 	): Promise<SubscriptionHandle> {
 		const command = buildSubscribe(collection, options);
 		const state = this.acquireKey(`s:${JSON.stringify(command.message)}`, {
@@ -253,7 +280,9 @@ export class StoreImpl {
 			// (which throws `DataCloneError` on non-cloneable user values).
 			options: { orderBy: options.orderBy?.map((clause) => ({ ...clause })) },
 		});
-		return this.attach(state, callback as (value: JsonValue) => void, () => {
+		const deliver = callback as DeliveryCallback;
+		const pending = () => this.pendingOf(state);
+		return this.attach(state, deliver, () => {
 			let released = false;
 			return {
 				get hasMore() {
@@ -263,11 +292,15 @@ export class StoreImpl {
 				unsubscribe: () => {
 					if (released) return Promise.resolve();
 					released = true;
-					return this.release(state, callback as (value: JsonValue) => void);
+					return this.release(state, deliver);
 				},
 				// A subscribe key's materialized view always snapshots to rows.
 				getSnapshot: () =>
 					(this.snapshotOf(state) as JsonValue[] | undefined) ?? [],
+				get pendingIds() {
+					const ids = pending();
+					return ids instanceof Set ? ids : NO_PENDING;
+				},
 			};
 		});
 	}
@@ -317,7 +350,7 @@ export class StoreImpl {
 	 */
 	private attach<H>(
 		state: RegistrationKey,
-		callback: (value: JsonValue) => void,
+		callback: DeliveryCallback,
 		makeHandle: () => H,
 	): Promise<H> {
 		const request = new Promise<H>((resolve, reject) => {
@@ -343,13 +376,16 @@ export class StoreImpl {
 					resolve(makeHandle());
 					if (entry.deliveredValue === undefined) return;
 					const value = entry.deliveredValue;
+					const pending =
+						entry.deliveredPending ??
+						(state.kind === "listen" ? false : NO_PENDING);
 					// Fire on a microtask: a caller's synchronous tail
 					// (storing the handle) must run first, or a delivery
 					// guard keyed on that store drops the snapshot.
 					queueMicrotask(() => {
 						if (!state.callbacks.includes(callback)) return;
 						try {
-							callback(value);
+							callback(value, { pending });
 						} catch (err) {
 							console.error("[SDK] Subscription callback threw:", err);
 						}
@@ -497,26 +533,42 @@ export class StoreImpl {
 	}
 
 	private entryFor(state: RegistrationKey): SubscriptionEntry {
+		const onRemap = (newId: number): void => {
+			state.subId = newId;
+		};
+		if (state.kind === "listen") {
+			const segments = state.segments as string[];
+			return {
+				params: state.message,
+				collection: segments[0],
+				docId: segments[1],
+				callbacks: state.callbacks,
+				projection: createListenProjection(segments),
+				onRemap,
+			};
+		}
+		const collection = state.collection as string;
+		const schema = this.conn.schemaDictionary;
 		return {
 			params: state.message,
+			collection,
 			callbacks: state.callbacks,
-			projection:
-				state.kind === "listen"
-					? createListenProjection(state.segments as string[])
-					: null,
-			materializedView:
-				state.kind === "subscribe"
-					? {
-							records: new Map(),
-							comparator: this.buildCollectionComparator(
-								state.collection as string,
-								state.options as QueryOptions,
-							),
-						}
-					: undefined,
-			onRemap: (newId) => {
-				state.subId = newId;
+			projection: null,
+			materializedView: {
+				records: new Map(),
+				comparator: this.buildCollectionComparator(
+					collection,
+					state.options as QueryOptions,
+				),
+				matches: compileWhere(state.message, (field) => {
+					const tableIndex = schema.getTableIndex(collection);
+					return schema.isDocIdField(
+						tableIndex,
+						schema.getFieldIndex(tableIndex, field),
+					);
+				}),
 			},
+			onRemap,
 		};
 	}
 
@@ -535,7 +587,7 @@ export class StoreImpl {
 	 */
 	private release(
 		state: RegistrationKey,
-		callback: (value: JsonValue) => void,
+		callback: DeliveryCallback,
 	): Promise<void> {
 		const index = state.callbacks.indexOf(callback);
 		if (index !== -1) state.callbacks.splice(index, 1);
@@ -605,6 +657,13 @@ export class StoreImpl {
 		return this.tracker.get(state.subId)?.deliveredValue;
 	}
 
+	private pendingOf(
+		state: RegistrationKey,
+	): ReadonlySet<string> | boolean | undefined {
+		if (state.subId === null) return undefined;
+		return this.tracker.get(state.subId)?.deliveredPending;
+	}
+
 	/**
 	 * Internal: the client calls this once the session (schema + replay) is
 	 * ready — it wakes queued establishments and waits for their acks.
@@ -623,6 +682,7 @@ export class StoreImpl {
 	markNotReady(): void {
 		this.sessionReady = false;
 		this.scopeGen++;
+		this.tracker.refresh(this.tracker.pending.clear());
 	}
 
 	/** Internal: a namespace switch is in flight — pause new establishments. */
@@ -725,27 +785,84 @@ export class StoreImpl {
 
 	/**
 	 * Build and send a write synchronously, so writes and reads issued
-	 * back-to-back reach the server in call order. The server sends a write's
-	 * deltas before its outcome, so subscriptions are flushed before the
-	 * promise resolves. Failures emit on('error'); the returned promise is
-	 * marked handled so un-awaited writes do not raise unhandled rejections.
+	 * back-to-back reach the server in call order. Unless opted out, the
+	 * write then shows in subscriptions and listens before this returns. The
+	 * server sends a write's deltas before its outcome, so subscriptions are
+	 * flushed before the promise resolves. Failures revert the local write
+	 * and emit on('error'); the returned promise is marked handled so
+	 * un-awaited writes do not raise unhandled rejections.
 	 */
 	private write(
 		build: () => OutboundRequest,
 		fallbackMessage: string,
+		options: WriteOptions | undefined,
+		create = false,
 	): Promise<void> {
+		let message: OutboundRequest | null = null;
 		let sent: Promise<void>;
 		try {
-			sent = this.conn.dispatchWrite(build());
+			message = build();
+			sent = this.conn.dispatchWrite(message);
 		} catch (err) {
 			sent = Promise.reject(err);
 		}
+		const entry =
+			message !== null && options?.optimistic !== false
+				? this.showLocally(message, create)
+				: null;
 		const result = sent.then(
-			() => this.tracker.flushNow(),
-			(err: unknown) => this.emitAndThrow(err, fallbackMessage),
+			() => this.settle(entry, true),
+			(err: unknown) => {
+				this.settle(entry, false);
+				this.emitAndThrow(err, fallbackMessage);
+			},
 		);
 		result.catch(() => {});
 		return result;
+	}
+
+	/**
+	 * Adds a sent write to the overlay and delivers it. Skipped while the
+	 * session is not ready (the write fails fast) or a namespace switch is
+	 * in flight, and for writes the overlay cannot shape: those fail on the
+	 * server, which rejects what the schema cannot describe.
+	 */
+	private showLocally(
+		message: OutboundRequest,
+		create: boolean,
+	): PendingEntry | null {
+		if (!this.sessionReady || this.switchPending > 0) return null;
+		let ops: ReturnType<typeof overlayOps>;
+		try {
+			ops = overlayOps(message, create, {
+				schema: this.conn.schemaDictionary,
+				userId: this.conn.userId,
+				time: this.tracker.provisionalTime(),
+			});
+		} catch {
+			return null;
+		}
+		if (ops === null) return null;
+		const entry = this.tracker.pending.add(ops);
+		this.tracker.refresh(entry.keys);
+		return entry;
+	}
+
+	/**
+	 * Drops a settled write from the overlay. A commit's deltas arrive before
+	 * it, so they are flushed after the drop and before the refresh: one
+	 * delivery, with no frame showing the old server value.
+	 */
+	private settle(entry: PendingEntry | null, committed: boolean): void {
+		const pending = this.tracker.pending;
+		const keys =
+			entry === null
+				? null
+				: committed
+					? pending.commit(entry)
+					: pending.fail(entry);
+		if (committed) this.tracker.flushNow();
+		if (keys !== null) this.tracker.refresh(keys);
 	}
 
 	private async dispatchVoid(
@@ -845,58 +962,6 @@ function compareSortEntry(
 	if (va == null) return vb == null ? 0 : 1;
 	if (vb == null) return -1;
 
-	const result =
-		entry.docId && typeof va === "string" && typeof vb === "string"
-			? compareDocIds(va, vb)
-			: compareNonNullValues(va, vb);
+	const result = compareScalars(va, vb, entry.docId);
 	return entry.desc ? -result : result;
-}
-
-function compareNonNullValues(a: JsonValue, b: JsonValue): number {
-	if (typeof a !== typeof b) return 0;
-	switch (typeof a) {
-		case "number":
-			return compareAsc(a, b as number);
-		case "boolean":
-			return compareBooleans(a, b as boolean);
-		case "string":
-			return compareUtf8(a, b as string);
-		default:
-			return 0;
-	}
-}
-
-function compareAsc<T extends number | string>(a: T, b: T): number {
-	return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function compareBooleans(a: boolean, b: boolean): number {
-	return a === b ? 0 : a ? 1 : -1;
-}
-
-const textEncoder = new TextEncoder();
-
-/** Compares strings by the exact UTF-8 bytes used by SQLite BINARY ordering. */
-function compareUtf8(a: string, b: string): number {
-	if (isUtf8LexicalFastPath(a) && isUtf8LexicalFastPath(b)) {
-		return compareAsc(a, b);
-	}
-	return compareUtf8Bytes(a, b);
-}
-
-function compareUtf8Bytes(a: string, b: string): number {
-	const ba = textEncoder.encode(a);
-	const bb = textEncoder.encode(b);
-	const length = Math.min(ba.length, bb.length);
-	for (let i = 0; i < length; i++) {
-		if (ba[i] !== bb[i]) return ba[i] < bb[i] ? -1 : 1;
-	}
-	return ba.length < bb.length ? -1 : ba.length > bb.length ? 1 : 0;
-}
-
-function isUtf8LexicalFastPath(value: string): boolean {
-	for (let i = 0; i < value.length; i += 1) {
-		if (value.charCodeAt(i) >= 0x800) return false;
-	}
-	return true;
 }

@@ -117,7 +117,7 @@ test "Subscription Consistency: delta matching agrees with SQL snapshots on NULL
 
     var members = [_]typed.ScalarValue{.{ .integer = 5 }};
     const ops = [_]query_ast.Operator{ .eq, .ne, .gt, .lt, .gte, .lte, .in, .notIn, .isNull, .isNotNull };
-    for (ops, 0..) |op, sub_id| {
+    for (ops) |op| {
         const operand: ?typed.Value = switch (op) {
             .isNull, .isNotNull => null,
             .in, .notIn => .{ .array = &members },
@@ -125,37 +125,83 @@ test "Subscription Consistency: delta matching agrees with SQL snapshots on NULL
         };
         var filter = try qth.makeFilterWithConditions(allocator, &.{.{ .field_index = score_index, .op = op, .value = operand, .field_type = .integer, .items_type = null }});
         defer filter.deinit(allocator);
-
-        const snapshot = try sth.queryDocs(allocator, &ctx.engine, items.index, 1, &filter);
-        defer snapshot.deinit(allocator);
-
-        var snapshot_ids = std.AutoHashMap(typed_doc_id.DocId, void).init(allocator);
-        defer snapshot_ids.deinit();
-        for (snapshot.records) |record| {
-            const id = sth.getFieldDocIdOrNull(record, items, "id") orelse return error.TestExpectedValue;
-            try snapshot_ids.put(id, {});
-        }
-
-        var sub_engine = SubscriptionEngine.init(testing.io, allocator);
-        defer sub_engine.deinit();
-        try sub_engine.subscribe(1, items.index, filter, 42, sub_id);
-
-        // A row the snapshot excludes must not produce a delta, and vice versa.
-        for (stored) |record| {
-            const matches = try sub_engine.handleRecordChange(.{
-                .namespace_id = 1,
-                .table_index = items.index,
-                .operation = .insert,
-                .new_record = record,
-                .old_record = null,
-            }, allocator);
-            defer allocator.free(matches);
-            const id = sth.getFieldDocIdOrNull(record, items, "id") orelse return error.TestExpectedValue;
-            const in_snapshot = snapshot_ids.contains(id);
-            testing.expectEqual(in_snapshot, matches.len > 0) catch |err| {
-                std.debug.print("operator {s}: record {d} in SQL snapshot: {}, deltas matched: {d}\n", .{ @tagName(op), id, in_snapshot, matches.len });
-                return err;
-            };
-        }
+        _ = try expectDeltasAgreeWithSnapshot(allocator, &ctx, items, &stored, &filter, op);
     }
+}
+
+test "Subscription Consistency: delta matching agrees with SQL snapshots on array equality" {
+    const allocator = std.heap.smp_allocator;
+
+    var fields_arr = [_]sth.Field{
+        schema_helpers.makeField("name", .text),
+        schema_helpers.makeField("tags", .array),
+    };
+    var ctx: sth.EngineTestContext = undefined;
+    try sth.setupEngine(&ctx, allocator, "array-eq-consistency", schema_helpers.makeTable("items", &fields_arr));
+    defer ctx.deinit();
+
+    const items = try ctx.tableMetadata("items");
+    const tags_index = items.fieldIndex("tags") orelse return error.UnknownField;
+    var both = [_]typed.ScalarValue{ .{ .text = "a" }, .{ .text = "b" } };
+    var only_a = [_]typed.ScalarValue{.{ .text = "a" }};
+    try ctx.insertField("items", 1, 1, "tags", .{ .array = &both });
+    try ctx.insertField("items", 2, 1, "tags", .{ .array = &only_a });
+    try ctx.insertText("items", 3, 1, "name", "no tags");
+    try ctx.engine.flushPendingWrites();
+
+    var stored: [3]typed.Record = undefined;
+    for (&stored, 1..) |*record, id| {
+        record.* = (try sth.readDoc(allocator, &ctx.engine, items.index, @intCast(id), 1)) orelse return error.TestExpectedValue;
+    }
+    defer for (stored) |record| record.deinit(allocator);
+
+    for ([_]query_ast.Operator{ .eq, .ne }) |op| {
+        var filter = try qth.makeFilterWithConditions(allocator, &.{.{ .field_index = tags_index, .op = op, .value = .{ .array = &both }, .field_type = .array, .items_type = .text }});
+        defer filter.deinit(allocator);
+        const matched = try expectDeltasAgreeWithSnapshot(allocator, &ctx, items, &stored, &filter, op);
+        try testing.expectEqual(@as(usize, 1), matched);
+    }
+}
+
+/// Asserts that each stored record produces a delta exactly when the SQL
+/// snapshot for `filter` contains it. Returns the snapshot size.
+fn expectDeltasAgreeWithSnapshot(
+    allocator: std.mem.Allocator,
+    ctx: *sth.EngineTestContext,
+    items: *const sth.TableMetadata,
+    stored: []const typed.Record,
+    filter: *const query_ast.QueryFilter,
+    op: query_ast.Operator,
+) !usize {
+    const snapshot = try sth.queryDocs(allocator, &ctx.engine, items.index, 1, filter);
+    defer snapshot.deinit(allocator);
+
+    var snapshot_ids = std.AutoHashMap(typed_doc_id.DocId, void).init(allocator);
+    defer snapshot_ids.deinit();
+    for (snapshot.records) |record| {
+        const id = sth.getFieldDocIdOrNull(record, items, "id") orelse return error.TestExpectedValue;
+        try snapshot_ids.put(id, {});
+    }
+
+    var sub_engine = SubscriptionEngine.init(testing.io, allocator);
+    defer sub_engine.deinit();
+    try sub_engine.subscribe(1, items.index, filter.*, 42, 1);
+
+    for (stored) |record| {
+        const matches = try sub_engine.handleRecordChange(.{
+            .namespace_id = 1,
+            .table_index = items.index,
+            .operation = .insert,
+            .new_record = record,
+            .old_record = null,
+        }, allocator);
+        defer allocator.free(matches);
+        const id = sth.getFieldDocIdOrNull(record, items, "id") orelse return error.TestExpectedValue;
+        const in_snapshot = snapshot_ids.contains(id);
+        testing.expectEqual(in_snapshot, matches.len > 0) catch |err| {
+            std.debug.print("operator {s}: record {d} in SQL snapshot: {}, deltas matched: {d}\n", .{ @tagName(op), id, in_snapshot, matches.len });
+            return err;
+        };
+    }
+    return snapshot.records.len;
 }

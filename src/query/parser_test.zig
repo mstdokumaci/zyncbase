@@ -347,6 +347,27 @@ test "contains on array field parses using element type" {
     try testing.expectEqualStrings("urgent", filter.predicate.conditions.?[0].value.?.scalar.text);
 }
 
+test "eq on array field rejects scalar operand" {
+    const allocator = std.testing.allocator;
+
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "items",
+        .fields = &[_][]const u8{"tags"},
+        .types = &[_]schema_types.FieldType{.array},
+    }});
+    defer schema.deinit();
+
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+    const root = try qth.createQueryFilterPayload(allocator, tbl, .{
+        .conditions = .{
+            .{ "tags", 0, "urgent" }, // eq
+        },
+    });
+    defer root.free(allocator);
+
+    try testing.expectError(error.TypeMismatch, query_parser.parseQueryFilter(allocator, &schema, tbl.index, root));
+}
+
 test "contains on text rejects non-string operand" {
     const allocator = std.testing.allocator;
 

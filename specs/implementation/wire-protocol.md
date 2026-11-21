@@ -1,6 +1,6 @@
 # Wire Protocol
 
-**Drivers**: [ADR-008](../architecture/adrs.md#adr-008-wire-encoding), [ADR-009](../architecture/adrs.md#adr-009-integer-routing-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes), [ADR-020](../architecture/adrs.md#adr-020-typed-two-tier-presence-system)
+**Drivers**: [ADR-008](../architecture/adrs.md#adr-008-wire-encoding), [ADR-009](../architecture/adrs.md#adr-009-integer-routing-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes-and-optimistic-local-state), [ADR-020](../architecture/adrs.md#adr-020-typed-two-tier-presence-system)
 
 This document is the canonical implementation contract for ZyncBase's WebSocket messages. It names the message types, stable fields, source files, and routing rules. Detailed query operators, schema dictionaries, and public error codes live in their owner specs.
 
@@ -181,7 +181,7 @@ Every `StoreSet`, `StoreRemove`, and `StoreBatch` receives exactly one of these 
 | `WriteCommitted` | The writer committed the write, including a no-op. An empty `StoreBatch` commits nothing and receives `WriteCommitted` immediately. |
 | `WriteError` | The writer rejected the write (`phase: "write"`). |
 
-Store subscription state is updated by committed `StoreDelta` pushes, not by optimistic mutation responses.
+Committed store state reaches subscriptions only through `StoreDelta` pushes; write outcomes carry no state.
 
 ## Conditional Writes and Atomic Increments
 
