@@ -144,6 +144,7 @@ export class ConnectionManager {
 	private presenceScope: Promise<void> | null = null;
 	private presenceScopeNamespace: string | null = null;
 	private presenceScopeReady = false;
+	private presenceScopeGeneration = 0;
 
 	private processingPromise: Promise<void> = Promise.resolve();
 
@@ -212,16 +213,22 @@ export class ConnectionManager {
 		if (this.presenceScope !== null && this.presenceScopeNamespace === ns) {
 			return this.presenceScope;
 		}
+		const generation = ++this.presenceScopeGeneration;
 		this.presenceScopeReady = false;
 		this.presenceScopeNamespace = ns;
-		const scope: Promise<void> = this.dispatch({
-			type: "PresenceSetNamespace",
-			namespace: ns,
-		})
+		const scope: Promise<void> = this.dispatchWithRetry(
+			{ type: "PresenceSetNamespace", namespace: ns },
+			0,
+			undefined,
+			() => this.presenceScopeGeneration === generation,
+		)
 			.then((ok) => {
+				if (this.presenceScope !== scope) {
+					throw this.supersededPresenceScopeError();
+				}
 				this.adoptUserId(ok, "PresenceSetNamespace");
 				this.presenceNamespace = ns;
-				if (this.presenceScope === scope) this.presenceScopeReady = true;
+				this.presenceScopeReady = true;
 			})
 			.catch((err: unknown) => {
 				if (this.presenceScope === scope) {
@@ -243,16 +250,36 @@ export class ConnectionManager {
 		msg: OutboundRequest,
 		send: () => Promise<T>,
 	): Promise<T> {
-		if (
-			this.presenceScopeReady ||
-			this.currentStatus !== "connected" ||
-			!this.needsPresenceScope(msg)
-		) {
+		if (this.currentStatus !== "connected" || !this.needsPresenceScope(msg)) {
 			return send();
 		}
+		if (this.presenceScopeReady) {
+			if (this.presenceNamespace === this.presenceScopeNamespace) return send();
+			this.presenceScopeReady = false;
+			this.presenceScope = null;
+		}
 		const scope =
-			this.presenceScope ?? this.setPresenceNamespace(this.presenceNamespace);
-		return scope.then(() => this.withPresenceScope(msg, send));
+			this.presenceScope ??
+			this.setPresenceNamespace(
+				this.presenceScopeNamespace ?? this.presenceNamespace,
+			);
+		return scope.then(
+			() => this.withPresenceScope(msg, send),
+			(err) => {
+				if (this.presenceScope !== null && this.presenceScope !== scope) {
+					return this.withPresenceScope(msg, send);
+				}
+				throw err;
+			},
+		);
+	}
+
+	private supersededPresenceScopeError(): ZyncBaseError {
+		return new ZyncBaseError("Presence namespace setup superseded", {
+			code: ErrorCodes.REQUEST_SUPERSEDED,
+			category: "state",
+			retryable: false,
+		});
 	}
 
 	/** Presence messages, and action messages naming a presence-scoped action. */
@@ -358,6 +385,7 @@ export class ConnectionManager {
 		this.presenceScope = null;
 		this.presenceScopeNamespace = null;
 		this.presenceScopeReady = false;
+		this.presenceScopeGeneration++;
 		this.stopLiveness();
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
@@ -562,6 +590,7 @@ export class ConnectionManager {
 		msg: OutboundRequest,
 		attempt: number,
 		responseTableIndex?: number,
+		isCurrent?: () => boolean,
 	): Promise<OkResponse> {
 		return this.withPresenceScope(msg, async () => {
 			const { result, debugType } = this.sendRequest(msg, responseTableIndex);
@@ -576,6 +605,7 @@ export class ConnectionManager {
 					err,
 					debugType,
 					responseTableIndex,
+					isCurrent,
 				);
 			}
 		});
@@ -587,7 +617,11 @@ export class ConnectionManager {
 		err: unknown,
 		debugType: string,
 		responseTableIndex?: number,
+		isCurrent?: () => boolean,
 	): Promise<OkResponse> {
+		if (isCurrent !== undefined && !isCurrent()) {
+			throw this.supersededPresenceScopeError();
+		}
 		if (!this.retryPolicy.shouldRetry(err, attempt)) throw err;
 
 		const delay = this.retryPolicy.getDelay(err, attempt);
@@ -598,7 +632,15 @@ export class ConnectionManager {
 		}
 		await sleep(delay);
 		if (this.intentionalDisconnect) throw err;
-		return this.dispatchWithRetry(msg, attempt + 1, responseTableIndex);
+		if (isCurrent !== undefined && !isCurrent()) {
+			throw this.supersededPresenceScopeError();
+		}
+		return this.dispatchWithRetry(
+			msg,
+			attempt + 1,
+			responseTableIndex,
+			isCurrent,
+		);
 	}
 
 	authRefresh(token: string): Promise<void> {

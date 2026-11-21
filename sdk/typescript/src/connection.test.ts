@@ -358,6 +358,146 @@ describe("ConnectionManager", () => {
 			expect(mockWs.sentMessages).toHaveLength(2);
 		});
 
+		test("a late superseded setup cannot overwrite the latest scope", async () => {
+			const { manager, mockWs } = makeManager({
+				presenceNamespace: "initial",
+			});
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("first");
+			const firstOutcome = first.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const second = manager.setPresenceNamespace("second");
+			const [firstScope, secondScope] = mockWs.sentMessages
+				.slice(1)
+				.map((bytes) => decode(bytes) as { id: number });
+
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: firstScope.id,
+					userId: packDocId("019c1e50-7d11-7000-8000-000000000002"),
+				}),
+			);
+			await tick();
+			expect(await firstOutcome).toBe("REQUEST_SUPERSEDED");
+			expect(manager.getPresenceNamespace()).toBe("initial");
+			expect(manager.userId).toBe(TEST_USER_ID);
+
+			ack(mockWs, secondScope.id);
+			await second;
+			expect(manager.getPresenceNamespace()).toBe("second");
+			expect(manager.userId).toBe(TEST_USER_ID);
+		});
+
+		test("a rejected presence switch keeps the previous namespace usable", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const initial = manager.setPresenceNamespace("public");
+			ack(mockWs, 2);
+			await initial;
+
+			const rejected = manager.setPresenceNamespace("other");
+			const rejectedScope = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: rejectedScope.id,
+					code: "NAMESPACE_SWITCH_REJECTED",
+					message: "Namespace switching is not allowed",
+				}),
+			);
+			await expect(rejected).rejects.toMatchObject({
+				code: "NAMESPACE_SWITCH_REJECTED",
+			});
+			expect(manager.getPresenceNamespace()).toBe("public");
+
+			const retried = manager.dispatch({ type: "PresenceSet", data: {} });
+			const retriedScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSetNamespace,
+			);
+			ack(mockWs, retriedScope.id);
+			await tick();
+			const presence = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSet,
+			);
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: presence.id }));
+			await retried;
+			expect(manager.getPresenceNamespace()).toBe("public");
+		});
+
+		test("a superseded setup is not retried after the latest request", async () => {
+			const { manager, mockWs } = makeManager({
+				reconnectDelay: 10,
+			});
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("first");
+			const firstOutcome = first.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const firstScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: firstScope.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 100,
+				}),
+			);
+			await tick();
+
+			const second = manager.setPresenceNamespace("second");
+			const secondOutcome = second.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const secondScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			const third = manager.setPresenceNamespace("first");
+			const thirdScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: secondScope.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+				}),
+			);
+			await tick();
+
+			await new Promise((r) => setTimeout(r, 150));
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+			]);
+
+			ack(mockWs, thirdScope.id);
+			await third;
+			expect(await firstOutcome).toBe("REQUEST_SUPERSEDED");
+			expect(await secondOutcome).toBe("REQUEST_SUPERSEDED");
+			expect(manager.getPresenceNamespace()).toBe("first");
+		});
+
 		test("a retry on a replacement socket requests the presence scope again", async () => {
 			const { manager, mockWs } = makeManager({
 				reconnect: false,
