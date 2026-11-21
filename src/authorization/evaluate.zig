@@ -86,7 +86,8 @@ pub fn evaluateConditionStrict(condition: types.Condition, ctx: EvalContext) boo
 
 /// Evaluate a condition with $doc references resolved against a candidate document.
 /// The candidate is composed from doc_id, owner_doc_id (injected), and incoming value_payload fields.
-/// Returns true if the condition passes, false if it fails or references an absent field.
+/// Returns true if the condition passes, false if it fails. An absent field resolves
+/// as NULL, so Operator.compare's empty in/notIn rule still applies.
 /// Zero-allocation: resolves $doc.field by looking up the incoming payload directly.
 pub fn evaluateConditionWithDoc(condition: types.Condition, ctx: EvalContext) bool {
     return evaluateConditionWithDocInternal(condition, ctx);
@@ -113,18 +114,16 @@ fn evaluateConditionWithDocInternal(condition: types.Condition, ctx: EvalContext
 
 fn evaluateComparisonWithDoc(comp: types.Comparison, ctx: EvalContext) bool {
     var lhs = resolveDocOperand(comp.lhs, ctx);
-    if (lhs) |*l| {
-        defer l.deinit(ctx.allocator);
-        if (comp.op.isNullary()) return comp.op.compareNullary(l.valueView());
+    defer if (lhs) |*l| l.deinit(ctx.allocator);
+    // An unresolved operand is NULL; Operator.compare still lets `notIn: []` through.
+    const lhs_value: Value = if (lhs) |*l| l.valueView() else .nil;
 
-        var rhs = resolveOperand(comp.rhs.?, ctx) orelse return false;
-        defer rhs.deinit(ctx.allocator);
+    if (comp.op.isNullary()) return comp.op.compareNullary(lhs_value);
 
-        return comp.op.compare(l.valueView(), rhs.valueView());
-    } else {
-        if (comp.op.isNullary()) return comp.op.compareNullary(.nil);
-        return false;
-    }
+    var rhs = resolveOperand(comp.rhs.?, ctx) orelse return false;
+    defer rhs.deinit(ctx.allocator);
+
+    return comp.op.compare(lhs_value, rhs.valueView());
 }
 
 fn resolveDocOperand(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthValue {
@@ -202,18 +201,16 @@ fn evaluateComparison(comp: types.Comparison, ctx: EvalContext, strict: bool) Ev
     }
 
     var lhs = resolveContextVar(comp.lhs, ctx);
-    if (lhs) |*l| {
-        defer l.deinit(ctx.allocator);
-        if (comp.op.isNullary()) return if (comp.op.compareNullary(l.valueView())) .allow else .deny;
+    defer if (lhs) |*l| l.deinit(ctx.allocator);
+    // An unresolved operand is NULL; Operator.compare still lets `notIn: []` through.
+    const lhs_value: Value = if (lhs) |*l| l.valueView() else .nil;
 
-        var rhs = resolveOperand(comp.rhs.?, ctx) orelse return .deny;
-        defer rhs.deinit(ctx.allocator);
+    if (comp.op.isNullary()) return if (comp.op.compareNullary(lhs_value)) .allow else .deny;
 
-        return if (comp.op.compare(l.valueView(), rhs.valueView())) .allow else .deny;
-    } else {
-        if (comp.op.isNullary()) return if (comp.op.compareNullary(.nil)) .allow else .deny;
-        return .deny;
-    }
+    var rhs = resolveOperand(comp.rhs.?, ctx) orelse return .deny;
+    defer rhs.deinit(ctx.allocator);
+
+    return if (comp.op.compare(lhs_value, rhs.valueView())) .allow else .deny;
 }
 
 fn resolveContextVar(var_ctx: types.ContextVar, ctx: EvalContext) ?ResolvedAuthValue {

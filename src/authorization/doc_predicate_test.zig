@@ -90,6 +90,21 @@ test "buildDocPredicate normalizes $doc notIn empty set to no guard" {
     try testing.expect(predicate == null);
 }
 
+test "buildDocPredicate treats a missing $session claim with notIn empty as no guard" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"$session.role":{"notIn":[]}}}]}
+    ;
+    var config = try auth_helpers.initTestConfig(allocator, json);
+    defer config.deinit();
+
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{});
+    defer table.deinit(allocator);
+
+    const predicate = try authorization_doc_predicate.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
+    try testing.expect(predicate == null);
+}
+
 test "buildDocPredicate preserves $doc in empty set as match none guard" {
     const allocator = std.testing.allocator;
     const json =

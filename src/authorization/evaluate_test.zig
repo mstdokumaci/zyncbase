@@ -2,6 +2,7 @@ const std = @import("std");
 
 const msgpack = @import("msgpack");
 
+const query_ast = @import("../query/ast.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
@@ -264,6 +265,50 @@ test "evaluateConditionWithDoc denies when $doc field is absent from candidate" 
     try testing.expect(!result);
 }
 
+test "evaluateConditionWithDoc applies empty membership lists to an absent field" {
+    const allocator = std.testing.allocator;
+
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
+        .{ .name = "status", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    var payload = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 0) };
+    defer payload.free(allocator);
+
+    const ctx = EvalContext{
+        .allocator = allocator,
+        .session_user_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .owner_doc_id = try typed_doc_id.generateUuidV7(std.testing.io),
+        .value_payload = &payload,
+        .value_table = &table,
+    };
+
+    const not_in_cond = authorization_types.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
+        .op = .notIn,
+        .rhs = .{ .literal = .{ .array = try allocator.alloc(ScalarValue, 0) } },
+    } };
+    defer not_in_cond.deinit(allocator);
+    const not_in_allowed = authorization_evaluate.evaluateConditionWithDoc(not_in_cond, ctx);
+    try testing.expect(not_in_allowed);
+
+    const in_cond = authorization_types.Condition{ .comparison = .{
+        .lhs = .{ .scope = .doc, .field = try allocator.dupe(u8, "status") },
+        .op = .in,
+        .rhs = .{ .literal = .{ .array = try allocator.alloc(ScalarValue, 0) } },
+    } };
+    defer in_cond.deinit(allocator);
+    const in_allowed = authorization_evaluate.evaluateConditionWithDoc(in_cond, ctx);
+    try testing.expect(!in_allowed);
+
+    const empty: typed.Value = .{ .array = try allocator.alloc(ScalarValue, 0) };
+    defer empty.deinit(allocator);
+    try testing.expectEqual(query_ast.Operator.notIn.compare(.nil, empty), not_in_allowed);
+    try testing.expectEqual(query_ast.Operator.in.compare(.nil, empty), in_allowed);
+}
+
 test "evaluateConditionWithDoc allows $doc.status == draft when status is draft" {
     const allocator = std.testing.allocator;
 
@@ -419,4 +464,32 @@ test "evaluateCondition: isNotNull allows when session field is present" {
 
     const ctx = EvalContext{ .allocator = allocator, .session_user_id = test_id };
     try testing.expectEqual(.allow, authorization_evaluate.evaluateCondition(condition, ctx));
+}
+
+test "evaluateCondition applies empty membership lists to a missing session claim" {
+    const allocator = std.testing.allocator;
+    const ctx = EvalContext{ .allocator = allocator };
+
+    const not_in_cond = authorization_types.Condition{ .comparison = .{
+        .lhs = .{ .scope = .session, .field = try allocator.dupe(u8, "role") },
+        .op = .notIn,
+        .rhs = .{ .literal = .{ .array = try allocator.alloc(ScalarValue, 0) } },
+    } };
+    defer not_in_cond.deinit(allocator);
+    const not_in_result = authorization_evaluate.evaluateCondition(not_in_cond, ctx);
+    try testing.expectEqual(.allow, not_in_result);
+
+    const in_cond = authorization_types.Condition{ .comparison = .{
+        .lhs = .{ .scope = .session, .field = try allocator.dupe(u8, "role") },
+        .op = .in,
+        .rhs = .{ .literal = .{ .array = try allocator.alloc(ScalarValue, 0) } },
+    } };
+    defer in_cond.deinit(allocator);
+    const in_result = authorization_evaluate.evaluateCondition(in_cond, ctx);
+    try testing.expectEqual(.deny, in_result);
+
+    const empty: typed.Value = .{ .array = try allocator.alloc(ScalarValue, 0) };
+    defer empty.deinit(allocator);
+    try testing.expectEqual(query_ast.Operator.notIn.compare(.nil, empty), not_in_result == .allow);
+    try testing.expectEqual(query_ast.Operator.in.compare(.nil, empty), in_result == .allow);
 }

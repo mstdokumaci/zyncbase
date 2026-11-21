@@ -47,6 +47,15 @@ test "store write rules judge NULL fields the same on create and on update" {
     var create_payload = msgpack.Payload{ .arr = create_items };
     defer create_payload.free(allocator);
 
+    // A create that omits both fields entirely; absence resolves as NULL too.
+    var absent_items = try allocator.alloc(msgpack.Payload, 2);
+    absent_items[0] = msgpack.Payload.uintToPayload(title_index);
+    absent_items[1] = try msgpack.Payload.strToPayload("t", allocator);
+    var absent_payload = msgpack.Payload{ .arr = absent_items };
+    defer absent_payload.free(allocator);
+
+    const create_payloads = [_]*const msgpack.Payload{ &create_payload, &absent_payload };
+
     var update_items = try allocator.alloc(msgpack.Payload, 2);
     update_items[0] = msgpack.Payload.uintToPayload(title_index);
     update_items[1] = try msgpack.Payload.strToPayload("t2", allocator);
@@ -68,6 +77,8 @@ test "store write rules judge NULL fields the same on create and on update" {
         ,
         \\{"$doc.status":{"in":["open"]}}
         ,
+        \\{"$doc.status":{"in":[]}}
+        ,
         \\{"$doc.status":{"notIn":["archived"]}}
         ,
         \\{"$doc.status":{"notIn":[]}}
@@ -81,36 +92,46 @@ test "store write rules judge NULL fields the same on create and on update" {
     };
 
     var mismatches: usize = 0;
-    for (rules) |rule| {
-        const json = try std.fmt.allocPrint(allocator,
-            \\{{"namespaces":[{{"pattern":"public","storeFilter":true,"presenceRead":true,"presenceWrite":true}}],
-            \\ "store":[{{"collection":"tasks","read":true,"write":{s}}}]}}
-        , .{rule});
-        defer allocator.free(json);
-        var config = try authorization_parse.initFromJson(allocator, json, &ctx.schema);
-        defer config.deinit();
+    for (create_payloads) |create_value| {
+        for (rules) |rule| {
+            const json = try std.fmt.allocPrint(allocator,
+                \\{{"namespaces":[{{"pattern":"public","storeFilter":true,"presenceRead":true,"presenceWrite":true}}],
+                \\ "store":[{{"collection":"tasks","read":true,"write":{s}}}]}}
+            , .{rule});
+            defer allocator.free(json);
+            var config = try authorization_parse.initFromJson(allocator, json, &ctx.schema);
+            defer config.deinit();
 
-        const input: authorization_store.StoreWriteInput = .{
-            .config = &config,
-            .table = tasks,
-            .session_user_id = try typed_doc_id.generateUuidV7(std.testing.io),
-            .namespace = "public",
-            .doc_id = 1,
-            .is_create = true,
-        };
+            const input: authorization_store.StoreWriteInput = .{
+                .config = &config,
+                .table = tasks,
+                .session_user_id = try typed_doc_id.generateUuidV7(std.testing.io),
+                .namespace = "public",
+                .doc_id = 1,
+                .is_create = true,
+            };
 
-        var create_input = input;
-        create_input.value = &create_payload;
-        const create_allowed = try allowsCreate(allocator, create_input);
+            var create_input = input;
+            create_input.value = create_value;
+            const create_allowed = try allowsCreate(allocator, create_input);
 
-        var update_input = input;
-        update_input.value = &update_payload;
-        update_input.is_create = false;
-        const update_allowed = try allowsUpdate(allocator, &ctx, tasks.index, update_input);
+            var update_input = input;
+            update_input.value = &update_payload;
+            update_input.is_create = false;
+            const update_allowed = try allowsUpdate(allocator, &ctx, tasks.index, update_input);
 
-        if (create_allowed != update_allowed) {
-            mismatches += 1;
-            std.debug.print("rule {s}: create allowed: {}, update allowed: {}\n", .{ rule, create_allowed, update_allowed });
+            if (std.mem.eql(u8, rule, "{\"$doc.status\":{\"notIn\":[]}}")) {
+                try testing.expect(create_allowed);
+                try testing.expect(update_allowed);
+            } else if (std.mem.eql(u8, rule, "{\"$doc.status\":{\"in\":[]}}")) {
+                try testing.expect(!create_allowed);
+                try testing.expect(!update_allowed);
+            }
+
+            if (create_allowed != update_allowed) {
+                mismatches += 1;
+                std.debug.print("rule {s}: create allowed: {}, update allowed: {}\n", .{ rule, create_allowed, update_allowed });
+            }
         }
     }
     try testing.expectEqual(@as(usize, 0), mismatches);
