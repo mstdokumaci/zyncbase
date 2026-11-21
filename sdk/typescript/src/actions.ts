@@ -95,17 +95,27 @@ export class ActionsImpl implements Actions {
 	replayRegistrations(): void {
 		if (this.handlers.size === 0 || !this.conn.isSchemaReady()) return;
 
-		const names: string[] = [];
+		const storeNames: string[] = [];
+		const presenceNames: string[] = [];
 		for (const name of this.handlers.keys()) {
 			try {
-				this.conn.schemaDictionary.getAction(name);
-				names.push(name);
+				const action = this.conn.schemaDictionary.getAction(name);
+				if (action.scope === "presence") {
+					presenceNames.push(name);
+				} else {
+					storeNames.push(name);
+				}
 			} catch {
 				// Schema changed and the action no longer exists; drop the handler.
 				this.handlers.delete(name);
 			}
 		}
-		if (names.length > 0) void this.register(names).catch(() => {});
+		if (storeNames.length > 0) {
+			void this.register(storeNames).catch(() => {});
+		}
+		if (presenceNames.length > 0) {
+			void this.register(presenceNames).catch(() => {});
+		}
 	}
 
 	private async register(names: string[]): Promise<void> {

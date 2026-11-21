@@ -2,7 +2,7 @@
 
 import { ActionsImpl } from "./actions.js";
 import { ConnectionManager } from "./connection.js";
-import { toZyncError, ZyncBaseError } from "./errors.js";
+import { ErrorCodes, toZyncError, ZyncBaseError } from "./errors.js";
 import { PresenceImpl } from "./presence.js";
 import { backoffDelay } from "./retry_policy.js";
 import { StoreImpl } from "./store.js";
@@ -230,8 +230,20 @@ export class ZyncBaseClient<
 			return;
 		}
 
+		try {
+			await this.conn.setPresenceNamespace(namespace);
+		} catch (err) {
+			if (
+				!(
+					err instanceof ZyncBaseError &&
+					err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED
+				)
+			) {
+				this.presenceImpl.invalidate();
+			}
+			throw err;
+		}
 		this.presenceImpl.invalidate();
-		await this.conn.setPresenceNamespace(namespace);
 		await this.presenceImpl.replaySubscriptions();
 		this.actionsImpl.replayRegistrations();
 	}
@@ -300,9 +312,21 @@ export class ZyncBaseClient<
 	 * readiness queue. On a connection cycle this ends with `synced`.
 	 */
 	private async _restore(): Promise<void> {
-		await this.presenceImpl.replaySubscriptions();
+		const [store, presence] = await Promise.allSettled([
+			this._restoreStore(),
+			this.presenceImpl.replaySubscriptions(),
+		]);
+		await this.conn.awaitSchemaSync();
 		this.actionsImpl.replayRegistrations();
-		await this._restoreStore();
+		if (presence.status === "rejected") {
+			const error = toZyncError(presence.reason, "Restore failed", false);
+			if (!error.retryable || store.status === "rejected") {
+				this.emitError(error);
+			} else {
+				throw error;
+			}
+		}
+		if (store.status === "rejected") throw store.reason;
 	}
 
 	/**

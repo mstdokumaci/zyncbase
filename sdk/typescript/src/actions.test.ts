@@ -31,6 +31,7 @@ async function setupSchema(schema: SchemaDictionary): Promise<void> {
 function createMockConnection(options?: {
 	response?: OkResponse;
 	error?: unknown;
+	errorFor?: (msg: OutboundRequest) => unknown;
 	ready?: boolean;
 }) {
 	const schema = new SchemaDictionary();
@@ -42,7 +43,8 @@ function createMockConnection(options?: {
 	return {
 		dispatchNoRetry: (msg: OutboundRequest) => {
 			dispatched.push(msg);
-			if (options?.error) return Promise.reject(options.error);
+			const error = options?.errorFor?.(msg) ?? options?.error;
+			if (error) return Promise.reject(error);
 			return Promise.resolve(
 				options?.response ?? ({ type: "ok", id: 0 } as OkResponse),
 			);
@@ -349,5 +351,57 @@ describe("ActionsImpl.handle", () => {
 			type: "ActionRegister",
 			action_ids: ["checkout"],
 		});
+	});
+	test("replayRegistrations partitions store and presence batches", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schemaDictionary);
+		const actions = new ActionsImpl(conn);
+		await actions.handle("checkout", () => ({}));
+		await actions.handle("player_move", () => {});
+		conn.dispatched.length = 0;
+		actions.replayRegistrations();
+		await nextTick();
+		expect(conn.dispatched).toHaveLength(2);
+		expect(conn.dispatched).toContainEqual({
+			type: "ActionRegister",
+			action_ids: ["checkout"],
+		});
+		expect(conn.dispatched).toContainEqual({
+			type: "ActionRegister",
+			action_ids: ["player_move"],
+		});
+	});
+	test("a presence registration failure does not block store replay", async () => {
+		let failPresence = false;
+		const presenceError = new ZyncBaseError("presence denied", {
+			code: ErrorCodes.NAMESPACE_UNAUTHORIZED,
+			category: "authorization",
+			retryable: false,
+		});
+		const errors: ZyncBaseError[] = [];
+		const conn = createMockConnection({
+			errorFor: (msg) =>
+				failPresence &&
+				msg.type === "ActionRegister" &&
+				msg.action_ids.includes("player_move")
+					? presenceError
+					: undefined,
+		});
+		await setupSchema(conn.schemaDictionary);
+		const actions = new ActionsImpl(conn, (err) => errors.push(err));
+		await actions.handle("checkout", () => ({}));
+		await actions.handle("player_move", () => {});
+		conn.dispatched.length = 0;
+		failPresence = true;
+		actions.replayRegistrations();
+		await nextTick();
+		expect(conn.dispatched).toHaveLength(2);
+		expect(conn.dispatched).toContainEqual({
+			type: "ActionRegister",
+			action_ids: ["checkout"],
+		});
+		expect(errors.some((err) => err.code === "NAMESPACE_UNAUTHORIZED")).toBe(
+			true,
+		);
 	});
 });
