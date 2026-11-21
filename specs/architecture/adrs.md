@@ -660,28 +660,29 @@ The server holds a transaction's outcomes until each subscription worker has fin
 
 ### Optimistic Local State
 
-The SDK keeps committed records exactly as subscriptions deliver them. Pending writes are kept apart, per document, in send order. Each delivered value is computed from both; the overlay never changes a committed record.
+The SDK keeps committed records exactly as subscriptions deliver them. Pending writes are kept apart, per document, in send order. Each delivered value combines committed state with only the pending writes that committed state does not already reflect; the overlay never changes a committed record.
 
 1. **Apply.** A document's pending writes apply in send order to its committed record, taken from any subscription or listen that holds it.
    - `set` merges into a known document.
    - `create` makes a row with every schema field (unset ones null), `owner_id` set to the connection's user id (a `users` row owns itself), and provisional `created_at` / `updated_at` after every server timestamp the client has seen, so it sorts last in the default order.
    - `remove` hides the document.
-   - `increment` adds to a number it can see.
+   - `increment` adds to a number it can see, unless the committed record already includes it.
    - A `set` or `increment` on a document the client holds no record of is not shown.
    - Array fields show in the server's sorted-set form; a null object clears every field beneath it.
-2. **Commit.** A commit drops the write and every earlier pending write's changes to the same documents. The server applies a connection's writes in send order and never retries one, so those writes are already applied or failed, and their deltas arrived before this outcome.
-3. **Failure.** Any failure (accept phase, write phase, timeout, disconnect) drops only that write. The promise rejects and `on('error')` fires.
-4. **Scope.** Losing the session or switching the store namespace drops every pending write; subscriptions show committed state, and the snapshot after reconnect is authoritative.
-5. **Exclusions.** These writes are never shown early:
+2. **Increment reconciliation.** A delta can carry one pending increment, several coalesced increments, or none. The SDK matches the committed field value against the cumulative `by` of the pending increments in send order. A matching prefix is already reflected: those increments are marked with the server revision (`updated_at`) and value that covered them, and only the remaining suffix applies. A later committed record at or after that revision skips them; a base that predates it still applies them. The same rule serves listens and materialized views.
+3. **Commit.** A commit drops the write and every earlier pending write's changes to the same documents. The server applies a connection's writes in send order and never retries one, so those writes are already applied or failed, and their deltas arrived before this outcome. Dropping an overlay never changes the committed base; later pending increments already covered by an earlier delta stay marked reflected, so an outcome arriving after a coalesced delta does not make them count twice.
+4. **Failure.** Any failure (accept phase, write phase, timeout, disconnect) drops only that write. The displayed value is recomputed from committed state plus remaining pending writes; it returns to committed state only when no pending write remains. The promise rejects and `on('error')` fires.
+5. **Scope.** Losing the session or switching the store namespace drops every pending write; subscriptions show committed state, and the snapshot after reconnect is authoritative.
+6. **Exclusions.** These writes are never shown early:
    - writes with `if`, and batches containing one: compare-and-set depends on server state
    - writes with `{ optimistic: false }`
    - writes made while the session is not ready (they fail fast) or a namespace switch is in flight
-6. **Membership.** A document with pending writes belongs in a view exactly when the overlaid record matches the view's `where` under the server's matching semantics ([Query Engine](../implementation/query-engine.md#client-evaluation)). Its position follows the view's order. `limit` does not apply, as for deltas.
+7. **Membership.** A document with pending writes belongs in a view exactly when the overlaid record matches the view's `where` under the server's matching semantics ([Query Engine](../implementation/query-engine.md#client-evaluation)). Its position follows the view's order. `limit` does not apply, as for deltas.
 
 Delivery:
 - A local write is delivered synchronously, inside the write call and after its message is sent, to every affected subscription and listen. Only the changed rows move, by binary insertion; nothing is re-sorted.
 - Each delivery carries the ids of rows that show a pending write. A delivery also happens when only that set changes.
-- On commit the SDK drops the write, applies the deltas that arrived before the outcome, and delivers once: no frame shows the previous committed value.
+- On commit the SDK drops the settled overlays, keeps the committed base, and delivers once: no frame shows the previous committed value, and remaining pending increments already covered by the committed record are not applied again.
 - Read authorization stays on the server. A local create that a view's read rule hides shows until it commits, then leaves with the next snapshot or delta.
 - One-shot `get` and `query` return committed state only.
 
@@ -707,7 +708,7 @@ Failed batch operations include `batchIndex` when the failing operation is ident
 
 Outside an explicit batch, the writer groups queued writes into opportunistic flush transactions. In a flush, guard, precondition, and constraint rejections fail only their own write; storage-level failures (I/O, disk full, allocation, commit) fail every write in the flush.
 
-Subscription observation is transaction-endpoint based. Explicit batches and opportunistic writer flush transactions may coalesce repeated changes to one record into one final delta without changing per-write outcomes. Subscriptions are state replication, not a mutation event log.
+Subscription observation is transaction-endpoint based. Explicit batches and opportunistic writer flush transactions may coalesce repeated changes to one record into one final delta without changing per-write outcomes. A coalesced delta covering several pending increments marks the whole covered run as reflected; outcomes that arrive later drop only their own overlays. Subscriptions are state replication, not a mutation event log.
 
 ### Retries and Timeouts
 

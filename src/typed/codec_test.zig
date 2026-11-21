@@ -91,6 +91,21 @@ test "writeJsonToBuf: arrays" {
     }
 }
 
+test "writeJsonToBuf: negative zero serializes as zero" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var arr = [_]msgpack.Payload{.{ .float = -0.0 }};
+    const tv = try typed.fromPayload(allocator, .array, .real, .{ .arr = arr[0..] });
+
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(allocator);
+    try typed.writeJsonToBuf(&buf, allocator, tv);
+
+    try testing.expectEqualStrings("[0.0]", buf.items);
+}
+
 test "writeJsonToBuf: scalars and nil" {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();

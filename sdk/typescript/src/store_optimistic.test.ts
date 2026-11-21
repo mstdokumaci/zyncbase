@@ -326,6 +326,72 @@ describe("optimistic writes", () => {
 		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ id: "t2", rank: 7 });
 	});
 
+	test("a listen delivers its first null value", async () => {
+		const { store, acks } = await makeStore();
+		acks.push({ type: "ok", id: 0, subId: 9, value: [] });
+		const values: JsonValue[] = [];
+		const handle = await store.listen("todos.missing", (value) =>
+			values.push(value),
+		);
+
+		expect(values).toEqual([null]);
+		expect(handle.getSnapshot()).toBeNull();
+	});
+
+	test("a listen does not apply an increment its delta already includes", async () => {
+		const { store, writes, acks, tracker } = await makeStore();
+		acks.push({ type: "ok", id: 0, subId: 9, value: [T2] });
+		const values: Array<[JsonValue, boolean]> = [];
+		await store.listen("todos.t2.rank", (value, meta) => {
+			values.push([value, meta.pending]);
+		});
+
+		const done = store.increment("todos.t2.rank", 5);
+		expect(values.at(-1)).toEqual([7, true]);
+
+		tracker.dispatch({
+			type: "StoreDelta",
+			subId: 9,
+			ops: [{ op: "set", path: ["todos", "t2"], value: { ...T2, rank: 7 } }],
+		});
+		expect(values.at(-1)).toEqual([7, true]);
+
+		writes[0].commit();
+		await done;
+		expect(values.at(-1)).toEqual([7, false]);
+	});
+
+	test("a coalesced increment delta is not counted again by an earlier commit", async () => {
+		const { store, writes, subscribe, delta } = await makeStore();
+		const { subId, deliveries } = await subscribe({});
+
+		const first = store.increment("todos.t2.rank", 1);
+		const second = store.increment("todos.t2.rank", 1);
+		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ rank: 4 });
+
+		delta(subId, { ...T2, rank: 4, updated_at: 21 });
+		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ rank: 4 });
+
+		writes[0].commit();
+		await first;
+		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ rank: 4 });
+
+		writes[1].commit();
+		await second;
+		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ rank: 4 });
+	});
+
+	test("a pending increment still applies to a base that predates it", async () => {
+		const { store, subscribe, delta } = await makeStore();
+		const { subId, deliveries } = await subscribe({});
+
+		void store.increment("todos.t2.rank", 5);
+		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ rank: 7 });
+
+		delta(subId, { ...T2, updated_at: 21 });
+		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ rank: 7 });
+	});
+
 	test("a listen shows a pending field write and clears its mark on commit", async () => {
 		const { store, writes, acks, tracker } = await makeStore();
 		acks.push({ type: "ok", id: 0, subId: 9, value: [T1] });

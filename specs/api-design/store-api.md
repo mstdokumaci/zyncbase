@@ -295,7 +295,7 @@ void client.store.set('tasks.t1.done', true) // t1 leaves the view now, not on c
 
 - **Pending marker**: subscription callbacks receive `{ pending }`, the ids of delivered rows that show an uncommitted write; listen callbacks receive `{ pending: boolean }`. Handles expose the same as `pendingIds` and `isPending`. A change to the marker alone is also delivered.
 - **Commit**: the row shows the committed value and leaves the pending set in one delivery.
-- **Failure**: any failure (accept phase, write phase, timeout, disconnect) reverts the row to its committed value before the promise rejects. A batch reverts as a whole.
+- **Failure**: any failure (accept phase, write phase, timeout, disconnect) removes only the failed write's overlay before the promise rejects, then recomputes the row from committed state plus any remaining pending writes. The row returns to its committed value only when no pending write remains. A batch removes its whole overlay.
 - **Membership**: a pending row is in a filtered view exactly when its local value matches the view's `where` under the server's [matching rules](./query-language.md), at its sorted position. A `create` appears in every matching view. `limit` does not bound pending rows, just as it does not bound live deltas.
 - **Shown only when known**: a `set` or `increment` on a document no subscription or listen of this client holds waits for the server, because the document's other fields are unknown.
 - **Never shown early**: writes with `if` and batches containing one, writes with `optimistic: false`, and writes issued while the session is not ready or a namespace switch is in flight.

@@ -87,10 +87,18 @@ function compileEquality(
 	docId: boolean,
 	negate: boolean,
 ): ValueTest {
-	const equals: ValueTest = Array.isArray(operand)
-		? setEquals(sortedSet(operand, docId), docId)
-		: (value) => scalarsEqual(value, operand);
+	const expected = snapshotBinary(operand);
+	const equals: ValueTest = Array.isArray(expected)
+		? setEquals(sortedSet(expected, docId), docId)
+		: (value) => scalarsEqual(value, expected);
 	return (value) => value !== null && equals(value) !== negate;
+}
+
+/** Snapshot bytes so later caller mutations cannot change a compiled predicate. */
+function snapshotBinary(value: JsonValue): JsonValue {
+	if (value instanceof Uint8Array) return value.slice();
+	if (Array.isArray(value)) return value.map(snapshotBinary);
+	return value;
 }
 
 function setEquals(expected: JsonValue[], docId: boolean): ValueTest {

@@ -36,6 +36,18 @@ interface KeyOps {
 	ops: OverlayOp[];
 }
 
+type IncrementOp = Extract<OverlayOp, { kind: "increment" }>;
+
+/** Where a pending increment sits relative to the committed record. */
+interface IncrementState {
+	/** Committed field value from which this increment is not yet reflected. */
+	base?: number;
+	/** Server revision (`updated_at`) that already includes the increment. */
+	reflectedAt?: number;
+	/** Committed field value that included it, when no revision is available. */
+	reflectedValue?: number;
+}
+
 /**
  * Pending writes per document, in send order. The server applies writes in
  * send order and never retries one, so a commit also settles every earlier
@@ -43,6 +55,7 @@ interface KeyOps {
  */
 export class PendingWrites {
 	private readonly docs = new Map<string, Map<string, KeyOps[]>>();
+	private readonly incrementStates = new WeakMap<IncrementOp, IncrementState>();
 	private seq = 0;
 
 	add(ops: readonly OverlayOp[]): PendingEntry {
@@ -64,12 +77,12 @@ export class PendingWrites {
 
 	/** The write committed: drop it and every earlier write on its documents. */
 	commit(entry: PendingEntry): OverlayKeys {
-		return this.drop(entry, (ops) => ops.seq <= entry.seq);
+		return this.drop(entry, (ops) => ops.seq <= entry.seq, true);
 	}
 
 	/** The write failed: drop only it. */
 	fail(entry: PendingEntry): OverlayKeys {
-		return this.drop(entry, (ops) => ops.seq === entry.seq);
+		return this.drop(entry, (ops) => ops.seq === entry.seq, false);
 	}
 
 	/** Drop every pending write; returns the documents they touched. */
@@ -107,27 +120,219 @@ export class PendingWrites {
 		base: JsonValue | null,
 	): JsonValue | null {
 		let value = isRecord(base) ? flatten(base) : null;
-		for (const { ops } of this.docs.get(collection)?.get(id) ?? []) {
-			for (const op of ops) value = applyOp(value, op);
+		const entries = this.docs.get(collection)?.get(id) ?? [];
+		const skip =
+			value === null || !hasIncrement(entries)
+				? undefined
+				: this.reconcile(collection, id, value);
+		for (const { ops } of entries) {
+			for (const op of ops) {
+				if (skip?.has(op)) continue;
+				value = applyOp(value, op);
+			}
 		}
 		return value === null ? null : unflatten(value);
+	}
+
+	/**
+	 * Marks pending increments the committed record already includes. A delta
+	 * can carry one or several pending increments; those form a prefix whose
+	 * cumulative `by` matches the committed field value.
+	 */
+	private reconcile(
+		collection: string,
+		id: string,
+		base: Flat,
+	): ReadonlySet<OverlayOp> {
+		const skip = new Set<OverlayOp>();
+		const revision =
+			typeof base.updated_at === "number" ? base.updated_at : undefined;
+		for (const [field, ops] of this.incrementsByField(collection, id)) {
+			const baseValue = base[field];
+			if (typeof baseValue === "number") {
+				this.reconcileField(skip, ops, baseValue, revision);
+			}
+		}
+		return skip;
+	}
+
+	private incrementsByField(
+		collection: string,
+		id: string,
+	): Map<string, IncrementOp[]> {
+		const byField = new Map<string, IncrementOp[]>();
+		for (const { ops } of this.docs.get(collection)?.get(id) ?? []) {
+			for (const op of ops) {
+				if (op.kind !== "increment") continue;
+				const list = byField.get(op.field) ?? [];
+				byField.set(op.field, list);
+				list.push(op);
+			}
+		}
+		return byField;
+	}
+
+	private reconcileField(
+		skip: Set<OverlayOp>,
+		ops: IncrementOp[],
+		baseValue: number,
+		revision: number | undefined,
+	): void {
+		const candidates: IncrementOp[] = [];
+		for (const op of ops) {
+			const state = this.incrementState(op);
+			if (this.isReflected(state, revision, baseValue)) {
+				skip.add(op);
+				continue;
+			}
+			if (state.base === undefined) state.base = baseValue;
+			candidates.push(op);
+		}
+		if (candidates.length === 0) return;
+		const matched = this.matchIncrementPrefix(candidates, baseValue);
+		if (matched < 0) {
+			this.rebaseIncrements(candidates, 0, baseValue);
+			return;
+		}
+		this.markReflected(skip, candidates, matched, baseValue, revision);
+		this.rebaseIncrements(candidates, matched + 1, baseValue);
+	}
+
+	private isReflected(
+		state: IncrementState,
+		revision: number | undefined,
+		baseValue: number,
+	): boolean {
+		if (revision !== undefined && state.reflectedAt !== undefined) {
+			return revision >= state.reflectedAt;
+		}
+		return (
+			state.reflectedValue !== undefined && state.reflectedValue === baseValue
+		);
+	}
+
+	private matchIncrementPrefix(ops: IncrementOp[], baseValue: number): number {
+		let cumulative = this.incrementState(ops[0]).base ?? baseValue;
+		let matched = -1;
+		for (let i = 0; i < ops.length; i += 1) {
+			cumulative += ops[i].by;
+			if (baseValue === cumulative) matched = i;
+		}
+		return matched;
+	}
+
+	private markReflected(
+		skip: Set<OverlayOp>,
+		ops: IncrementOp[],
+		matched: number,
+		baseValue: number,
+		revision: number | undefined,
+	): void {
+		for (let i = 0; i <= matched; i += 1) {
+			const op = ops[i];
+			const state = this.incrementState(op);
+			state.base = baseValue;
+			state.reflectedAt = revision;
+			state.reflectedValue = baseValue;
+			skip.add(op);
+		}
+	}
+
+	private rebaseIncrements(
+		ops: IncrementOp[],
+		from: number,
+		baseValue: number,
+	): void {
+		for (let i = from; i < ops.length; i += 1) {
+			this.incrementState(ops[i]).base = baseValue;
+		}
+	}
+
+	private incrementState(op: IncrementOp): IncrementState {
+		let state = this.incrementStates.get(op);
+		if (state === undefined) {
+			state = {};
+			this.incrementStates.set(op, state);
+		}
+		return state;
 	}
 
 	private drop(
 		entry: PendingEntry,
 		settled: (ops: KeyOps) => boolean,
+		advanceRemaining: boolean,
 	): OverlayKeys {
 		for (const [collection, ids] of entry.keys) {
 			const byId = this.docs.get(collection);
 			if (byId === undefined) continue;
 			for (const id of ids) {
-				const list = byId.get(id)?.filter((ops) => !settled(ops));
-				if (list?.length) byId.set(id, list);
-				else byId.delete(id);
+				this.dropDocument(byId, id, settled, advanceRemaining);
 			}
 			if (byId.size === 0) this.docs.delete(collection);
 		}
 		return entry.keys;
+	}
+
+	private dropDocument(
+		byId: Map<string, KeyOps[]>,
+		id: string,
+		settled: (ops: KeyOps) => boolean,
+		advanceRemaining: boolean,
+	): void {
+		const remaining: KeyOps[] = [];
+		const settledIncrements: IncrementOp[] = [];
+		for (const ops of byId.get(id) ?? []) {
+			if (!settled(ops)) remaining.push(ops);
+			else if (advanceRemaining) collectIncrements(ops, settledIncrements);
+		}
+		if (advanceRemaining) {
+			this.advanceBaselines(remaining, settledIncrements);
+		}
+		if (remaining.length) byId.set(id, remaining);
+		else byId.delete(id);
+	}
+
+	/**
+	 * A commit makes an earlier increment part of committed state even while
+	 * its delta is still batched. Move later pending increments' baseline past
+	 * it so that delta reconciles instead of adding the increment twice.
+	 */
+	private advanceBaselines(remaining: KeyOps[], settled: IncrementOp[]): void {
+		for (const { ops } of remaining) {
+			for (const op of ops) {
+				if (op.kind === "increment") this.advanceBaseline(op, settled);
+			}
+		}
+	}
+
+	private advanceBaseline(op: IncrementOp, settled: IncrementOp[]): void {
+		const state = this.incrementState(op);
+		for (const dropped of settled) {
+			if (dropped.field !== op.field) continue;
+			const droppedState = this.incrementState(dropped);
+			if (
+				droppedState.reflectedAt !== undefined ||
+				droppedState.reflectedValue !== undefined
+			) {
+				continue;
+			}
+			if (state.base !== undefined) state.base += dropped.by;
+		}
+	}
+}
+
+function hasIncrement(entries: readonly KeyOps[]): boolean {
+	for (const { ops } of entries) {
+		for (const op of ops) {
+			if (op.kind === "increment") return true;
+		}
+	}
+	return false;
+}
+
+function collectIncrements(ops: KeyOps, out: IncrementOp[]): void {
+	for (const op of ops.ops) {
+		if (op.kind === "increment") out.push(op);
 	}
 }
 
@@ -287,12 +492,21 @@ function shapePatch(
 	const tableIndex = schema.getTableIndex(collection);
 	const patch = { ...schema.expandNullNamespaces(tableIndex, value) };
 	for (const [field, fieldValue] of Object.entries(patch)) {
-		if (!Array.isArray(fieldValue)) continue;
+		if (!Array.isArray(fieldValue)) {
+			patch[field] = copyBinary(fieldValue);
+			continue;
+		}
 		const docId = schema.isDocIdField(
 			tableIndex,
 			schema.getFieldIndex(tableIndex, field),
 		);
-		patch[field] = sortedSet(fieldValue, docId);
+		patch[field] = sortedSet(fieldValue, docId).map(copyBinary);
 	}
 	return patch;
+}
+
+/** Copy a leaf buffer so later caller mutations cannot alter the pending patch. */
+function copyBinary(value: JsonValue): JsonValue {
+	if (value instanceof Uint8Array) return value.slice();
+	return value;
 }

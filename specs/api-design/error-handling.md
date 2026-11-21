@@ -88,7 +88,7 @@ client.on('error', (error: ZyncBaseError) => {
 
 Writer failures arrive as `WriteError`s. They carry the write's request id, and the SDK rejects that write's promise with them.
 
-A write the SDK showed optimistically reverts when it fails, whatever the failure: an accept-phase `error`, a `WriteError`, a timeout, or a disconnect. Subscriptions and listens deliver the committed value again before the promise rejects. `WriteError` is used for user feedback and diagnostics.
+A write the SDK showed optimistically reverts when it fails, whatever the failure: an accept-phase `error`, a `WriteError`, a timeout, or a disconnect. The SDK removes only that write's overlay, then recomputes the displayed value from committed state plus any remaining pending writes; earlier or later pending writes to the same document stay visible. The value returns to committed state only when no pending write remains. Subscriptions and listens deliver the recomputed value again before the promise rejects. `WriteError` is used for user feedback and diagnostics.
 
 ### 4. Framework hooks
 

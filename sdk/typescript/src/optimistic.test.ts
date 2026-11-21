@@ -15,6 +15,7 @@ const TODO_FIELDS = [
 	"count",
 	"tags",
 	"refs",
+	"data",
 	"address__city",
 	"address__zip",
 	"created_at",
@@ -31,7 +32,7 @@ async function makeContext(time = 100): Promise<OverlayContext> {
 			["id", "namespace_id", "owner_id", "name", "created_at", "updated_at"],
 		],
 		fieldFlags: [
-			[0b11, 0b01, 0b11, 0, 0, 0, 0b10, 0, 0, 0b01, 0b01],
+			[0b11, 0b01, 0b11, 0, 0, 0, 0b10, 0, 0, 0, 0b01, 0b01],
 			[0b11, 0b01, 0b11, 0, 0b01, 0b01],
 		],
 	});
@@ -112,6 +113,33 @@ describe("PendingWrites.apply", () => {
 			...BASE,
 			count: null,
 		});
+	});
+
+	test("increment reconciliation survives records without a revision", () => {
+		const pending = new PendingWrites();
+		const increment = (by: number): OverlayOp => ({
+			kind: "increment",
+			collection: "todos",
+			id: "t1",
+			field: "count",
+			by,
+			time: 9,
+		});
+		const base = { id: "t1", count: 0 };
+		const first = pending.add([increment(1)]);
+		pending.add([increment(1)]);
+
+		expect(pending.apply("todos", "t1", base)).toMatchObject({ count: 2 });
+		const committed = { ...base, count: 2 };
+		expect(pending.apply("todos", "t1", committed)).toMatchObject({
+			count: 2,
+		});
+
+		pending.commit(first);
+		expect(pending.apply("todos", "t1", committed)).toMatchObject({
+			count: 2,
+		});
+		expect(pending.apply("todos", "t1", base)).toMatchObject({ count: 1 });
 	});
 
 	test("writes apply in send order", () => {
@@ -227,6 +255,24 @@ describe("overlayOps", () => {
 		]);
 	});
 
+	test("a set copies byte buffers into the pending patch", async () => {
+		const context = await makeContext(42);
+		const bytes = new Uint8Array([1, 2, 3]);
+		const [op] =
+			overlayOps(
+				{ type: "StoreSet", path: ["todos", "t1"], value: { data: bytes } },
+				false,
+				context,
+			) ?? [];
+
+		bytes[0] = 9;
+
+		expect(op?.kind === "set" ? op.patch.data : null).toEqual(
+			new Uint8Array([1, 2, 3]),
+		);
+		expect(op?.kind === "set" ? op.patch.data : null).not.toBe(bytes);
+	});
+
 	test("a create shapes a complete row with provisional system fields", async () => {
 		const context = await makeContext(42);
 		const [op] =
@@ -247,6 +293,7 @@ describe("overlayOps", () => {
 				count: null,
 				tags: null,
 				refs: null,
+				data: null,
 				address__city: null,
 				address__zip: null,
 				created_at: 42,

@@ -438,6 +438,53 @@ describe("SubscriptionTracker - field projection delivery", () => {
 		expect(seen[1]).toEqual(new Uint8Array([9, 2, 3]));
 	});
 
+	test("a nested delivery stops the superseded outer callback loop", () => {
+		const tracker = new SubscriptionTracker();
+		const first: JsonValue[] = [];
+		const second: JsonValue[] = [];
+		let nested = false;
+
+		tracker.register(308, {
+			params: { type: "StoreSubscribe", table_index: "users" },
+			docId: "u1",
+			callbacks: [
+				(value) => {
+					first.push(value);
+					if (nested) return;
+					nested = true;
+					tracker.dispatch({
+						type: "StoreDelta",
+						subId: 308,
+						ops: [
+							{
+								op: "set",
+								path: ["users", "u1"],
+								value: { id: "u1", name: "second", updated_at: 2 },
+							},
+						],
+					});
+				},
+				(value) => second.push(value),
+			],
+			projection: createListenProjection(["users", "u1", "name"]),
+		});
+
+		tracker.dispatch({
+			type: "StoreDelta",
+			subId: 308,
+			ops: [
+				{
+					op: "set",
+					path: ["users", "u1"],
+					value: { id: "u1", name: "first", updated_at: 1 },
+				},
+			],
+		});
+
+		expect(first).toEqual(["first", "second"]);
+		expect(second).toEqual(["second"]);
+	});
+
 	test("own __proto__ keys survive the suppression baseline clone", () => {
 		const tracker = new SubscriptionTracker();
 		const values: JsonValue[] = [];

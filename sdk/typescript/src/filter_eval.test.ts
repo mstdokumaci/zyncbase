@@ -37,4 +37,23 @@ describe("compileWhere", () => {
 		);
 		expect(matches({ tags: ["b", "a", "b"] })).toBe(true);
 	});
+
+	test("binary operands are snapshotted when the predicate is compiled", () => {
+		const bytes = new Uint8Array([1, 2, 3]);
+		const eq = compileWhere(
+			encodeQueryOptions({ where: { coordinates: bytes } }),
+			isDocIdField,
+		);
+		const ne = compileWhere(
+			encodeQueryOptions({ where: { coordinates: { ne: bytes } } }),
+			isDocIdField,
+		);
+
+		bytes[0] = 9;
+
+		expect(eq({ coordinates: new Uint8Array([1, 2, 3]) })).toBe(true);
+		expect(eq({ coordinates: new Uint8Array([9, 2, 3]) })).toBe(false);
+		expect(ne({ coordinates: new Uint8Array([1, 2, 3]) })).toBe(false);
+		expect(ne({ coordinates: new Uint8Array([9, 2, 3]) })).toBe(true);
+	});
 });

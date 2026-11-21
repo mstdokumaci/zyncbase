@@ -53,6 +53,8 @@ export interface SubscriptionEntry {
 	deliveredValue?: JsonValue;
 	/** Pending marker delivered with `deliveredValue`. */
 	deliveredPending?: ReadonlySet<string> | boolean;
+	/** Bumped by each delivery so a nested one supersedes an outer loop. */
+	deliveryRevision?: number;
 }
 
 export const NO_PENDING: ReadonlySet<string> = new Set();
@@ -414,10 +416,9 @@ export class SubscriptionTracker {
 		const pending = this._listenPending(entry);
 		const value = this._listenValue(entry, pending);
 		const unchanged =
-			entry.deliveredValue === undefined
-				? value === null
-				: pending === entry.deliveredPending &&
-					valuesEqual(value, entry.lastValue as JsonValue);
+			entry.deliveredValue !== undefined &&
+			pending === entry.deliveredPending &&
+			valuesEqual(value, entry.lastValue as JsonValue);
 		if (!unchanged) this._deliver(entry, value, pending);
 	}
 
@@ -451,6 +452,8 @@ export class SubscriptionTracker {
 	): void {
 		// Suppression compares against lastValue; keep an isolated copy so a
 		// callback mutating the delivered value cannot corrupt the baseline.
+		const revision = (entry.deliveryRevision ?? 0) + 1;
+		entry.deliveryRevision = revision;
 		entry.lastValue =
 			entry.projection?.field != null ? cloneValue(value) : value;
 		entry.deliveredValue = value;
@@ -462,6 +465,7 @@ export class SubscriptionTracker {
 			} catch (err) {
 				console.error("[SDK] Subscription callback threw:", err);
 			}
+			if (entry.deliveryRevision !== revision) return;
 		}
 	}
 
