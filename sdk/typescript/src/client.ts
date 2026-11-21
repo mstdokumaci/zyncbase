@@ -225,7 +225,10 @@ export class ZyncBaseClient<
 	/** Switch the active presence namespace. */
 	async setPresenceNamespace(namespace: string): Promise<void> {
 		const oldNs = this.conn.getPresenceNamespace();
-		if (oldNs === namespace) return;
+		if (oldNs === namespace) {
+			await this.conn.setPresenceNamespace(namespace);
+			return;
+		}
 
 		this.presenceImpl.invalidate();
 		await this.conn.setPresenceNamespace(namespace);

@@ -307,6 +307,121 @@ describe("ConnectionManager", () => {
 			again.catch(() => {});
 			manager.disconnect();
 		});
+
+		test("a queued presence message waits for a replacement scope", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const presence = manager.dispatch({ type: "PresenceSet", data: {} });
+			const switched = manager.setPresenceNamespace("other");
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+			]);
+			const [initial, replacement] = mockWs.sentMessages
+				.slice(1)
+				.map((bytes) => decode(bytes) as { id: number });
+
+			ack(mockWs, initial.id);
+			await tick();
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+			]);
+
+			ack(mockWs, replacement.id);
+			await tick();
+			const sent = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSet,
+			);
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: sent.id }));
+			await Promise.all([presence, switched]);
+		});
+
+		test("a same-namespace call joins a pending scope request", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("public");
+			const second = manager.setPresenceNamespace("public");
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+			]);
+
+			ack(mockWs, 2);
+			await Promise.all([first, second]);
+			await manager.setPresenceNamespace("public");
+			expect(mockWs.sentMessages).toHaveLength(2);
+		});
+
+		test("a retry on a replacement socket requests the presence scope again", async () => {
+			const { manager, mockWs } = makeManager({
+				reconnect: false,
+				reconnectDelay: 10,
+			});
+			await connectManager(manager, mockWs);
+			const presence = manager.dispatch({ type: "PresenceSet", data: {} });
+			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSetNamespace,
+			);
+			ack(mockWs, scope.id);
+			await tick();
+			const firstAttempt = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSet,
+			);
+
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: firstAttempt.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 100,
+				}),
+			);
+			await tick();
+			mockWs.triggerClose(1006, "gone");
+			const reconnected = manager.connect();
+			await tick();
+			mockWs.triggerOpen();
+			const store = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.StoreSetNamespace,
+			);
+			ack(mockWs, store.id);
+			await reconnected;
+
+			await new Promise((r) => setTimeout(r, 150));
+			const setup = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSetNamespace,
+			);
+			ack(mockWs, setup.id);
+			await tick();
+			const retried = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSet,
+			);
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: retried.id }));
+			await presence;
+			manager.disconnect();
+		});
 	});
 
 	describe("liveness", () => {

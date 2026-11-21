@@ -142,6 +142,7 @@ export class ConnectionManager {
 	private presenceNamespace: string;
 	/** The presence scope request of this socket; null until presence is first used. */
 	private presenceScope: Promise<void> | null = null;
+	private presenceScopeNamespace: string | null = null;
 	private presenceScopeReady = false;
 
 	private processingPromise: Promise<void> = Promise.resolve();
@@ -208,7 +209,11 @@ export class ConnectionManager {
 	 * messages sent meanwhile wait for it.
 	 */
 	setPresenceNamespace(ns: string): Promise<void> {
+		if (this.presenceScope !== null && this.presenceScopeNamespace === ns) {
+			return this.presenceScope;
+		}
 		this.presenceScopeReady = false;
+		this.presenceScopeNamespace = ns;
 		const scope: Promise<void> = this.dispatch({
 			type: "PresenceSetNamespace",
 			namespace: ns,
@@ -219,7 +224,10 @@ export class ConnectionManager {
 				if (this.presenceScope === scope) this.presenceScopeReady = true;
 			})
 			.catch((err: unknown) => {
-				if (this.presenceScope === scope) this.presenceScope = null;
+				if (this.presenceScope === scope) {
+					this.presenceScope = null;
+					this.presenceScopeNamespace = null;
+				}
 				throw err;
 			});
 		this.presenceScope = scope;
@@ -244,7 +252,7 @@ export class ConnectionManager {
 		}
 		const scope =
 			this.presenceScope ?? this.setPresenceNamespace(this.presenceNamespace);
-		return scope.then(send);
+		return scope.then(() => this.withPresenceScope(msg, send));
 	}
 
 	/** Presence messages, and action messages naming a presence-scoped action. */
@@ -348,6 +356,7 @@ export class ConnectionManager {
 		this.pendingDisconnectError = null;
 		this.currentUserId = null;
 		this.presenceScope = null;
+		this.presenceScopeNamespace = null;
 		this.presenceScopeReady = false;
 		this.stopLiveness();
 		this.setStatus("connecting");
@@ -478,9 +487,7 @@ export class ConnectionManager {
 		msg: OutboundRequest,
 		responseTableIndex?: number,
 	): Promise<OkResponse> {
-		return this.withPresenceScope(msg, () =>
-			this.dispatchWithRetry(msg, 0, responseTableIndex),
-		);
+		return this.dispatchWithRetry(msg, 0, responseTableIndex);
 	}
 
 	/**
@@ -551,25 +558,27 @@ export class ConnectionManager {
 		return { id, result, debugType: encoded.debugMessage.type };
 	}
 
-	private async dispatchWithRetry(
+	private dispatchWithRetry(
 		msg: OutboundRequest,
 		attempt: number,
 		responseTableIndex?: number,
 	): Promise<OkResponse> {
-		const { result, debugType } = this.sendRequest(msg, responseTableIndex);
+		return this.withPresenceScope(msg, async () => {
+			const { result, debugType } = this.sendRequest(msg, responseTableIndex);
 
-		try {
-			return await result;
-		} catch (err) {
-			if (this.intentionalDisconnect) throw err;
-			return this.handleRetryOrThrow(
-				msg,
-				attempt,
-				err,
-				debugType,
-				responseTableIndex,
-			);
-		}
+			try {
+				return await result;
+			} catch (err) {
+				if (this.intentionalDisconnect) throw err;
+				return this.handleRetryOrThrow(
+					msg,
+					attempt,
+					err,
+					debugType,
+					responseTableIndex,
+				);
+			}
+		});
 	}
 
 	private async handleRetryOrThrow(

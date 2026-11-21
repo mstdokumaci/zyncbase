@@ -511,6 +511,48 @@ describe("ZyncBaseClient", () => {
 		restoreWebSocket();
 	});
 
+	test("setPresenceNamespace establishes a same-namespace scope once and waits for it", async () => {
+		installMockWebSocket();
+		const client = createClient({
+			...defaultOptions,
+			presenceNamespace: "public",
+		});
+		const connected = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
+		await connected;
+
+		const first = client.setPresenceNamespace("public");
+		const second = client.setPresenceNamespace("public");
+		await new Promise((r) => setTimeout(r, 0));
+		const setups = mockWs.sentMessages
+			.map((message) => decode(message) as { id: number; type: number })
+			.filter(
+				(message) => message.type === WireMessageType.PresenceSetNamespace,
+			);
+		expect(setups).toHaveLength(1);
+
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: setups[0].id,
+				userId: packDocId(TEST_USER_ID),
+			}),
+		);
+		await Promise.all([first, second]);
+
+		await client.setPresenceNamespace("public");
+		const setupCount = mockWs.sentMessages.filter((message) => {
+			const msg = decode(message) as { type: number };
+			return msg.type === WireMessageType.PresenceSetNamespace;
+		}).length;
+		expect(setupCount).toBe(1);
+		client.disconnect();
+		restoreWebSocket();
+	});
+
 	test("a rejected namespace switch restores session readiness", async () => {
 		installMockWebSocket();
 		const client = createClient(defaultOptions);
