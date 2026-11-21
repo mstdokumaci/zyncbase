@@ -253,18 +253,22 @@ export class ConnectionManager {
 			0,
 		)
 			.then((ok) => {
-				this.adoptUserId(ok, "PresenceSetNamespace");
-				this.presenceScopeReady = true;
+				if (this.presenceNamespace === ns) {
+					this.adoptUserId(ok, "PresenceSetNamespace");
+					this.presenceScopeReady = true;
+				}
 			})
 			.catch((err: unknown) => {
-				if (
-					err instanceof ZyncBaseError &&
-					err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED
-				) {
-					this.presenceNamespace = previousNs;
-					this.presenceScopeReady = previousReady;
-				} else {
-					this.presenceScopeReady = false;
+				if (this.presenceNamespace === ns) {
+					if (
+						err instanceof ZyncBaseError &&
+						err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED
+					) {
+						this.presenceNamespace = previousNs;
+						this.presenceScopeReady = previousReady;
+					} else {
+						this.presenceScopeReady = false;
+					}
 				}
 				throw err;
 			})

@@ -324,6 +324,50 @@ describe("ConnectionManager", () => {
 			expect(mockWs.sentMessages).toHaveLength(2);
 		});
 
+		test("rapid namespace switch ignores stale responses from superseded requests", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("room1");
+			const second = manager.setPresenceNamespace("room2");
+
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+			]);
+
+			const [firstScope, secondScope] = mockWs.sentMessages
+				.slice(1)
+				.map((bytes) => decode(bytes) as { id: number });
+
+			// Acknowledge firstScope late (with a distinct userId)
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: firstScope.id,
+					userId: packDocId("019c1e50-7d11-7000-8000-000000000002"),
+				}),
+			);
+			await tick();
+
+			// Stale response must not overwrite target namespace or adopt old userId
+			expect(manager.getPresenceNamespace()).toBe("room2");
+			expect(manager.userId).toBe(TEST_USER_ID);
+
+			// Acknowledge secondScope
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: secondScope.id,
+					userId: packDocId("019c1e50-7d11-7000-8000-000000000003"),
+				}),
+			);
+			await Promise.all([first, second]);
+
+			expect(manager.getPresenceNamespace()).toBe("room2");
+			expect(manager.userId).toBe("019c1e50-7d11-7000-8000-000000000003");
+		});
+
 		test("a rejected presence switch keeps the previous namespace usable", async () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);
