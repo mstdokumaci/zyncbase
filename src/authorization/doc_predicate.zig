@@ -123,7 +123,7 @@ fn lowerAnd(
 ) DocPredicateError!LowerResult {
     const allocator = ctx.allocator;
     var builder = PredicateBuilder{};
-    errdefer builder.deinit(allocator);
+    defer builder.deinit(allocator);
 
     for (conds) |condition| {
         var result = try lowerCondition(condition, ctx, table);
@@ -150,10 +150,10 @@ fn lowerOr(
 ) DocPredicateError!LowerResult {
     const allocator = ctx.allocator;
     var first_filter: ?query_ast.FilterPredicate = null;
-    errdefer if (first_filter) |*filter| filter.deinit(allocator);
+    defer if (first_filter) |*filter| filter.deinit(allocator);
 
     var or_builder: ?PredicateBuilder = null;
-    errdefer if (or_builder) |*builder| builder.deinit(allocator);
+    defer if (or_builder) |*builder| builder.deinit(allocator);
 
     for (conds) |condition| {
         var result = try lowerCondition(condition, ctx, table);

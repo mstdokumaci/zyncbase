@@ -117,16 +117,20 @@ test "buildDocPredicate treats an unresolved RHS as false" {
         \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"eq":"$session.externalId"}}}]}
     ;
     const conjunction =
-        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"and":[{"$doc.visibility":{"eq":"$session.externalId"}},{"$doc.visibility":{"eq":"open"}}]}}]}
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"and":[{"$doc.visibility":{"eq":"open"}},{"$doc.visibility":{"eq":"$session.externalId"}}]}}]}
     ;
     const disjunction =
-        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"or":[{"$doc.visibility":{"eq":"$session.externalId"}},true]}}]}
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"or":[{"$doc.visibility":{"eq":"open"}},{"$doc.visibility":{"eq":"$session.externalId"}},true]}}]}
+    ;
+    const disjunction_builder =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"or":[{"$doc.visibility":{"eq":"open"}},{"$doc.visibility":{"eq":"closed"}},{"$doc.visibility":{"eq":"$session.externalId"}},true]}}]}
     ;
 
     const cases = [_]struct { json: []const u8, denied: bool }{
         .{ .json = standalone, .denied = true },
         .{ .json = conjunction, .denied = true },
         .{ .json = disjunction, .denied = false },
+        .{ .json = disjunction_builder, .denied = false },
     };
 
     for (cases) |case| {
