@@ -42,6 +42,8 @@ type IncrementOp = Extract<OverlayOp, { kind: "increment" }>;
 interface IncrementState {
 	/** Committed field value from which this increment is not yet reflected. */
 	base?: number;
+	/** Latest server revision (`updated_at`) used for reconciliation. */
+	observedAt?: number;
 	/** Server revision (`updated_at`) that already includes the increment. */
 	reflectedAt?: number;
 	/** Committed field value that included it, when no revision is available. */
@@ -179,23 +181,41 @@ export class PendingWrites {
 		revision: number | undefined,
 	): void {
 		const candidates: IncrementOp[] = [];
+		let stale = false;
 		for (const op of ops) {
 			const state = this.incrementState(op);
 			if (this.isReflected(state, revision, baseValue)) {
 				skip.add(op);
 				continue;
 			}
+			if (this.isStaleObservation(state, revision)) {
+				stale = true;
+				continue;
+			}
 			if (state.base === undefined) state.base = baseValue;
 			candidates.push(op);
 		}
-		if (candidates.length === 0) return;
+		// An older record is still projected, but it must not learn over a
+		// newer observation.
+		if (stale || candidates.length === 0) return;
 		const matched = this.matchIncrementPrefix(candidates, baseValue);
 		if (matched < 0) {
-			this.rebaseIncrements(candidates, 0, baseValue);
+			this.rebaseIncrements(candidates, 0, baseValue, revision);
 			return;
 		}
 		this.markReflected(skip, candidates, matched, baseValue, revision);
-		this.rebaseIncrements(candidates, matched + 1, baseValue);
+		this.rebaseIncrements(candidates, matched + 1, baseValue, revision);
+	}
+
+	private isStaleObservation(
+		state: IncrementState,
+		revision: number | undefined,
+	): boolean {
+		return (
+			revision !== undefined &&
+			state.observedAt !== undefined &&
+			revision < state.observedAt
+		);
 	}
 
 	private isReflected(
@@ -212,7 +232,10 @@ export class PendingWrites {
 	}
 
 	private matchIncrementPrefix(ops: IncrementOp[], baseValue: number): number {
-		let cumulative = this.incrementState(ops[0]).base ?? baseValue;
+		const start = this.incrementState(ops[0]).base ?? baseValue;
+		// An unchanged base cannot prove that a zero-sum run was applied.
+		if (baseValue === start) return -1;
+		let cumulative = start;
 		let matched = -1;
 		for (let i = 0; i < ops.length; i += 1) {
 			cumulative += ops[i].by;
@@ -231,8 +254,12 @@ export class PendingWrites {
 		for (let i = 0; i <= matched; i += 1) {
 			const op = ops[i];
 			const state = this.incrementState(op);
+			if (this.isStaleObservation(state, revision)) continue;
 			state.base = baseValue;
-			state.reflectedAt = revision;
+			if (revision !== undefined) {
+				state.observedAt = revision;
+				state.reflectedAt = revision;
+			}
 			state.reflectedValue = baseValue;
 			skip.add(op);
 		}
@@ -242,9 +269,13 @@ export class PendingWrites {
 		ops: IncrementOp[],
 		from: number,
 		baseValue: number,
+		revision: number | undefined,
 	): void {
 		for (let i = from; i < ops.length; i += 1) {
-			this.incrementState(ops[i]).base = baseValue;
+			const state = this.incrementState(ops[i]);
+			if (this.isStaleObservation(state, revision)) continue;
+			state.base = baseValue;
+			if (revision !== undefined) state.observedAt = revision;
 		}
 	}
 

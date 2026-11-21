@@ -362,7 +362,7 @@ describe("optimistic writes", () => {
 	});
 
 	test("a coalesced increment delta is not counted again by an earlier commit", async () => {
-		const { store, writes, subscribe, delta } = await makeStore();
+		const { store, writes, subscribe, delta, tracker } = await makeStore();
 		const { subId, deliveries } = await subscribe({});
 
 		const first = store.increment("todos.t2.rank", 1);
@@ -370,6 +370,7 @@ describe("optimistic writes", () => {
 		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ rank: 4 });
 
 		delta(subId, { ...T2, rank: 4, updated_at: 21 });
+		tracker.flushNow();
 		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ rank: 4 });
 
 		writes[0].commit();
@@ -382,13 +383,14 @@ describe("optimistic writes", () => {
 	});
 
 	test("a pending increment still applies to a base that predates it", async () => {
-		const { store, subscribe, delta } = await makeStore();
+		const { store, subscribe, delta, tracker } = await makeStore();
 		const { subId, deliveries } = await subscribe({});
 
 		void store.increment("todos.t2.rank", 5);
 		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ rank: 7 });
 
 		delta(subId, { ...T2, updated_at: 21 });
+		tracker.flushNow();
 		expect(deliveries.at(-1)?.rows[1]).toMatchObject({ rank: 7 });
 	});
 

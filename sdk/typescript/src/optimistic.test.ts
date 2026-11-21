@@ -142,6 +142,56 @@ describe("PendingWrites.apply", () => {
 		expect(pending.apply("todos", "t1", base)).toMatchObject({ count: 1 });
 	});
 
+	test("an unchanged base does not mark a zero-sum prefix reflected", () => {
+		const pending = new PendingWrites();
+		const increment = (by: number): OverlayOp => ({
+			kind: "increment",
+			collection: "todos",
+			id: "t1",
+			field: "count",
+			by,
+			time: 9,
+		});
+		pending.add([increment(1)]);
+		pending.add([increment(-1)]);
+
+		expect(pending.apply("todos", "t1", { ...BASE, count: 0 })).toMatchObject({
+			count: 0,
+		});
+		expect(
+			pending.apply("todos", "t1", {
+				...BASE,
+				count: 1,
+				updated_at: 6,
+			}),
+		).toMatchObject({ count: 0 });
+	});
+
+	test("an older base does not reset a newer reconciliation", () => {
+		const pending = new PendingWrites();
+		const increment = (): OverlayOp => ({
+			kind: "increment",
+			collection: "todos",
+			id: "t1",
+			field: "count",
+			by: 1,
+			time: 9,
+		});
+		pending.add([increment()]);
+		pending.add([increment()]);
+		pending.add([increment()]);
+
+		const base = { ...BASE, count: 0, updated_at: 0 };
+		expect(pending.apply("todos", "t1", base)).toMatchObject({ count: 3 });
+		expect(
+			pending.apply("todos", "t1", { ...BASE, count: 2, updated_at: 2 }),
+		).toMatchObject({ count: 3 });
+		expect(pending.apply("todos", "t1", base)).toMatchObject({ count: 3 });
+		expect(
+			pending.apply("todos", "t1", { ...BASE, count: 3, updated_at: 3 }),
+		).toMatchObject({ count: 3 });
+	});
+
 	test("writes apply in send order", () => {
 		const pending = new PendingWrites();
 		pending.add([set("t1", { title: "first" })]);
