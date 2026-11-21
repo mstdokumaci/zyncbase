@@ -43,7 +43,14 @@ pub const Operator = enum(u8) {
 
     /// Evaluate a binary operator given resolved LHS and RHS values.
     /// Returns false for type mismatches rather than erroring.
+    ///
+    /// NULL follows SQL, so in-memory checks and SQL agree: a NULL on either
+    /// side fails every operator, `ne` and `notIn` included. An empty list is
+    /// decided first, as `FilterPredicate.normalize` does: `in []` holds for
+    /// no value and `notIn []` for every value, NULL included.
     pub fn compare(self: Operator, lhs: Value, rhs: Value) bool {
+        if ((self == .in or self == .notIn) and rhs == .array and rhs.array.len == 0) return self == .notIn;
+        if (lhs == .nil or rhs == .nil) return false;
         return switch (self) {
             .eq => lhs.eql(rhs),
             .ne => !lhs.eql(rhs),

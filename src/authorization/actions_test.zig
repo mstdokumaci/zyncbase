@@ -63,6 +63,32 @@ test "authorizeActionInvoke evaluates $value against params" {
     try testing.expectError(error.NamespaceUnauthorized, authorization_actions.authorizeActionInvoke(allocator, &config, checkout, "other:ns", user_id, "external-1", null, &small));
 }
 
+test "authorizeActionInvoke denies a $value comparison on a missing or null param" {
+    const allocator = std.heap.smp_allocator;
+
+    var schema = try makeActionSchema(allocator);
+    defer schema.deinit();
+
+    const json =
+        \\{"namespaces":[{"pattern":"room:{room_id}","storeFilter":true,"presenceRead":true,"presenceWrite":true}],
+        \\ "store":[],
+        \\ "actions":[{"action":"checkout","invoke":{"$value.amount":{"lte":100}},"register":false}]}
+    ;
+    var config = try authorization_parse.initFromJson(allocator, json, &schema);
+    defer config.deinit();
+
+    const checkout = schema.action("checkout") orelse return error.TestExpectedValue;
+    const user_id = try typed_doc_id.generateUuidV7(std.testing.io);
+
+    var missing = msgpack.Payload{ .arr = try allocator.alloc(msgpack.Payload, 0) };
+    defer missing.free(allocator);
+    try testing.expectError(error.PermissionDenied, authorization_actions.authorizeActionInvoke(allocator, &config, checkout, "room:lobby", user_id, "external-1", null, &missing));
+
+    var explicit_null = try makePairs(allocator, 0, .nil);
+    defer explicit_null.free(allocator);
+    try testing.expectError(error.PermissionDenied, authorization_actions.authorizeActionInvoke(allocator, &config, checkout, "room:lobby", user_id, "external-1", null, &explicit_null));
+}
+
 test "authorizeActionRegister evaluates $session claims and wildcard fallback" {
     const allocator = std.heap.smp_allocator;
 

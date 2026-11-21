@@ -240,8 +240,8 @@ Defined in `authorization.json` under each namespace pattern:
     {
       "pattern": "workspace:*",
       "storeFilter":        true,
-      "presenceRead":        { "$session.userId": { "ne": null } },
-      "presenceWrite":       { "$session.userId": { "ne": null } },
+      "presenceRead":        { "$session.userId": "isNotNull" },
+      "presenceWrite":       { "$session.userId": "isNotNull" },
       "presenceSharedWrite": { "$session.role":   { "in": ["host", "presenter"] } }
     }
   ],
@@ -334,7 +334,7 @@ input.addEventListener('input', () => {
       "pattern": "presentation:*",
       "storeFilter":        true,
       "presenceRead":        true,
-      "presenceWrite":       { "$session.userId": { "ne": null } },
+      "presenceWrite":       { "$session.userId": "isNotNull" },
       "presenceSharedWrite": { "$session.role": { "eq": "host" } }
     }
   ],
