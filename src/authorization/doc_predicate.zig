@@ -110,7 +110,8 @@ fn lowerCondition(
                     .deny, .needs_doc_predicate => .deny,
                 };
             }
-            return .{ .filter = try comparisonToFilter(comp, ctx, table) };
+            const filter = (try comparisonToFilter(comp, ctx, table)) orelse return .deny;
+            return .{ .filter = filter };
         },
     };
 }
@@ -122,7 +123,7 @@ fn lowerAnd(
 ) DocPredicateError!LowerResult {
     const allocator = ctx.allocator;
     var builder = PredicateBuilder{};
-    errdefer builder.deinit(allocator);
+    defer builder.deinit(allocator);
 
     for (conds) |condition| {
         var result = try lowerCondition(condition, ctx, table);
@@ -149,10 +150,10 @@ fn lowerOr(
 ) DocPredicateError!LowerResult {
     const allocator = ctx.allocator;
     var first_filter: ?query_ast.FilterPredicate = null;
-    errdefer if (first_filter) |*filter| filter.deinit(allocator);
+    defer if (first_filter) |*filter| filter.deinit(allocator);
 
     var or_builder: ?PredicateBuilder = null;
-    errdefer if (or_builder) |*builder| builder.deinit(allocator);
+    defer if (or_builder) |*builder| builder.deinit(allocator);
 
     for (conds) |condition| {
         var result = try lowerCondition(condition, ctx, table);
@@ -200,9 +201,9 @@ fn comparisonToFilter(
     comp: types.Comparison,
     ctx: EvalContext,
     table: *const schema_types.Table,
-) DocPredicateError!query_ast.FilterPredicate {
+) DocPredicateError!?query_ast.FilterPredicate {
     const allocator = ctx.allocator;
-    var condition = try comparisonToQueryCondition(comp, ctx, table);
+    var condition = (try comparisonToQueryCondition(comp, ctx, table)) orelse return null;
     errdefer condition.deinit(allocator);
 
     const conditions = try allocator.alloc(query_ast.Condition, 1);
@@ -214,13 +215,14 @@ fn comparisonToQueryCondition(
     comp: types.Comparison,
     ctx: EvalContext,
     table: *const schema_types.Table,
-) DocPredicateError!query_ast.Condition {
+) DocPredicateError!?query_ast.Condition {
     const allocator = ctx.allocator;
     const field_index = table.fieldIndex(comp.lhs.field) orelse return error.InvalidFieldName;
     const field_meta = table.fields[field_index];
 
     const value: ?typed.Value = if (comp.rhs) |rhs| blk: {
-        var rhs_value = evaluate_mod.resolveOperand(rhs, ctx) orelse return error.InvalidValue;
+        // A missing RHS resolves to false, matching evaluateComparisonWithDoc.
+        var rhs_value = evaluate_mod.resolveOperand(rhs, ctx) orelse return null;
         defer rhs_value.deinit(allocator);
         break :blk try rhs_value.intoOwned(allocator);
     } else null;

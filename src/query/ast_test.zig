@@ -159,6 +159,17 @@ test "Operator.compare semantics" {
     try std.testing.expect(!cmp(.contains, arr_abc, tth.valText("z")));
     try std.testing.expect(cmp(.contains, txt_long, tth.valText("world")));
     try std.testing.expect(!cmp(.contains, txt_long, tth.valText("xyz")));
+
+    // NULL on either side fails every operator, as in SQL; empty lists decide first.
+    const nil_val = tth.valNil();
+    for ([_]Operator{ .eq, .ne, .gt, .gte, .lt, .lte, .startsWith, .endsWith, .contains }) |op| {
+        try std.testing.expect(!cmp(op, nil_val, txt_a));
+        try std.testing.expect(!cmp(op, txt_a, nil_val));
+    }
+    try std.testing.expect(!cmp(.in, nil_val, arr_abc));
+    try std.testing.expect(!cmp(.notIn, nil_val, arr_abc));
+    try std.testing.expect(!cmp(.in, nil_val, arr_empty));
+    try std.testing.expect(cmp(.notIn, nil_val, arr_empty));
 }
 
 test "Operator.compareNullary semantics" {

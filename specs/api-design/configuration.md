@@ -432,8 +432,8 @@ Presence auth rules are defined in `authorization.json` alongside store rules:
     {
       "pattern": "workspace:*",
       "storeFilter":        true,
-      "presenceRead":        { "$session.userId": { "ne": null } },
-      "presenceWrite":       { "$session.userId": { "ne": null } },
+      "presenceRead":        { "$session.userId": "isNotNull" },
+      "presenceWrite":       { "$session.userId": "isNotNull" },
       "presenceSharedWrite": { "$session.role":   { "in": ["host", "presenter"] } }
     }
   ],
@@ -1372,16 +1372,16 @@ ALLOWED_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
   "namespaces": [
     {
       "pattern": "room:{room_id}",
-      "storeFilter": { "$session.userId": { "ne": null } },
+      "storeFilter": { "$session.userId": "isNotNull" },
       "presenceRead": true,
-      "presenceWrite": { "$session.userId": { "ne": null } }
+      "presenceWrite": { "$session.userId": "isNotNull" }
     }
   ],
   "store": [
     {
       "collection": "elements",
       "read": true,
-      "write": { "$session.userId": { "ne": null } }
+      "write": { "$session.userId": "isNotNull" }
     }
   ]
 }

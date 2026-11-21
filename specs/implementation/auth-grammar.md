@@ -76,7 +76,8 @@ A `Condition` maps to one of three JSON formats:
 
 - **LHS**: Must be a context variable (`$session`, `$doc`, `$namespace`, `$path`, `$value`, `$data`).
 - **Operator**: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `contains`, `startsWith`, `endsWith`, `in`, `notIn`, `isNull`, `isNotNull`.
-- **RHS**: A raw literal value or context variable. It is omitted for `isNull` and `isNotNull`.
+- **RHS**: A raw literal value or context variable, never a `null` literal. It is omitted for `isNull` and `isNotNull`.
+- **NULL**: An unresolved operand, such as an absent field or a missing session claim, is treated as NULL. A NULL value on either side fails every binary operator, `ne` and non-empty `notIn` included, as in SQL. RAM evaluation and predicate lowering therefore reach the same verdict, so a create and a later update judge a NULL field alike. `isNull` / `isNotNull` are the only tests for NULL. An empty `in` list holds for no value and an empty `notIn` list for every value, NULL included; the empty-list rule is decided before NULL, as in `Operator.compare` and `FilterPredicate.normalize` ([Query Engine](./query-engine.md#evaluation-semantics)).
 
 ---
 

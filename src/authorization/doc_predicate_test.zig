@@ -90,6 +90,62 @@ test "buildDocPredicate normalizes $doc notIn empty set to no guard" {
     try testing.expect(predicate == null);
 }
 
+test "buildDocPredicate treats a missing $session claim with notIn empty as no guard" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"namespaces":[],"store":[{"collection":"*","read":true,"write":{"$session.role":{"notIn":[]}}}]}
+    ;
+    var config = try auth_helpers.initTestConfig(allocator, json);
+    defer config.deinit();
+
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{});
+    defer table.deinit(allocator);
+
+    const predicate = try authorization_doc_predicate.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
+    try testing.expect(predicate == null);
+}
+
+test "buildDocPredicate treats an unresolved RHS as false" {
+    const allocator = std.testing.allocator;
+
+    var table = schema_helpers.makeSingleRuntimeTable(allocator, "test", &[_]schema_helpers.TestFieldDef{
+        .{ .name = "visibility", .field_type = .text },
+    });
+    defer table.deinit(allocator);
+
+    const standalone =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"$doc.visibility":{"eq":"$session.externalId"}}}]}
+    ;
+    const conjunction =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"and":[{"$doc.visibility":{"eq":"open"}},{"$doc.visibility":{"eq":"$session.externalId"}}]}}]}
+    ;
+    const disjunction =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"or":[{"$doc.visibility":{"eq":"open"}},{"$doc.visibility":{"eq":"$session.externalId"}},true]}}]}
+    ;
+    const disjunction_builder =
+        \\{"namespaces":[],"store":[{"collection":"test","read":true,"write":{"or":[{"$doc.visibility":{"eq":"open"}},{"$doc.visibility":{"eq":"closed"}},{"$doc.visibility":{"eq":"$session.externalId"}},true]}}]}
+    ;
+
+    const cases = [_]struct { json: []const u8, denied: bool }{
+        .{ .json = standalone, .denied = true },
+        .{ .json = conjunction, .denied = true },
+        .{ .json = disjunction, .denied = false },
+        .{ .json = disjunction_builder, .denied = false },
+    };
+
+    for (cases) |case| {
+        var config = try auth_helpers.initTestConfig(allocator, case.json);
+        defer config.deinit();
+
+        const result = authorization_doc_predicate.buildDocPredicate(config.store_rules[0].write, .{ .allocator = allocator }, &table);
+        if (case.denied) {
+            try testing.expectError(error.AccessDenied, result);
+        } else {
+            try testing.expect((try result) == null);
+        }
+    }
+}
+
 test "buildDocPredicate preserves $doc in empty set as match none guard" {
     const allocator = std.testing.allocator;
     const json =
