@@ -46,15 +46,6 @@ function createMockConnection() {
 		on: () => {},
 		schemaDictionary: schema,
 		userId: null as string | null,
-		presenceScopeTarget: "public",
-		presenceScopeGeneration: 0,
-		getPresenceScopeTarget() {
-			return this.presenceScopeTarget;
-		},
-		getPresenceScopeGeneration() {
-			return this.presenceScopeGeneration;
-		},
-		ensurePresenceScope: () => Promise.resolve(),
 		dispatched,
 		schema,
 		fireBroadcast: (msg: PresenceBroadcast | SharedStateBroadcast) => {
@@ -124,76 +115,6 @@ describe("PresenceImpl", () => {
 		} finally {
 			jest.useRealTimers();
 		}
-	});
-
-	test("a namespace switch pauses queued sets and rejects old-namespace data", async () => {
-		const conn = createMockConnection();
-		await setupSchema(conn.schema);
-		const presence = new PresenceImpl(conn);
-		presence.set({ status: "active" });
-		const queued = presence.set({ status: "away" });
-		const outcome = queued.then(
-			() => null,
-			(err: { code?: string }) => err.code,
-		);
-		presence.beginNamespaceSwitch();
-		conn.presenceScopeTarget = "other";
-		conn.presenceScopeGeneration++;
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(
-			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
-		).toHaveLength(1);
-		presence.commitNamespaceSwitch();
-		expect(await outcome).toBe("REQUEST_SUPERSEDED");
-		expect(
-			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
-		).toHaveLength(1);
-	});
-
-	test("a rejected namespace switch resumes queued sets in the old namespace", async () => {
-		const conn = createMockConnection();
-		await setupSchema(conn.schema);
-		const presence = new PresenceImpl(conn);
-		presence.set({ status: "active" });
-		const queued = presence.set({ status: "away" });
-		presence.beginNamespaceSwitch();
-		conn.presenceScopeTarget = "other";
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(
-			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
-		).toHaveLength(1);
-		conn.presenceScopeTarget = "public";
-		presence.rollbackNamespaceSwitch();
-		await queued;
-		expect(
-			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
-		).toHaveLength(2);
-	});
-
-	test("commit flushes batches queued for the acknowledged target", async () => {
-		const conn = createMockConnection();
-		await setupSchema(conn.schema);
-		const presence = new PresenceImpl(conn);
-		presence.set({ status: "active" });
-		const oldBatch = presence.set({ status: "old" });
-		const oldOutcome = oldBatch.then(
-			() => null,
-			(err: { code?: string }) => err.code,
-		);
-		presence.beginNamespaceSwitch();
-		conn.presenceScopeTarget = "other";
-		conn.presenceScopeGeneration++;
-		const newBatch = presence.set({ status: "new" });
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(
-			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
-		).toHaveLength(1);
-		presence.commitNamespaceSwitch();
-		await newBatch;
-		expect(await oldOutcome).toBe("REQUEST_SUPERSEDED");
-		const sets = conn.dispatched.filter((msg) => msg.type === "PresenceSet");
-		expect(sets).toHaveLength(2);
-		expect(sets.at(-1)?.data).toEqual([2, "new"]);
 	});
 
 	test("setShared() dispatches PresenceSetShared with encoded data", async () => {
@@ -759,38 +680,6 @@ describe("PresenceImpl", () => {
 		expect(presence.get(staleUserId)).toBeUndefined();
 	});
 
-	test("stale subscription completion after a scope change skips unscoped unsubscribe", async () => {
-		const conn = createMockConnection();
-		await setupSchema(conn.schema);
-		const presence = new PresenceImpl(conn);
-		let resolveStale: (value: OkResponse) => void = () => {};
-		const stalePromise = new Promise<OkResponse>((resolve) => {
-			resolveStale = resolve;
-		});
-		let unsubscribes = 0;
-		conn.dispatch = (msg: Record<string, unknown>) => {
-			if (msg.type === "PresenceSubscribe") {
-				conn.presenceScopeGeneration++;
-				return stalePromise;
-			}
-			if (msg.type === "PresenceUnsubscribe") {
-				unsubscribes++;
-			}
-			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
-		};
-		presence.subscribe(() => {});
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		presence.invalidate();
-		resolveStale({
-			type: "ok",
-			id: 0,
-			subId: 100,
-			users: [],
-		} as OkResponse);
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(unsubscribes).toBe(0);
-	});
-
 	test("invalidate() resets lastSetTime so first set() after reconnect is not throttled", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
@@ -808,49 +697,6 @@ describe("PresenceImpl", () => {
 		expect(conn.dispatched.length).toBe(2);
 	});
 
-	test("subscription cleanup captures the epoch after the lazy scope setup", async () => {
-		const conn = createMockConnection();
-		await setupSchema(conn.schema);
-		const presence = new PresenceImpl(conn);
-		let resolveReplay: (value: OkResponse) => void = () => {};
-		const replayPromise = new Promise<OkResponse>((resolve) => {
-			resolveReplay = resolve;
-		});
-		let subscribeCall = 0;
-		let unsubscribes = 0;
-		conn.dispatch = (msg: Record<string, unknown>) => {
-			if (msg.type === "PresenceSubscribe") {
-				subscribeCall++;
-				if (subscribeCall === 1) {
-					return Promise.resolve({
-						type: "ok",
-						id: 0,
-						subId: 100,
-						users: [],
-					} as OkResponse);
-				}
-				return replayPromise;
-			}
-			if (msg.type === "PresenceUnsubscribe") unsubscribes++;
-			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
-		};
-		const unsubscribe = await presence.subscribe(() => {});
-		presence.invalidate();
-		conn.ensurePresenceScope = async () => {
-			conn.presenceScopeGeneration++;
-		};
-		const replaying = presence.replaySubscriptions();
-		const closing = unsubscribe();
-		resolveReplay({
-			type: "ok",
-			id: 0,
-			subId: 200,
-			users: [],
-		} as OkResponse);
-		await replaying;
-		await closing;
-		expect(unsubscribes).toBe(1);
-	});
 	test("replaySubscriptions unsubscribes user if client unsubscribed before promise resolves", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);

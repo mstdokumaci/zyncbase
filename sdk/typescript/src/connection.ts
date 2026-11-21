@@ -141,13 +141,8 @@ export class ConnectionManager {
 	private currentUserId: string | null = null;
 	private presenceNamespace: string;
 	/** The presence scope request of this socket; null until presence is first used. */
-	private presenceScope: Promise<void> | null = null;
-	private presenceScopeNamespace: string | null = null;
+	private presenceScopePromise: Promise<void> | null = null;
 	private presenceScopeReady = false;
-	private presenceScopeGeneration = 0;
-	private presenceConfirmedScope: Promise<void> | null = null;
-	private presenceConfirmedNamespace: string | null = null;
-	private connectionGeneration = 0;
 
 	private processingPromise: Promise<void> = Promise.resolve();
 
@@ -207,27 +202,29 @@ export class ConnectionManager {
 	getPresenceNamespace(): string {
 		return this.presenceNamespace;
 	}
-	getPresenceScopeTarget(): string {
-		return this.presenceScopeNamespace ?? this.presenceNamespace;
+
+	isPresenceScopeReady(): boolean {
+		return this.presenceScopeReady;
 	}
-	getPresenceScopeGeneration(): number {
-		return this.presenceScopeGeneration;
-	}
-	getConnectionGeneration(): number {
-		return this.connectionGeneration;
-	}
-	async ensurePresenceScope(): Promise<void> {
-		if (this.currentStatus !== "connected") return;
-		const namespace = this.presenceScopeNamespace ?? this.presenceNamespace;
-		if (this.presenceScopeReady) {
-			if (this.presenceNamespace === namespace) return;
-			this.presenceScopeReady = false;
-			this.presenceScope = null;
+
+	async ensurePresenceScope(
+		ns: string = this.presenceNamespace,
+	): Promise<void> {
+		if (this.currentStatus !== "connected") {
+			throw new ZyncBaseError("Connection is not ready", {
+				code: ErrorCodes.CONNECTION_FAILED,
+				category: "network",
+				retryable: true,
+			});
 		}
-		const scope = this.presenceScope ?? this.setPresenceNamespace(namespace);
-		await scope;
-		const current = this.presenceScopeNamespace ?? this.presenceNamespace;
-		if (current !== namespace) return this.ensurePresenceScope();
+		if (this.presenceScopeReady && this.presenceNamespace === ns) {
+			return;
+		}
+		if (this.presenceScopePromise && this.presenceNamespace === ns) {
+			return this.presenceScopePromise;
+		}
+
+		return this.setPresenceNamespace(ns);
 	}
 
 	/**
@@ -237,49 +234,47 @@ export class ConnectionManager {
 	setPresenceNamespace(ns: string): Promise<void> {
 		if (
 			this.currentStatus === "connected" &&
-			this.presenceScope !== null &&
-			this.presenceScopeNamespace === ns
+			this.presenceScopeReady &&
+			this.presenceNamespace === ns
 		) {
-			return this.presenceScope;
+			return Promise.resolve();
 		}
-		const generation = ++this.presenceScopeGeneration;
+		if (this.presenceScopePromise && this.presenceNamespace === ns) {
+			return this.presenceScopePromise;
+		}
+
+		const previousNs = this.presenceNamespace;
+		const previousReady = this.presenceScopeReady;
 		this.presenceScopeReady = false;
-		this.presenceScopeNamespace = ns;
+		this.presenceNamespace = ns;
+
 		const scope: Promise<void> = this.dispatchWithRetry(
 			{ type: "PresenceSetNamespace", namespace: ns },
 			0,
-			undefined,
-			() => this.presenceScopeGeneration === generation,
 		)
 			.then((ok) => {
-				if (this.presenceScope !== scope) {
-					throw this.supersededPresenceScopeError();
-				}
 				this.adoptUserId(ok, "PresenceSetNamespace");
-				this.presenceNamespace = ns;
 				this.presenceScopeReady = true;
-				this.presenceConfirmedScope = scope;
-				this.presenceConfirmedNamespace = ns;
 			})
 			.catch((err: unknown) => {
-				if (this.presenceScope === scope) {
-					if (this.isNamespaceSwitchRejected(err)) {
-						this.presenceScope = this.presenceConfirmedScope;
-						this.presenceScopeNamespace = this.presenceConfirmedNamespace;
-						this.presenceScopeReady =
-							this.presenceConfirmedScope !== null &&
-							this.presenceConfirmedNamespace !== null;
-					} else {
-						this.presenceScope = null;
-						this.presenceScopeNamespace = null;
-						this.presenceScopeReady = false;
-						this.presenceConfirmedScope = null;
-						this.presenceConfirmedNamespace = null;
-					}
+				if (
+					err instanceof ZyncBaseError &&
+					err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED
+				) {
+					this.presenceNamespace = previousNs;
+					this.presenceScopeReady = previousReady;
+				} else {
+					this.presenceScopeReady = false;
 				}
 				throw err;
+			})
+			.finally(() => {
+				if (this.presenceScopePromise === scope) {
+					this.presenceScopePromise = null;
+				}
 			});
-		this.presenceScope = scope;
+
+		this.presenceScopePromise = scope;
 		return scope;
 	}
 
@@ -291,49 +286,14 @@ export class ConnectionManager {
 	private withPresenceScope<T>(
 		msg: OutboundRequest,
 		send: () => Promise<T>,
-		namespace = this.presenceScopeNamespace ?? this.presenceNamespace,
 	): Promise<T> {
 		if (this.currentStatus !== "connected" || !this.needsPresenceScope(msg)) {
 			return send();
 		}
-		const requested = this.presenceScopeNamespace ?? this.presenceNamespace;
-		if (requested !== namespace) {
-			return Promise.reject(this.supersededPresenceScopeError());
-		}
 		if (this.presenceScopeReady) {
-			if (this.presenceNamespace === namespace) return send();
-			this.presenceScopeReady = false;
-			this.presenceScope = null;
+			return send();
 		}
-		const scope = this.presenceScope ?? this.setPresenceNamespace(namespace);
-		return scope.then(
-			() => this.withPresenceScope(msg, send, namespace),
-			(err) => {
-				const current = this.presenceScopeNamespace ?? this.presenceNamespace;
-				if (current !== namespace) {
-					throw this.supersededPresenceScopeError();
-				}
-				if (this.presenceScope !== null && this.presenceScope !== scope) {
-					return this.withPresenceScope(msg, send, namespace);
-				}
-				throw err;
-			},
-		);
-	}
-
-	private supersededPresenceScopeError(): ZyncBaseError {
-		return new ZyncBaseError("Presence namespace setup superseded", {
-			code: ErrorCodes.REQUEST_SUPERSEDED,
-			category: "state",
-			retryable: false,
-		});
-	}
-
-	private isNamespaceSwitchRejected(err: unknown): boolean {
-		return (
-			err instanceof ZyncBaseError &&
-			err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED
-		);
+		return this.ensurePresenceScope().then(() => send());
 	}
 
 	/** Presence messages, and action messages naming a presence-scoped action. */
@@ -435,13 +395,8 @@ export class ConnectionManager {
 		this.intentionalDisconnect = false;
 		this.pendingDisconnectError = null;
 		this.currentUserId = null;
-		this.presenceScope = null;
-		this.presenceScopeNamespace = null;
+		this.presenceScopePromise = null;
 		this.presenceScopeReady = false;
-		this.presenceScopeGeneration++;
-		this.presenceConfirmedScope = null;
-		this.presenceConfirmedNamespace = null;
-		this.connectionGeneration++;
 		this.stopLiveness();
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
@@ -646,36 +601,23 @@ export class ConnectionManager {
 		msg: OutboundRequest,
 		attempt: number,
 		responseTableIndex?: number,
-		isCurrent?: () => boolean,
-		namespace?: string,
 	): Promise<OkResponse> {
-		const target =
-			namespace ?? this.presenceScopeNamespace ?? this.presenceNamespace;
-		return this.withPresenceScope(
-			msg,
-			async () => {
-				if (isCurrent !== undefined && !isCurrent()) {
-					throw this.supersededPresenceScopeError();
-				}
-				const { result, debugType } = this.sendRequest(msg, responseTableIndex);
+		return this.withPresenceScope(msg, async () => {
+			const { result, debugType } = this.sendRequest(msg, responseTableIndex);
 
-				try {
-					return await result;
-				} catch (err) {
-					if (this.intentionalDisconnect) throw err;
-					return this.handleRetryOrThrow(
-						msg,
-						attempt,
-						err,
-						debugType,
-						responseTableIndex,
-						isCurrent,
-						target,
-					);
-				}
-			},
-			target,
-		);
+			try {
+				return await result;
+			} catch (err) {
+				if (this.intentionalDisconnect) throw err;
+				return this.handleRetryOrThrow(
+					msg,
+					attempt,
+					err,
+					debugType,
+					responseTableIndex,
+				);
+			}
+		});
 	}
 
 	private async handleRetryOrThrow(
@@ -684,12 +626,7 @@ export class ConnectionManager {
 		err: unknown,
 		debugType: string,
 		responseTableIndex?: number,
-		isCurrent?: () => boolean,
-		namespace?: string,
 	): Promise<OkResponse> {
-		if (isCurrent !== undefined && !isCurrent()) {
-			throw this.supersededPresenceScopeError();
-		}
 		if (!this.retryPolicy.shouldRetry(err, attempt)) throw err;
 
 		const delay = this.retryPolicy.getDelay(err, attempt);
@@ -700,16 +637,7 @@ export class ConnectionManager {
 		}
 		await sleep(delay);
 		if (this.intentionalDisconnect) throw err;
-		if (isCurrent !== undefined && !isCurrent()) {
-			throw this.supersededPresenceScopeError();
-		}
-		return this.dispatchWithRetry(
-			msg,
-			attempt + 1,
-			responseTableIndex,
-			isCurrent,
-			namespace,
-		);
+		return this.dispatchWithRetry(msg, attempt + 1, responseTableIndex);
 	}
 
 	authRefresh(token: string): Promise<void> {
@@ -732,7 +660,8 @@ export class ConnectionManager {
 
 	disconnect(): void {
 		this.intentionalDisconnect = true;
-		this.connectionGeneration++;
+		this.presenceScopePromise = null;
+		this.presenceScopeReady = false;
 		this.currentUserId = null;
 		this.stopLiveness();
 		if (this.reconnectTimer !== null) {

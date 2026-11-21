@@ -17,11 +17,6 @@ interface SetWaiter {
 	resolve: () => void;
 	reject: (reason?: unknown) => void;
 }
-interface PendingSetBatch {
-	data: Record<string, unknown>;
-	waiters: SetWaiter[];
-}
-
 export interface PresenceConnection {
 	dispatch(msg: Record<string, unknown>): Promise<OkResponse>;
 	onPresenceBroadcast(
@@ -30,9 +25,6 @@ export interface PresenceConnection {
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
 	schemaDictionary: SchemaDictionary;
 	readonly userId: string | null;
-	getPresenceScopeTarget(): string;
-	getPresenceScopeGeneration(): number;
-	ensurePresenceScope(): Promise<void>;
 }
 
 export class PresenceImpl implements Presence {
@@ -50,8 +42,8 @@ export class PresenceImpl implements Presence {
 		(shared: Record<string, unknown> | null) => void
 	>();
 	private lastSetTime = 0;
-	private pendingSets = new Map<string, PendingSetBatch>();
-	private switchPending = false;
+	private pendingSetData: Record<string, unknown> | null = null;
+	private pendingSetWaiters: SetWaiter[] = [];
 	private throttleTimer: ReturnType<typeof setTimeout> | null = null;
 	private conn: PresenceConnection;
 	private readonly emitError: (err: ZyncBaseError) => void;
@@ -79,15 +71,7 @@ export class PresenceImpl implements Presence {
 			reject = rej;
 		});
 		accepted.catch(() => {});
-		const namespace = this.conn.getPresenceScopeTarget();
-		const batch = this.pendingSets.get(namespace) ?? {
-			data: {},
-			waiters: [],
-		};
-		batch.data = { ...batch.data, ...data };
-		batch.waiters.push({ resolve, reject });
-		this.pendingSets.set(namespace, batch);
-		if (this.switchPending) return accepted;
+		this.pendingSetWaiters.push({ resolve, reject });
 
 		const now = performance.now();
 		const elapsed = now - this.lastSetTime;
@@ -97,12 +81,25 @@ export class PresenceImpl implements Presence {
 				clearTimeout(this.throttleTimer);
 				this.throttleTimer = null;
 			}
-			this.flushPendingSets();
-		} else if (this.throttleTimer === null) {
-			this.throttleTimer = setTimeout(() => {
-				this.throttleTimer = null;
-				this.flushPendingSets();
-			}, THROTTLE_INTERVAL_MS - elapsed);
+			const pending = this.pendingSetData;
+			this.pendingSetData = null;
+			this.lastSetTime = now;
+			this.sendSet(
+				pending ? { ...pending, ...data } : data,
+				this.pendingSetWaiters.splice(0),
+			);
+		} else {
+			this.pendingSetData = { ...(this.pendingSetData ?? {}), ...data };
+			if (this.throttleTimer === null) {
+				this.throttleTimer = setTimeout(() => {
+					this.throttleTimer = null;
+					if (this.pendingSetData) {
+						this.lastSetTime = performance.now();
+						this.sendSet(this.pendingSetData, this.pendingSetWaiters.splice(0));
+						this.pendingSetData = null;
+					}
+				}, THROTTLE_INTERVAL_MS - elapsed);
+			}
 		}
 		return accepted;
 	}
@@ -112,52 +109,6 @@ export class PresenceImpl implements Presence {
 			{ type: "PresenceSetShared", data },
 			"Presence setShared failed",
 		);
-	}
-	beginNamespaceSwitch(): void {
-		this.switchPending = true;
-		if (this.throttleTimer !== null) {
-			clearTimeout(this.throttleTimer);
-			this.throttleTimer = null;
-		}
-	}
-	commitNamespaceSwitch(): void {
-		this.switchPending = false;
-		const target = this.conn.getPresenceScopeTarget();
-		const targetBatch = this.pendingSets.get(target);
-		if (targetBatch) this.pendingSets.delete(target);
-		this.invalidate();
-		if (targetBatch) {
-			this.pendingSets.set(target, targetBatch);
-			this.flushPendingSets();
-		}
-	}
-	rollbackNamespaceSwitch(): void {
-		this.switchPending = false;
-		const target = this.conn.getPresenceScopeTarget();
-		const superseded = new ZyncBaseError(
-			"Presence set superseded by scope change",
-			{
-				code: ErrorCodes.REQUEST_SUPERSEDED,
-				category: "state",
-				retryable: false,
-			},
-		);
-		for (const [namespace, batch] of this.pendingSets) {
-			if (namespace === target) continue;
-			this.pendingSets.delete(namespace);
-			for (const waiter of batch.waiters) waiter.reject(superseded);
-		}
-		this.flushPendingSets();
-	}
-	private flushPendingSets(): void {
-		if (this.switchPending || this.pendingSets.size === 0) return;
-		const target = this.conn.getPresenceScopeTarget();
-		for (const [namespace, batch] of [...this.pendingSets]) {
-			if (namespace !== target) continue;
-			this.pendingSets.delete(namespace);
-			this.sendSet(batch.data, batch.waiters);
-		}
-		this.lastSetTime = performance.now();
 	}
 
 	private hasUserSubscribers(): boolean {
@@ -189,8 +140,6 @@ export class PresenceImpl implements Presence {
 
 	private async establishUserSubscription(gen: number): Promise<void> {
 		while (gen === this.userSubGen) {
-			await this.conn.ensurePresenceScope();
-			const epoch = this.conn.getPresenceScopeGeneration();
 			const ok = await this.conn.dispatch({ type: "PresenceSubscribe" });
 			if (ok.subId === undefined) {
 				throw new ZyncBaseError("PresenceSubscribe response missing subId", {
@@ -200,15 +149,10 @@ export class PresenceImpl implements Presence {
 				});
 			}
 			if (gen !== this.userSubGen || !this.hasUserSubscribers()) {
-				if (
-					this.conn.getPresenceScopeGeneration() === epoch &&
-					this.userSubId === null
-				) {
-					await this.dispatchAccepted(
-						{ type: "PresenceUnsubscribe", subId: ok.subId },
-						"Presence unsubscribe failed",
-					);
-				}
+				await this.dispatchAccepted(
+					{ type: "PresenceUnsubscribe", subId: ok.subId },
+					"Presence unsubscribe failed",
+				);
 				if (gen !== this.userSubGen || !this.hasUserSubscribers()) return;
 				continue;
 			}
@@ -268,8 +212,6 @@ export class PresenceImpl implements Presence {
 
 	private async establishSharedSubscription(gen: number): Promise<void> {
 		while (gen === this.sharedSubGen) {
-			await this.conn.ensurePresenceScope();
-			const epoch = this.conn.getPresenceScopeGeneration();
 			const ok = await this.conn.dispatch({ type: "PresenceSubscribeShared" });
 			if (ok.subId === undefined) {
 				throw new ZyncBaseError(
@@ -282,15 +224,10 @@ export class PresenceImpl implements Presence {
 				);
 			}
 			if (!this.hasCurrentSharedSubscribers(gen)) {
-				if (
-					this.conn.getPresenceScopeGeneration() === epoch &&
-					this.sharedSubId === null
-				) {
-					await this.dispatchAccepted(
-						{ type: "PresenceUnsubscribeShared", subId: ok.subId },
-						"Presence unsubscribeShared failed",
-					);
-				}
+				await this.dispatchAccepted(
+					{ type: "PresenceUnsubscribeShared", subId: ok.subId },
+					"Presence unsubscribeShared failed",
+				);
 				if (!this.hasCurrentSharedSubscribers(gen)) return;
 				continue;
 			}
@@ -471,7 +408,6 @@ export class PresenceImpl implements Presence {
 	): void {
 		this.userSubGen++;
 		this.sharedSubGen++;
-		this.switchPending = false;
 		this.clearUserCache();
 		this.sharedCache = null;
 		this.userSubId = null;
@@ -678,13 +614,11 @@ export class PresenceImpl implements Presence {
 			clearTimeout(this.throttleTimer);
 			this.throttleTimer = null;
 		}
-		const batches = [...this.pendingSets.values()];
-		this.pendingSets.clear();
+		this.pendingSetData = null;
 		if (reason) {
-			for (const batch of batches) {
-				for (const waiter of batch.waiters) waiter.reject(reason);
-			}
+			for (const waiter of this.pendingSetWaiters) waiter.reject(reason);
 		}
+		this.pendingSetWaiters = [];
 		this.lastSetTime = 0;
 	}
 }
