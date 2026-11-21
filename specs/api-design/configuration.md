@@ -443,7 +443,7 @@ Presence auth rules are defined in `authorization.json` alongside store rules:
 
 | Rule | Applies to |
 |---|---|
-| `presenceRead` | `presence.subscribe()` and `presence.subscribeShared()` |
+| `presenceRead` | Entering the namespace's presence scope: every presence call and presence-scoped action. A store-only app never needs it. |
 | `presenceWrite` | `presence.set()` and `presence.remove()` |
 | `presenceSharedWrite` | `presence.setShared()` — defaults to same value as `presenceWrite` when omitted |
 

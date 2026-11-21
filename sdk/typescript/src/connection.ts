@@ -140,6 +140,9 @@ export class ConnectionManager {
 	private storeNamespace: string;
 	private currentUserId: string | null = null;
 	private presenceNamespace: string;
+	/** The presence scope request of this socket; null until presence is first used. */
+	private presenceScope: Promise<void> | null = null;
+	private presenceScopeReady = false;
 
 	private processingPromise: Promise<void> = Promise.resolve();
 
@@ -200,13 +203,69 @@ export class ConnectionManager {
 		return this.presenceNamespace;
 	}
 
-	async setPresenceNamespace(ns: string): Promise<void> {
-		const ok = await this.dispatch({
+	/**
+	 * Establish the presence scope in `ns`, or switch it there. Presence
+	 * messages sent meanwhile wait for it.
+	 */
+	setPresenceNamespace(ns: string): Promise<void> {
+		this.presenceScopeReady = false;
+		const scope: Promise<void> = this.dispatch({
 			type: "PresenceSetNamespace",
 			namespace: ns,
-		});
-		this.adoptUserId(ok, "PresenceSetNamespace");
-		this.presenceNamespace = ns;
+		})
+			.then((ok) => {
+				this.adoptUserId(ok, "PresenceSetNamespace");
+				this.presenceNamespace = ns;
+				if (this.presenceScope === scope) this.presenceScopeReady = true;
+			})
+			.catch((err: unknown) => {
+				if (this.presenceScope === scope) this.presenceScope = null;
+				throw err;
+			});
+		this.presenceScope = scope;
+		return scope;
+	}
+
+	/**
+	 * Sends `msg` once the scope it needs exists. A session starts with the
+	 * store scope only; the first message that needs the presence scope
+	 * requests it, so a store-only app needs no presence authorization.
+	 */
+	private withPresenceScope<T>(
+		msg: OutboundRequest,
+		send: () => Promise<T>,
+	): Promise<T> {
+		if (
+			this.presenceScopeReady ||
+			this.currentStatus !== "connected" ||
+			!this.needsPresenceScope(msg)
+		) {
+			return send();
+		}
+		const scope =
+			this.presenceScope ?? this.setPresenceNamespace(this.presenceNamespace);
+		return scope.then(send);
+	}
+
+	/** Presence messages, and action messages naming a presence-scoped action. */
+	private needsPresenceScope(msg: OutboundRequest): boolean {
+		switch (msg.type) {
+			case "ActionCall":
+				return this.isPresenceAction(msg.action_id);
+			case "ActionRegister":
+				return msg.action_ids.some((id) => this.isPresenceAction(id));
+			default:
+				return (
+					msg.type.startsWith("Presence") && msg.type !== "PresenceSetNamespace"
+				);
+		}
+	}
+
+	private isPresenceAction(id: string | number): boolean {
+		return (
+			typeof id === "string" &&
+			this.schemaDictionary.getAction(id).scope === "presence"
+		);
 	}
 
 	private adoptUserId(ok: OkResponse, request: string): void {
@@ -288,6 +347,8 @@ export class ConnectionManager {
 		this.intentionalDisconnect = false;
 		this.pendingDisconnectError = null;
 		this.currentUserId = null;
+		this.presenceScope = null;
+		this.presenceScopeReady = false;
 		this.stopLiveness();
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
@@ -305,7 +366,6 @@ export class ConnectionManager {
 			ws.onopen = () => {
 				this.startLiveness();
 				this.setStoreNamespace(this.storeNamespace)
-					.then(() => this.setPresenceNamespace(this.presenceNamespace))
 					.then(() => {
 						this.reconnectAttempt = 0;
 						this.setStatus("connected");
@@ -418,7 +478,9 @@ export class ConnectionManager {
 		msg: OutboundRequest,
 		responseTableIndex?: number,
 	): Promise<OkResponse> {
-		return this.dispatchWithRetry(msg, 0, responseTableIndex);
+		return this.withPresenceScope(msg, () =>
+			this.dispatchWithRetry(msg, 0, responseTableIndex),
+		);
 	}
 
 	/**
@@ -426,7 +488,7 @@ export class ConnectionManager {
 	 * which must never be retried because the first attempt may have executed.
 	 */
 	dispatchNoRetry(msg: OutboundRequest): Promise<OkResponse> {
-		return this.sendRequest(msg).result;
+		return this.withPresenceScope(msg, () => this.sendRequest(msg).result);
 	}
 
 	/**

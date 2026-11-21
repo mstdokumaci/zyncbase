@@ -1,0 +1,11 @@
+{
+	"namespaces": [
+		{
+			"pattern": "*",
+			"storeFilter": true,
+			"presenceRead": false,
+			"presenceWrite": false
+		}
+	],
+	"store": [{ "collection": "*", "read": true, "write": true }]
+}

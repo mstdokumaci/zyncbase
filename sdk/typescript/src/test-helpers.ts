@@ -96,7 +96,7 @@ export class MockWebSocket {
 	}
 }
 
-/** MockWebSocket that auto-triggers open and auto-responds to StoreSetNamespace. */
+/** MockWebSocket that auto-triggers open and auto-responds to StoreSetNamespace (id=1). */
 export class AutoMockWebSocket {
 	static readonly OPEN = 1;
 	static readonly CLOSED = 3;
@@ -116,7 +116,6 @@ export class AutoMockWebSocket {
 		Promise.resolve().then(() => {
 			if (this.onopen) this.onopen();
 			this._autoRespondOk(1);
-			this._autoRespondOk(2);
 		});
 	}
 
@@ -237,13 +236,10 @@ function testUserId(): Uint8Array {
 	return packDocId(TEST_USER_ID);
 }
 
-/** Trigger ok responses for initial StoreSetNamespace (id=1) and PresenceSetNamespace (id=2). */
+/** Trigger the ok response for the initial StoreSetNamespace (id=1). */
 export function triggerNamespaceOk(mockWs: MockWebSocket) {
 	mockWs.triggerMessage(
 		encodeToBuffer({ type: "ok", id: 1, userId: testUserId() }),
-	);
-	mockWs.triggerMessage(
-		encodeToBuffer({ type: "ok", id: 2, userId: testUserId() }),
 	);
 }
 

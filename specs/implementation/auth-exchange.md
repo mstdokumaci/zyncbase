@@ -46,7 +46,7 @@ ZyncBase acts as a **resource server**, not an identity provider. It validates i
 | **1. Ticket Request (JWT)** | `POST /auth/ticket` | `Authorization: Bearer <external_jwt>` | `{"ticket": "zyc_tk_...", "expiresAt": 1741551234}` | Validates JWT (signature, issuer, aud, exp, algorithms). Projects claims. |
 | **1. Ticket Request (Anon)** | `POST /auth/ticket` | `{"anonymousSubject": "anon:6c6f8b0d..."}` | `{"ticket": "zyc_tk_...", "expiresAt": 1741551234}` | Checks if anonymous auth is enabled. Validates subject entropy. |
 | **2. WebSocket Upgrade** | `ws://server/ws?ticket=zyc_tk_...` | Ticket in query parameter | WebSocket Upgrade established | Verifies ticket signature, expiry, and single-use state. Hydrates base session. |
-| **3. Scoped Readiness** | WS Msg: `StoreSetNamespace`, `PresenceSetNamespace` | Namespace identifier string | `ok` with bin16 `userId` | Resolves namespace to internal ID and subject to internal `users.id` (global/namespaced). Both acknowledgements expose the connection's internal ID, used for canonical self filtering. |
+| **3. Scoped Readiness** | WS Msg: `StoreSetNamespace` on open; `PresenceSetNamespace` when presence is first used | Namespace identifier string | `ok` with bin16 `userId` | Resolves namespace to internal ID and subject to internal `users.id` (global/namespaced). Both acknowledgements expose the connection's internal ID, used for canonical self filtering. |
 
 ---
 

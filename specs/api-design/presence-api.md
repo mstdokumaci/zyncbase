@@ -6,7 +6,7 @@ Two tiers of presence state exist:
 - **User state** (`presence.user` fields): one record per connected user, owned by that user, automatically cleaned up on disconnect.
 - **Shared state** (`presence.shared` fields): one record per namespace, writable by any authorized user, persists until all users leave (with a 5-second grace period for reconnects).
 
-Presence methods require a ready presence scope. `client.connect()` and `client.setPresenceNamespace(namespace)` resolve only after the server has resolved the namespace string and returned the internal presence `users.id` as bin16. The SDK decodes that canonical UUID before replaying subscriptions. Calling presence methods before scope is ready fails with `SESSION_NOT_READY`.
+Presence methods run in a presence scope. The SDK requests it when the first presence call (or presence-scoped action) is made on a connected session, and every presence call waits for it; `client.setPresenceNamespace(namespace)` requests it immediately and resolves once the server has resolved the namespace string and returned the internal `users.id` as bin16. A session that never uses presence never requests the scope, so a store-only app needs no `presenceRead` grant. When the namespace denies presence, the presence call rejects with `NAMESPACE_UNAUTHORIZED` and the session stays connected. Calling presence methods before the session is connected fails with `CONNECTION_FAILED`.
 
 ## Table of Contents
 1. [Schema Definition](#schema-definition)
@@ -251,7 +251,7 @@ Defined in `authorization.json` under each namespace pattern:
 
 | Rule | Controls |
 |---|---|
-| `presenceRead` | Who can subscribe to user presence and shared state in this namespace |
+| `presenceRead` | Who can enter this namespace's presence scope: required for every presence call and presence-scoped action |
 | `presenceWrite` | Who can call `presence.set()` and `presence.remove()` |
 | `presenceSharedWrite` | Who can call `presence.setShared()` |
 

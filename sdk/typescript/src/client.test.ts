@@ -122,34 +122,23 @@ describe("ZyncBaseClient", () => {
 	}
 
 	/**
-	 * Reply to a namespace handshake with whatever ids the connection actually
-	 * used (reconnects continue the id sequence, so ids are not always 1/2).
+	 * Reply to the namespace handshake with whatever id the connection actually
+	 * used (reconnects continue the id sequence, so it is not always 1).
 	 */
 	async function handshakeNamespaces(ws: MockWebSocket): Promise<void> {
-		const first = decode(ws.sentMessages.at(-1) as Uint8Array) as {
+		const handshake = decode(ws.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
+			type: number;
 		};
+		expect(handshake.type).toBe(WireMessageType.StoreSetNamespace);
 		ws.triggerMessage(
 			encodeToBuffer({
 				type: "ok",
-				id: first.id,
+				id: handshake.id,
 				userId: packDocId(TEST_USER_ID),
 			}),
 		);
 		await new Promise((r) => setTimeout(r, 0));
-		const second = decode(ws.sentMessages.at(-1) as Uint8Array) as {
-			id: number;
-		};
-		if (second.id !== first.id) {
-			ws.triggerMessage(
-				encodeToBuffer({
-					type: "ok",
-					id: second.id,
-					userId: packDocId("019c1e50-7d11-7000-8000-000000000001"),
-				}),
-			);
-			await new Promise((r) => setTimeout(r, 0));
-		}
 	}
 
 	test("lifecycle: first connect emits connected + synced, a reconnect adds reconnected", async () => {
@@ -462,6 +451,19 @@ describe("ZyncBaseClient", () => {
 		await connected;
 
 		const pendingPresence = client.presence.subscribe(() => {});
+		await new Promise((r) => setTimeout(r, 0));
+		const presenceScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+			type: number;
+		};
+		expect(presenceScope.type).toBe(WireMessageType.PresenceSetNamespace);
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: presenceScope.id,
+				userId: packDocId(TEST_USER_ID),
+			}),
+		);
 		await new Promise((r) => setTimeout(r, 0));
 		const presenceSubscribe = decode(
 			mockWs.sentMessages.at(-1) as Uint8Array,

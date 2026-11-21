@@ -30,6 +30,7 @@ import { run as runPresenceStress } from "./test-presence-stress";
 import { run as runResponseLimit } from "./test-response-limit";
 import { run as runShutdown } from "./test-shutdown";
 import { run as runSorting } from "./test-sorting";
+import { run as runStoreOnly } from "./test-store-only";
 import { run as runSync } from "./test-sync";
 
 setDefaultTimeout(90_000);
@@ -67,6 +68,23 @@ describe("ZyncBase E2E", () => {
 				);
 			},
 		);
+	});
+
+	test("a store-only app connects without presence authorization", async () => {
+		await runE2ETest("Store-only session", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-sync.json"),
+					dataDir: ctx.dataPath("store-only"),
+					configName: "zyncbase-config-store-only.json",
+					authPath: ctx.schemaPath("auth-store-only.json"),
+				},
+				async ({ port }) => {
+					await runStoreOnly(port);
+				},
+			);
+		});
 	});
 
 	test("conditional writes and atomic increments", async () => {
