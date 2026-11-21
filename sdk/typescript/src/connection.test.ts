@@ -431,6 +431,44 @@ describe("ConnectionManager", () => {
 			expect(manager.getPresenceNamespace()).toBe("public");
 		});
 
+		test("a rejected switch restores the confirmed scope, not a pending one", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const confirmed = manager.setPresenceNamespace("public");
+			ack(mockWs, 2);
+			await confirmed;
+
+			const pending = manager.setPresenceNamespace("other");
+			pending.catch(() => {});
+			const rejected = manager.setPresenceNamespace("third");
+			const rejectedScope = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: rejectedScope.id,
+					code: "NAMESPACE_SWITCH_REJECTED",
+					message: "Namespace switching is not allowed",
+				}),
+			);
+			await expect(rejected).rejects.toMatchObject({
+				code: "NAMESPACE_SWITCH_REJECTED",
+			});
+			expect(manager.getPresenceNamespace()).toBe("public");
+
+			const presence = manager.dispatch({ type: "PresenceSet", data: {} });
+			const sent = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSet,
+			);
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: sent.id }));
+			await presence;
+			manager.disconnect();
+		});
+
 		test("a superseded setup is not retried after the latest request", async () => {
 			const { manager, mockWs } = makeManager({
 				reconnectDelay: 10,

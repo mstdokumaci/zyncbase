@@ -48,6 +48,7 @@ export class ZyncBaseClient<
 	>();
 	/** Whether a connection existed earlier in this process. */
 	private hasConnectedOnce = false;
+	private presenceSwitchGeneration = 0;
 	/** Backoff state for retrying a failed restore. */
 	private restoreAttempt = 0;
 	private restoreTimer: ReturnType<typeof setTimeout> | null = null;
@@ -164,12 +165,15 @@ export class ZyncBaseClient<
 	 * one is surfaced to the error callbacks instead of retrying forever.
 	 */
 	private scheduleRestore(): void {
-		this._restore()
+		const generation = this.conn.getConnectionGeneration();
+		this._restore(generation)
 			.then(() => {
+				if (this.conn.getConnectionGeneration() !== generation) return;
 				this.restoreAttempt = 0;
 				this.emitLocal("synced");
 			})
 			.catch((err: unknown) => {
+				if (this.conn.getConnectionGeneration() !== generation) return;
 				if (err instanceof ZyncBaseError && err.retryable) {
 					this.retryRestoreLater();
 					return;
@@ -225,27 +229,42 @@ export class ZyncBaseClient<
 	/** Switch the active presence namespace. */
 	async setPresenceNamespace(namespace: string): Promise<void> {
 		const oldNs = this.conn.getPresenceNamespace();
-		if (oldNs === namespace) {
+		if (
+			oldNs === namespace &&
+			this.conn.getPresenceScopeTarget() === namespace
+		) {
 			await this.conn.setPresenceNamespace(namespace);
 			return;
 		}
 
+		this.presenceImpl.beginNamespaceSwitch();
+		const switchGeneration = ++this.presenceSwitchGeneration;
 		try {
 			await this.conn.setPresenceNamespace(namespace);
 		} catch (err) {
-			if (
-				!(
+			if (this.presenceSwitchGeneration === switchGeneration) {
+				if (
+					err instanceof ZyncBaseError &&
+					err.code === ErrorCodes.REQUEST_SUPERSEDED
+				) {
+					// A newer switch owns the presence transaction.
+				} else if (
 					err instanceof ZyncBaseError &&
 					err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED
-				)
-			) {
-				this.presenceImpl.invalidate();
+				) {
+					this.presenceImpl.rollbackNamespaceSwitch();
+				} else {
+					this.presenceImpl.invalidate();
+				}
 			}
 			throw err;
 		}
-		this.presenceImpl.invalidate();
+		if (this.presenceSwitchGeneration !== switchGeneration) return;
+		this.presenceImpl.commitNamespaceSwitch();
 		await this.presenceImpl.replaySubscriptions();
-		this.actionsImpl.replayRegistrations();
+		const replay = this.actionsImpl.replayRegistrations();
+		replay.store.catch(() => {});
+		replay.presence.catch(() => {});
 	}
 
 	/**
@@ -311,13 +330,16 @@ export class ZyncBaseClient<
 	 * Replay everything after a connect or reconnect, then release the
 	 * readiness queue. On a connection cycle this ends with `synced`.
 	 */
-	private async _restore(): Promise<void> {
+	private async _restore(generation: number): Promise<void> {
 		const [store, presence] = await Promise.allSettled([
-			this._restoreStore(),
+			this._restoreStore(generation),
 			this.presenceImpl.replaySubscriptions(),
 		]);
 		await this.conn.awaitSchemaSync();
-		this.actionsImpl.replayRegistrations();
+		if (this.conn.getConnectionGeneration() !== generation) return;
+		const actions = this.actionsImpl.replayRegistrations();
+		await Promise.allSettled([actions.store, actions.presence]);
+		if (this.conn.getConnectionGeneration() !== generation) return;
 		if (presence.status === "rejected") {
 			const error = toZyncError(presence.reason, "Restore failed", false);
 			if (!error.retryable || store.status === "rejected") {
@@ -334,7 +356,7 @@ export class ZyncBaseClient<
 	 * the readiness queue. Runs on connect/reconnect and on a store namespace
 	 * switch — the flows that invalidate store subscriptions.
 	 */
-	private async _restoreStore(): Promise<void> {
+	private async _restoreStore(generation?: number): Promise<void> {
 		const oldToNew = new Map<number, number>();
 		const replaySnapshots = new Map<
 			number,
@@ -345,6 +367,12 @@ export class ZyncBaseClient<
 			await this._replaySubscription(params, oldId, oldToNew, replaySnapshots);
 		});
 
+		if (
+			generation !== undefined &&
+			this.conn.getConnectionGeneration() !== generation
+		) {
+			return;
+		}
 		// Always reconnect: with no subscriptions this still re-enables delta
 		// delivery after an explicit disconnect().
 		this.tracker.reconnect(oldToNew, () => {
@@ -354,6 +382,12 @@ export class ZyncBaseClient<
 		});
 
 		await this.conn.awaitSchemaSync();
+		if (
+			generation !== undefined &&
+			this.conn.getConnectionGeneration() !== generation
+		) {
+			return;
+		}
 		await this.storeImpl.markSessionReady();
 	}
 

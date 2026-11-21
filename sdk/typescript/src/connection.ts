@@ -145,6 +145,10 @@ export class ConnectionManager {
 	private presenceScopeNamespace: string | null = null;
 	private presenceScopeReady = false;
 	private presenceScopeGeneration = 0;
+	private presenceConfirmedScope: Promise<void> | null = null;
+	private presenceConfirmedNamespace: string | null = null;
+	private presenceConfirmedGeneration = 0;
+	private connectionGeneration = 0;
 
 	private processingPromise: Promise<void> = Promise.resolve();
 
@@ -204,6 +208,15 @@ export class ConnectionManager {
 	getPresenceNamespace(): string {
 		return this.presenceNamespace;
 	}
+	getPresenceScopeTarget(): string {
+		return this.presenceScopeNamespace ?? this.presenceNamespace;
+	}
+	getPresenceScopeGeneration(): number {
+		return this.presenceScopeGeneration;
+	}
+	getConnectionGeneration(): number {
+		return this.connectionGeneration;
+	}
 
 	/**
 	 * Establish the presence scope in `ns`, or switch it there. Presence
@@ -217,12 +230,6 @@ export class ConnectionManager {
 		) {
 			return this.presenceScope;
 		}
-		const previous = {
-			scope: this.presenceScope,
-			namespace: this.presenceScopeNamespace,
-			ready: this.presenceScopeReady,
-			generation: this.presenceScopeGeneration,
-		};
 		const generation = ++this.presenceScopeGeneration;
 		this.presenceScopeReady = false;
 		this.presenceScopeNamespace = ns;
@@ -239,17 +246,29 @@ export class ConnectionManager {
 				this.adoptUserId(ok, "PresenceSetNamespace");
 				this.presenceNamespace = ns;
 				this.presenceScopeReady = true;
+				this.presenceConfirmedScope = scope;
+				this.presenceConfirmedNamespace = ns;
+				this.presenceConfirmedGeneration = generation;
 			})
 			.catch((err: unknown) => {
 				if (this.presenceScope === scope) {
 					if (this.isNamespaceSwitchRejected(err)) {
-						this.presenceScope = previous.scope;
-						this.presenceScopeNamespace = previous.namespace;
-						this.presenceScopeReady = previous.ready;
-						this.presenceScopeGeneration = previous.generation;
+						this.presenceScope = this.presenceConfirmedScope;
+						this.presenceScopeNamespace = this.presenceConfirmedNamespace;
+						this.presenceScopeReady =
+							this.presenceConfirmedScope !== null &&
+							this.presenceConfirmedNamespace !== null;
+						this.presenceScopeGeneration =
+							this.presenceConfirmedNamespace !== null
+								? this.presenceConfirmedGeneration
+								: generation;
 					} else {
 						this.presenceScope = null;
 						this.presenceScopeNamespace = null;
+						this.presenceScopeReady = false;
+						this.presenceConfirmedScope = null;
+						this.presenceConfirmedNamespace = null;
+						this.presenceConfirmedGeneration = 0;
 					}
 				}
 				throw err;
@@ -414,6 +433,10 @@ export class ConnectionManager {
 		this.presenceScopeNamespace = null;
 		this.presenceScopeReady = false;
 		this.presenceScopeGeneration++;
+		this.presenceConfirmedScope = null;
+		this.presenceConfirmedNamespace = null;
+		this.presenceConfirmedGeneration = 0;
+		this.connectionGeneration++;
 		this.stopLiveness();
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
@@ -701,6 +724,7 @@ export class ConnectionManager {
 
 	disconnect(): void {
 		this.intentionalDisconnect = true;
+		this.connectionGeneration++;
 		this.currentUserId = null;
 		this.stopLiveness();
 		if (this.reconnectTimer !== null) {

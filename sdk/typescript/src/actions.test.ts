@@ -393,8 +393,8 @@ describe("ActionsImpl.handle", () => {
 		await actions.handle("player_move", () => {});
 		conn.dispatched.length = 0;
 		failPresence = true;
-		actions.replayRegistrations();
-		await nextTick();
+		const replay = actions.replayRegistrations();
+		await Promise.allSettled([replay.store, replay.presence]);
 		expect(conn.dispatched).toHaveLength(2);
 		expect(conn.dispatched).toContainEqual({
 			type: "ActionRegister",

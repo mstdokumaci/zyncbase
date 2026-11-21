@@ -566,7 +566,10 @@ describe("ZyncBaseClient", () => {
 		triggerSchemaSync(mockWs);
 		await connected;
 
-		const pendingPresence = client.presence.subscribe(() => {});
+		const deliveries: number[] = [];
+		const pendingPresence = client.presence.subscribe((users) =>
+			deliveries.push(users.length),
+		);
 		await new Promise((r) => setTimeout(r, 0));
 		const presenceScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 			id: number;
@@ -610,6 +613,15 @@ describe("ZyncBaseClient", () => {
 		await expect(switching).rejects.toMatchObject({
 			code: "NAMESPACE_SWITCH_REJECTED",
 		});
+		mockWs.triggerMessage(
+			encodeToBuffer([
+				WireMessageType.PresenceBroadcast,
+				30,
+				[[packDocId("019c1e50-7d11-7000-8000-000000000002"), 0, [], 1]],
+			]),
+		);
+		await waitFor(() => deliveries.length === 2);
+		expect(deliveries.at(-1)).toBe(1);
 
 		const scopeRequestCount = () =>
 			mockWs.sentMessages.filter((message) => {
@@ -627,6 +639,75 @@ describe("ZyncBaseClient", () => {
 		mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: setMessage.id }));
 		await setting;
 		expect(scopeRequestCount()).toBe(beforeSet);
+		client.disconnect();
+		restoreWebSocket();
+	});
+
+	test("a superseded presence switch does not invalidate presence state", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		const connected = client.connect();
+		await new Promise((r) => setTimeout(r, 0));
+		mockWs.triggerOpen();
+		triggerNamespaceOk(mockWs);
+		triggerSchemaSync(mockWs);
+		await connected;
+
+		const deliveries: number[] = [];
+		client.presence.subscribe((users) => deliveries.push(users.length));
+		await new Promise((r) => setTimeout(r, 0));
+		const presenceScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+			type: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: presenceScope.id,
+				userId: packDocId(TEST_USER_ID),
+			}),
+		);
+		await new Promise((r) => setTimeout(r, 0));
+		const presenceSub = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+			type: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "ok",
+				id: presenceSub.id,
+				subId: 30,
+				users: [],
+			}),
+		);
+		mockWs.triggerMessage(
+			encodeToBuffer([
+				WireMessageType.PresenceBroadcast,
+				30,
+				[[packDocId("019c1e50-7d11-7000-8000-000000000002"), 0, [], 1]],
+			]),
+		);
+		await waitFor(() => deliveries.length === 2);
+		expect(client.presence.getAll()).toHaveLength(1);
+
+		const switching = client.setPresenceNamespace("other");
+		await new Promise((r) => setTimeout(r, 0));
+		const rejected = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+			id: number;
+		};
+		mockWs.triggerMessage(
+			encodeToBuffer({
+				type: "error",
+				id: rejected.id,
+				code: "REQUEST_SUPERSEDED",
+				message: "Superseded by a newer switch",
+			}),
+		);
+		await expect(switching).rejects.toMatchObject({
+			code: "REQUEST_SUPERSEDED",
+		});
+		expect(client.presence.getAll()).toHaveLength(1);
+		expect(deliveries).toHaveLength(2);
 		client.disconnect();
 		restoreWebSocket();
 	});

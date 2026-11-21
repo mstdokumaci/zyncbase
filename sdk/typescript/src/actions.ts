@@ -92,8 +92,13 @@ export class ActionsImpl implements Actions {
 	}
 
 	/** Re-register all handlers after reconnect or a bound-scope namespace switch. */
-	replayRegistrations(): void {
-		if (this.handlers.size === 0 || !this.conn.isSchemaReady()) return;
+	replayRegistrations(): {
+		store: Promise<void>;
+		presence: Promise<void>;
+	} {
+		if (this.handlers.size === 0 || !this.conn.isSchemaReady()) {
+			return { store: Promise.resolve(), presence: Promise.resolve() };
+		}
 
 		const storeNames: string[] = [];
 		const presenceNames: string[] = [];
@@ -110,12 +115,14 @@ export class ActionsImpl implements Actions {
 				this.handlers.delete(name);
 			}
 		}
-		if (storeNames.length > 0) {
-			void this.register(storeNames).catch(() => {});
-		}
-		if (presenceNames.length > 0) {
-			void this.register(presenceNames).catch(() => {});
-		}
+		return {
+			store:
+				storeNames.length > 0 ? this.register(storeNames) : Promise.resolve(),
+			presence:
+				presenceNames.length > 0
+					? this.register(presenceNames)
+					: Promise.resolve(),
+		};
 	}
 
 	private async register(names: string[]): Promise<void> {

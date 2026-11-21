@@ -46,6 +46,14 @@ function createMockConnection() {
 		on: () => {},
 		schemaDictionary: schema,
 		userId: null as string | null,
+		presenceScopeTarget: "public",
+		presenceScopeGeneration: 0,
+		getPresenceScopeTarget() {
+			return this.presenceScopeTarget;
+		},
+		getPresenceScopeGeneration() {
+			return this.presenceScopeGeneration;
+		},
 		dispatched,
 		schema,
 		fireBroadcast: (msg: PresenceBroadcast | SharedStateBroadcast) => {
@@ -115,6 +123,50 @@ describe("PresenceImpl", () => {
 		} finally {
 			jest.useRealTimers();
 		}
+	});
+
+	test("a namespace switch pauses queued sets and rejects old-namespace data", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		presence.set({ status: "active" });
+		const queued = presence.set({ status: "away" });
+		const outcome = queued.then(
+			() => null,
+			(err: { code?: string }) => err.code,
+		);
+		presence.beginNamespaceSwitch();
+		conn.presenceScopeTarget = "other";
+		conn.presenceScopeGeneration++;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(
+			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
+		).toHaveLength(1);
+		presence.commitNamespaceSwitch();
+		expect(await outcome).toBe("REQUEST_SUPERSEDED");
+		expect(
+			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
+		).toHaveLength(1);
+	});
+
+	test("a rejected namespace switch resumes queued sets in the old namespace", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		presence.set({ status: "active" });
+		const queued = presence.set({ status: "away" });
+		presence.beginNamespaceSwitch();
+		conn.presenceScopeTarget = "other";
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(
+			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
+		).toHaveLength(1);
+		conn.presenceScopeTarget = "public";
+		presence.rollbackNamespaceSwitch();
+		await queued;
+		expect(
+			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
+		).toHaveLength(2);
 	});
 
 	test("setShared() dispatches PresenceSetShared with encoded data", async () => {
@@ -678,6 +730,35 @@ describe("PresenceImpl", () => {
 		expect(presence.get(newUserId)).toBeDefined();
 		const staleUserId = conn.schema.decodeUserId(packDocId("user_1"));
 		expect(presence.get(staleUserId)).toBeUndefined();
+	});
+
+	test("stale subscription completion after a scope change skips unscoped unsubscribe", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		let resolveStale: (value: OkResponse) => void = () => {};
+		const stalePromise = new Promise<OkResponse>((resolve) => {
+			resolveStale = resolve;
+		});
+		let unsubscribes = 0;
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") return stalePromise;
+			if (msg.type === "PresenceUnsubscribe") {
+				unsubscribes++;
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+		presence.subscribe(() => {});
+		conn.presenceScopeGeneration++;
+		presence.invalidate();
+		resolveStale({
+			type: "ok",
+			id: 0,
+			subId: 100,
+			users: [],
+		} as OkResponse);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(unsubscribes).toBe(0);
 	});
 
 	test("invalidate() resets lastSetTime so first set() after reconnect is not throttled", async () => {
