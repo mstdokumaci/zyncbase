@@ -437,10 +437,12 @@ describe("ConnectionManager", () => {
 			const confirmed = manager.setPresenceNamespace("public");
 			ack(mockWs, 2);
 			await confirmed;
+			const confirmedGeneration = manager.getPresenceScopeGeneration();
 
 			const pending = manager.setPresenceNamespace("other");
 			pending.catch(() => {});
 			const rejected = manager.setPresenceNamespace("third");
+			const rejectedGeneration = manager.getPresenceScopeGeneration();
 			const rejectedScope = decode(
 				mockWs.sentMessages.at(-1) as Uint8Array,
 			) as { id: number };
@@ -456,6 +458,10 @@ describe("ConnectionManager", () => {
 				code: "NAMESPACE_SWITCH_REJECTED",
 			});
 			expect(manager.getPresenceNamespace()).toBe("public");
+			expect(manager.getPresenceScopeGeneration()).toBe(rejectedGeneration);
+			expect(manager.getPresenceScopeGeneration()).toBeGreaterThan(
+				confirmedGeneration,
+			);
 
 			const presence = manager.dispatch({ type: "PresenceSet", data: {} });
 			const sent = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {

@@ -147,7 +147,6 @@ export class ConnectionManager {
 	private presenceScopeGeneration = 0;
 	private presenceConfirmedScope: Promise<void> | null = null;
 	private presenceConfirmedNamespace: string | null = null;
-	private presenceConfirmedGeneration = 0;
 	private connectionGeneration = 0;
 
 	private processingPromise: Promise<void> = Promise.resolve();
@@ -261,7 +260,6 @@ export class ConnectionManager {
 				this.presenceScopeReady = true;
 				this.presenceConfirmedScope = scope;
 				this.presenceConfirmedNamespace = ns;
-				this.presenceConfirmedGeneration = generation;
 			})
 			.catch((err: unknown) => {
 				if (this.presenceScope === scope) {
@@ -271,17 +269,12 @@ export class ConnectionManager {
 						this.presenceScopeReady =
 							this.presenceConfirmedScope !== null &&
 							this.presenceConfirmedNamespace !== null;
-						this.presenceScopeGeneration =
-							this.presenceConfirmedNamespace !== null
-								? this.presenceConfirmedGeneration
-								: generation;
 					} else {
 						this.presenceScope = null;
 						this.presenceScopeNamespace = null;
 						this.presenceScopeReady = false;
 						this.presenceConfirmedScope = null;
 						this.presenceConfirmedNamespace = null;
-						this.presenceConfirmedGeneration = 0;
 					}
 				}
 				throw err;
@@ -448,7 +441,6 @@ export class ConnectionManager {
 		this.presenceScopeGeneration++;
 		this.presenceConfirmedScope = null;
 		this.presenceConfirmedNamespace = null;
-		this.presenceConfirmedGeneration = 0;
 		this.connectionGeneration++;
 		this.stopLiveness();
 		this.setStatus("connecting");
@@ -662,6 +654,9 @@ export class ConnectionManager {
 		return this.withPresenceScope(
 			msg,
 			async () => {
+				if (isCurrent !== undefined && !isCurrent()) {
+					throw this.supersededPresenceScopeError();
+				}
 				const { result, debugType } = this.sendRequest(msg, responseTableIndex);
 
 				try {
