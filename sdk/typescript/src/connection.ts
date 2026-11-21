@@ -217,6 +217,19 @@ export class ConnectionManager {
 	getConnectionGeneration(): number {
 		return this.connectionGeneration;
 	}
+	async ensurePresenceScope(): Promise<void> {
+		if (this.currentStatus !== "connected") return;
+		const namespace = this.presenceScopeNamespace ?? this.presenceNamespace;
+		if (this.presenceScopeReady) {
+			if (this.presenceNamespace === namespace) return;
+			this.presenceScopeReady = false;
+			this.presenceScope = null;
+		}
+		const scope = this.presenceScope ?? this.setPresenceNamespace(namespace);
+		await scope;
+		const current = this.presenceScopeNamespace ?? this.presenceNamespace;
+		if (current !== namespace) return this.ensurePresenceScope();
+	}
 
 	/**
 	 * Establish the presence scope in `ns`, or switch it there. Presence

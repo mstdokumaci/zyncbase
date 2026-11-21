@@ -32,6 +32,7 @@ export interface PresenceConnection {
 	readonly userId: string | null;
 	getPresenceScopeTarget(): string;
 	getPresenceScopeGeneration(): number;
+	ensurePresenceScope(): Promise<void>;
 }
 
 export class PresenceImpl implements Presence {
@@ -121,7 +122,14 @@ export class PresenceImpl implements Presence {
 	}
 	commitNamespaceSwitch(): void {
 		this.switchPending = false;
+		const target = this.conn.getPresenceScopeTarget();
+		const targetBatch = this.pendingSets.get(target);
+		if (targetBatch) this.pendingSets.delete(target);
 		this.invalidate();
+		if (targetBatch) {
+			this.pendingSets.set(target, targetBatch);
+			this.flushPendingSets();
+		}
 	}
 	rollbackNamespaceSwitch(): void {
 		this.switchPending = false;
@@ -181,6 +189,7 @@ export class PresenceImpl implements Presence {
 
 	private async establishUserSubscription(gen: number): Promise<void> {
 		while (gen === this.userSubGen) {
+			await this.conn.ensurePresenceScope();
 			const epoch = this.conn.getPresenceScopeGeneration();
 			const ok = await this.conn.dispatch({ type: "PresenceSubscribe" });
 			if (ok.subId === undefined) {
@@ -259,6 +268,7 @@ export class PresenceImpl implements Presence {
 
 	private async establishSharedSubscription(gen: number): Promise<void> {
 		while (gen === this.sharedSubGen) {
+			await this.conn.ensurePresenceScope();
 			const epoch = this.conn.getPresenceScopeGeneration();
 			const ok = await this.conn.dispatch({ type: "PresenceSubscribeShared" });
 			if (ok.subId === undefined) {

@@ -54,6 +54,7 @@ function createMockConnection() {
 		getPresenceScopeGeneration() {
 			return this.presenceScopeGeneration;
 		},
+		ensurePresenceScope: () => Promise.resolve(),
 		dispatched,
 		schema,
 		fireBroadcast: (msg: PresenceBroadcast | SharedStateBroadcast) => {
@@ -167,6 +168,32 @@ describe("PresenceImpl", () => {
 		expect(
 			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
 		).toHaveLength(2);
+	});
+
+	test("commit flushes batches queued for the acknowledged target", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		presence.set({ status: "active" });
+		const oldBatch = presence.set({ status: "old" });
+		const oldOutcome = oldBatch.then(
+			() => null,
+			(err: { code?: string }) => err.code,
+		);
+		presence.beginNamespaceSwitch();
+		conn.presenceScopeTarget = "other";
+		conn.presenceScopeGeneration++;
+		const newBatch = presence.set({ status: "new" });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(
+			conn.dispatched.filter((msg) => msg.type === "PresenceSet"),
+		).toHaveLength(1);
+		presence.commitNamespaceSwitch();
+		await newBatch;
+		expect(await oldOutcome).toBe("REQUEST_SUPERSEDED");
+		const sets = conn.dispatched.filter((msg) => msg.type === "PresenceSet");
+		expect(sets).toHaveLength(2);
+		expect(sets.at(-1)?.data).toEqual([2, "new"]);
 	});
 
 	test("setShared() dispatches PresenceSetShared with encoded data", async () => {
@@ -742,14 +769,17 @@ describe("PresenceImpl", () => {
 		});
 		let unsubscribes = 0;
 		conn.dispatch = (msg: Record<string, unknown>) => {
-			if (msg.type === "PresenceSubscribe") return stalePromise;
+			if (msg.type === "PresenceSubscribe") {
+				conn.presenceScopeGeneration++;
+				return stalePromise;
+			}
 			if (msg.type === "PresenceUnsubscribe") {
 				unsubscribes++;
 			}
 			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
 		};
 		presence.subscribe(() => {});
-		conn.presenceScopeGeneration++;
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		presence.invalidate();
 		resolveStale({
 			type: "ok",
@@ -778,6 +808,49 @@ describe("PresenceImpl", () => {
 		expect(conn.dispatched.length).toBe(2);
 	});
 
+	test("subscription cleanup captures the epoch after the lazy scope setup", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		let resolveReplay: (value: OkResponse) => void = () => {};
+		const replayPromise = new Promise<OkResponse>((resolve) => {
+			resolveReplay = resolve;
+		});
+		let subscribeCall = 0;
+		let unsubscribes = 0;
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				subscribeCall++;
+				if (subscribeCall === 1) {
+					return Promise.resolve({
+						type: "ok",
+						id: 0,
+						subId: 100,
+						users: [],
+					} as OkResponse);
+				}
+				return replayPromise;
+			}
+			if (msg.type === "PresenceUnsubscribe") unsubscribes++;
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+		const unsubscribe = await presence.subscribe(() => {});
+		presence.invalidate();
+		conn.ensurePresenceScope = async () => {
+			conn.presenceScopeGeneration++;
+		};
+		const replaying = presence.replaySubscriptions();
+		const closing = unsubscribe();
+		resolveReplay({
+			type: "ok",
+			id: 0,
+			subId: 200,
+			users: [],
+		} as OkResponse);
+		await replaying;
+		await closing;
+		expect(unsubscribes).toBe(1);
+	});
 	test("replaySubscriptions unsubscribes user if client unsubscribed before promise resolves", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);
