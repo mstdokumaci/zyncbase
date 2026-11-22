@@ -328,6 +328,7 @@ describe("ConnectionManager", () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);
 			const first = manager.setPresenceNamespace("room1");
+			const firstOutcome = first.catch((err: { code?: string }) => err.code);
 			const second = manager.setPresenceNamespace("room2");
 
 			expect(mockWs.sentMessages.map(sentType)).toEqual([
@@ -362,7 +363,8 @@ describe("ConnectionManager", () => {
 					userId: packDocId("019c1e50-7d11-7000-8000-000000000003"),
 				}),
 			);
-			await Promise.all([first, second]);
+			await second;
+			expect(await firstOutcome).toBe("REQUEST_SUPERSEDED");
 
 			expect(manager.getPresenceNamespace()).toBe("room2");
 			expect(manager.userId).toBe("019c1e50-7d11-7000-8000-000000000003");
@@ -396,10 +398,59 @@ describe("ConnectionManager", () => {
 			await new Promise((r) => setTimeout(r, 100));
 
 			const namespaces = mockWs.sentMessages
-				.map((message) => decode(message) as { type: number; namespace?: string })
-				.filter((message) => message.type === WireMessageType.PresenceSetNamespace)
+				.map(
+					(message) => decode(message) as { type: number; namespace?: string },
+				)
+				.filter(
+					(message) => message.type === WireMessageType.PresenceSetNamespace,
+				)
 				.map((message) => message.namespace);
 			expect(namespaces).toEqual(["first", "second"]);
+			manager.disconnect();
+		});
+		test("an old setup retry stays superseded after returning to the same namespace", async () => {
+			const { manager, mockWs } = makeManager({ reconnectDelay: 10 });
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("first");
+			first.catch(() => {});
+			const firstScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: firstScope.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 50,
+				}),
+			);
+			await tick();
+
+			const second = manager.setPresenceNamespace("second");
+			const secondScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			ack(mockWs, secondScope.id);
+			await second;
+
+			const third = manager.setPresenceNamespace("first");
+			const thirdScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			ack(mockWs, thirdScope.id);
+			await third;
+			await new Promise((r) => setTimeout(r, 100));
+
+			const namespaces = mockWs.sentMessages
+				.map(
+					(message) => decode(message) as { type: number; namespace?: string },
+				)
+				.filter(
+					(message) => message.type === WireMessageType.PresenceSetNamespace,
+				)
+				.map((message) => message.namespace);
+			expect(namespaces).toEqual(["first", "second", "first"]);
 			manager.disconnect();
 		});
 		test("a queued subscription is rejected when its scope is replaced", async () => {

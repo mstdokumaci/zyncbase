@@ -143,6 +143,7 @@ export class ConnectionManager {
 	/** The presence scope request of this socket; null until presence is first used. */
 	private presenceScopePromise: Promise<void> | null = null;
 	private presenceScopeReady = false;
+	private presenceScopeGen = 0;
 
 	private processingPromise: Promise<void> = Promise.resolve();
 
@@ -243,6 +244,7 @@ export class ConnectionManager {
 			return this.presenceScopePromise;
 		}
 
+		const gen = ++this.presenceScopeGen;
 		const previousNs = this.presenceNamespace;
 		const previousReady = this.presenceScopeReady;
 		this.presenceScopeReady = false;
@@ -251,15 +253,25 @@ export class ConnectionManager {
 		const scope: Promise<void> = this.dispatchWithRetry(
 			{ type: "PresenceSetNamespace", namespace: ns },
 			0,
+			undefined,
+			gen,
 		)
 			.then((ok) => {
-				if (this.presenceNamespace === ns) {
-					this.adoptUserId(ok, "PresenceSetNamespace");
-					this.presenceScopeReady = true;
+				if (gen !== this.presenceScopeGen) {
+					throw new ZyncBaseError(
+						"Request was superseded by a newer operation",
+						{
+							code: ErrorCodes.REQUEST_SUPERSEDED,
+							category: "state",
+							retryable: false,
+						},
+					);
 				}
+				this.adoptUserId(ok, "PresenceSetNamespace");
+				this.presenceScopeReady = true;
 			})
 			.catch((err: unknown) => {
-				if (this.presenceNamespace === ns) {
+				if (gen === this.presenceScopeGen) {
 					if (
 						err instanceof ZyncBaseError &&
 						err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED
@@ -294,10 +306,13 @@ export class ConnectionManager {
 		if (this.currentStatus !== "connected" || !this.needsPresenceScope(msg)) {
 			return send();
 		}
-		if (this.presenceScopeReady) {
+		const expectedNs =
+			"targetNamespace" in msg && typeof msg.targetNamespace === "string"
+				? msg.targetNamespace
+				: this.presenceNamespace;
+		if (this.presenceScopeReady && this.presenceNamespace === expectedNs) {
 			return send();
 		}
-		const expectedNs = this.presenceNamespace;
 		return this.ensurePresenceScope().then(() => {
 			if (this.presenceNamespace !== expectedNs) {
 				throw new ZyncBaseError("Request was superseded by a newer operation", {
@@ -615,8 +630,19 @@ export class ConnectionManager {
 		msg: OutboundRequest,
 		attempt: number,
 		responseTableIndex?: number,
+		expectedScopeGen?: number,
 	): Promise<OkResponse> {
 		return this.withPresenceScope(msg, async () => {
+			if (
+				expectedScopeGen !== undefined &&
+				expectedScopeGen !== this.presenceScopeGen
+			) {
+				throw new ZyncBaseError("Request was superseded by a newer operation", {
+					code: ErrorCodes.REQUEST_SUPERSEDED,
+					category: "state",
+					retryable: false,
+				});
+			}
 			const { result, debugType } = this.sendRequest(msg, responseTableIndex);
 
 			try {
@@ -629,6 +655,7 @@ export class ConnectionManager {
 					err,
 					debugType,
 					responseTableIndex,
+					expectedScopeGen,
 				);
 			}
 		});
@@ -640,10 +667,13 @@ export class ConnectionManager {
 		err: unknown,
 		debugType: string,
 		responseTableIndex?: number,
+		expectedScopeGen?: number,
 	): Promise<OkResponse> {
 		if (
-			msg.type === "PresenceSetNamespace" &&
-			msg.namespace !== this.presenceNamespace
+			(expectedScopeGen !== undefined &&
+				expectedScopeGen !== this.presenceScopeGen) ||
+			(msg.type === "PresenceSetNamespace" &&
+				msg.namespace !== this.presenceNamespace)
 		) {
 			throw new ZyncBaseError("Request was superseded by a newer operation", {
 				code: ErrorCodes.REQUEST_SUPERSEDED,
@@ -662,8 +692,10 @@ export class ConnectionManager {
 		await sleep(delay);
 		if (this.intentionalDisconnect) throw err;
 		if (
-			msg.type === "PresenceSetNamespace" &&
-			msg.namespace !== this.presenceNamespace
+			(expectedScopeGen !== undefined &&
+				expectedScopeGen !== this.presenceScopeGen) ||
+			(msg.type === "PresenceSetNamespace" &&
+				msg.namespace !== this.presenceNamespace)
 		) {
 			throw new ZyncBaseError("Request was superseded by a newer operation", {
 				code: ErrorCodes.REQUEST_SUPERSEDED,
@@ -671,7 +703,12 @@ export class ConnectionManager {
 				retryable: false,
 			});
 		}
-		return this.dispatchWithRetry(msg, attempt + 1, responseTableIndex);
+		return this.dispatchWithRetry(
+			msg,
+			attempt + 1,
+			responseTableIndex,
+			expectedScopeGen,
+		);
 	}
 
 	authRefresh(token: string): Promise<void> {

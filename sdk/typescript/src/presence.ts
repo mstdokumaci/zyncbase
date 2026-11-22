@@ -25,6 +25,7 @@ export interface PresenceConnection {
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
 	schemaDictionary: SchemaDictionary;
 	readonly userId: string | null;
+	getPresenceNamespace?(): string;
 }
 
 export class PresenceImpl implements Presence {
@@ -63,7 +64,10 @@ export class PresenceImpl implements Presence {
 		return this.conn.userId;
 	}
 
+	private pendingSetTargetNs: string | null = null;
+
 	set(data: Record<string, unknown>): Promise<void> {
+		this.pendingSetTargetNs = this.conn.getPresenceNamespace?.() ?? null;
 		let resolve!: () => void;
 		let reject!: (reason?: unknown) => void;
 		const accepted = new Promise<void>((res, rej) => {
@@ -225,13 +229,15 @@ export class PresenceImpl implements Presence {
 					},
 				);
 			}
-			if (!this.hasCurrentSharedSubscribers(gen)) {
+			if (gen !== this.sharedSubGen) {
+				return;
+			}
+			if (this.sharedCallbacks.size === 0) {
 				await this.dispatchAccepted(
 					{ type: "PresenceUnsubscribeShared", subId: ok.subId },
 					"Presence unsubscribeShared failed",
 				);
-				if (!this.hasCurrentSharedSubscribers(gen)) return;
-				continue;
+				return;
 			}
 			this.sharedSubId = ok.subId;
 			this.sharedCache =
@@ -244,10 +250,6 @@ export class PresenceImpl implements Presence {
 			category: "state",
 			retryable: false,
 		});
-	}
-
-	private hasCurrentSharedSubscribers(gen: number): boolean {
-		return gen === this.sharedSubGen && this.sharedCallbacks.size > 0;
 	}
 
 	private cleanupSharedSubscription(): Promise<void> {
@@ -432,8 +434,10 @@ export class PresenceImpl implements Presence {
 	}
 
 	private sendSet(data: Record<string, unknown>, waiters: SetWaiter[]): void {
+		const targetNamespace =
+			this.pendingSetTargetNs ?? this.conn.getPresenceNamespace?.() ?? null;
 		this.dispatchAccepted(
-			{ type: "PresenceSet", data },
+			{ type: "PresenceSet", data, targetNamespace },
 			"Presence set failed",
 		).then(
 			() => {

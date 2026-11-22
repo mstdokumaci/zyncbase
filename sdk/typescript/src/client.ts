@@ -229,14 +229,6 @@ export class ZyncBaseClient<
 			return;
 		}
 
-		this.presenceImpl.clearThrottle(
-			new ZyncBaseError("Presence set superseded by namespace switch", {
-				code: ErrorCodes.REQUEST_SUPERSEDED,
-				category: "state",
-				retryable: false,
-			}),
-		);
-
 		try {
 			await this.conn.setPresenceNamespace(namespace);
 			if (this.conn.getPresenceNamespace() !== namespace) {
