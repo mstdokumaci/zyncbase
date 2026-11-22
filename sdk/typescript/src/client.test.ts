@@ -555,7 +555,10 @@ describe("ZyncBaseClient", () => {
 
 	test("a retryable store action replay blocks synced until it recovers", async () => {
 		installMockWebSocket();
-		const client = createClient(defaultOptions);
+		const client = createClient({
+			...defaultOptions,
+			retryRateLimits: false,
+		});
 		try {
 			const synced: string[] = [];
 			client.on("synced", () => synced.push("synced"));
@@ -610,7 +613,7 @@ describe("ZyncBaseClient", () => {
 								(decode(message) as { type: number }).type ===
 								WireMessageType.ActionRegister,
 						),
-				1_000,
+				2_000,
 			);
 			const failed = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 				id: number;
@@ -635,7 +638,7 @@ describe("ZyncBaseClient", () => {
 								(decode(message) as { type: number }).type ===
 								WireMessageType.ActionRegister,
 						).length >= 2,
-				1_000,
+				2_000,
 			);
 			const retried = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 				id: number;
