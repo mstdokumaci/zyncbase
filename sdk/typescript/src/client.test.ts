@@ -712,6 +712,224 @@ describe("ZyncBaseClient", () => {
 		restoreWebSocket();
 	});
 
+	test("a queued presence set is rejected when the namespace switches", async () => {
+		installMockWebSocket();
+		const client = createClient({
+			...defaultOptions,
+			presenceNamespace: "public",
+		});
+		try {
+			const connected = client.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			triggerNamespaceOk(mockWs);
+			triggerSchemaSync(mockWs);
+			await connected;
+
+			const scopeSetup = client.setPresenceNamespace("public");
+			await new Promise((r) => setTimeout(r, 0));
+			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			expect(scope.type).toBe(WireMessageType.PresenceSetNamespace);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: scope.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await scopeSetup;
+
+			const immediate = client.presence.set({});
+			await new Promise((r) => setTimeout(r, 0));
+			const immediateSet = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			expect(immediateSet.type).toBe(WireMessageType.PresenceSet);
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id: immediateSet.id }),
+			);
+			await immediate;
+
+			const queued = client.presence.set({});
+			const queuedOutcome = queued.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const switching = client.setPresenceNamespace("other");
+			await new Promise((r) => setTimeout(r, 20));
+			const replacement = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number; type: number };
+			expect(replacement.type).toBe(WireMessageType.PresenceSetNamespace);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: replacement.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await switching;
+			await new Promise((r) => setTimeout(r, 0));
+
+			const presenceSets = mockWs.sentMessages.filter((message) => {
+				const msg = decode(message) as { type: number };
+				return msg.type === WireMessageType.PresenceSet;
+			});
+			expect(presenceSets).toHaveLength(1);
+			expect(await queuedOutcome).toBe("REQUEST_SUPERSEDED");
+		} finally {
+			client.disconnect();
+			restoreWebSocket();
+		}
+	});
+
+	test("a stale switch completion does not invalidate a newer switch", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		try {
+			const connected = client.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			triggerNamespaceOk(mockWs);
+			triggerSchemaSync(mockWs);
+			await connected;
+
+			const deliveries: number[] = [];
+			client.presence.subscribe((users) => deliveries.push(users.length));
+			await new Promise((r) => setTimeout(r, 0));
+			const presenceScope = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number; type: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: presenceScope.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 0));
+			const presenceSub = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number; type: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: presenceSub.id,
+					subId: 30,
+					users: [],
+				}),
+			);
+			mockWs.triggerMessage(
+				encodeToBuffer([
+					WireMessageType.PresenceBroadcast,
+					30,
+					[[packDocId("019c1e50-7d11-7000-8000-000000000002"), 0, [], 1]],
+				]),
+			);
+			await waitFor(() => deliveries.length === 2);
+			expect(client.presence.getAll()).toHaveLength(1);
+
+			const first = client.setPresenceNamespace("room1");
+			first.catch(() => {});
+			await new Promise((r) => setTimeout(r, 0));
+			const firstScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			const second = client.setPresenceNamespace("room2");
+			second.catch(() => {});
+			await new Promise((r) => setTimeout(r, 0));
+
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: firstScope.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 0));
+
+			expect(client.presence.getAll()).toHaveLength(1);
+			expect(deliveries).toHaveLength(2);
+		} finally {
+			client.disconnect();
+			restoreWebSocket();
+		}
+	});
+
+	test("a failed presence switch invalidates the server-reset scope", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		try {
+			const connected = client.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			triggerNamespaceOk(mockWs);
+			triggerSchemaSync(mockWs);
+			await connected;
+
+			const deliveries: number[] = [];
+			client.presence.subscribe((users) => deliveries.push(users.length));
+			await new Promise((r) => setTimeout(r, 0));
+			const presenceScope = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number; type: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: presenceScope.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 0));
+			const presenceSub = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number; type: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: presenceSub.id,
+					subId: 30,
+					users: [],
+				}),
+			);
+			mockWs.triggerMessage(
+				encodeToBuffer([
+					WireMessageType.PresenceBroadcast,
+					30,
+					[[packDocId("019c1e50-7d11-7000-8000-000000000002"), 0, [], 1]],
+				]),
+			);
+			await waitFor(() => deliveries.length === 2);
+			expect(client.presence.getAll()).toHaveLength(1);
+
+			const switching = client.setPresenceNamespace("other");
+			await new Promise((r) => setTimeout(r, 0));
+			const rejected = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: rejected.id,
+					code: "NAMESPACE_UNAUTHORIZED",
+					message: "No presence access",
+				}),
+			);
+			await expect(switching).rejects.toMatchObject({
+				code: "NAMESPACE_UNAUTHORIZED",
+			});
+			await new Promise((r) => setTimeout(r, 0));
+			expect(client.presence.getAll()).toHaveLength(0);
+		} finally {
+			client.disconnect();
+			restoreWebSocket();
+		}
+	});
+
 	test("setStoreNamespace replays store subscriptions without touching presence", async () => {
 		installMockWebSocket();
 		const client = createClient(defaultOptions);

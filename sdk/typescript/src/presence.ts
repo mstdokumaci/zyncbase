@@ -148,13 +148,15 @@ export class PresenceImpl implements Presence {
 					retryable: false,
 				});
 			}
-			if (gen !== this.userSubGen || !this.hasUserSubscribers()) {
+			if (gen !== this.userSubGen) {
+				return;
+			}
+			if (!this.hasUserSubscribers()) {
 				await this.dispatchAccepted(
 					{ type: "PresenceUnsubscribe", subId: ok.subId },
 					"Presence unsubscribe failed",
 				);
-				if (gen !== this.userSubGen || !this.hasUserSubscribers()) return;
-				continue;
+				return;
 			}
 			this.userSubId = ok.subId;
 			this.populateUserCacheFromSnapshot(ok);
@@ -609,7 +611,7 @@ export class PresenceImpl implements Presence {
 		);
 	}
 
-	private clearThrottle(reason?: Error): void {
+	clearThrottle(reason?: Error): void {
 		if (this.throttleTimer !== null) {
 			clearTimeout(this.throttleTimer);
 			this.throttleTimer = null;

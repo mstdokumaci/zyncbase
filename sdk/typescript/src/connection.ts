@@ -297,7 +297,17 @@ export class ConnectionManager {
 		if (this.presenceScopeReady) {
 			return send();
 		}
-		return this.ensurePresenceScope().then(() => send());
+		const expectedNs = this.presenceNamespace;
+		return this.ensurePresenceScope().then(() => {
+			if (this.presenceNamespace !== expectedNs) {
+				throw new ZyncBaseError("Request was superseded by a newer operation", {
+					code: ErrorCodes.REQUEST_SUPERSEDED,
+					category: "state",
+					retryable: false,
+				});
+			}
+			return send();
+		});
 	}
 
 	/** Presence messages, and action messages naming a presence-scoped action. */
@@ -631,6 +641,16 @@ export class ConnectionManager {
 		debugType: string,
 		responseTableIndex?: number,
 	): Promise<OkResponse> {
+		if (
+			msg.type === "PresenceSetNamespace" &&
+			msg.namespace !== this.presenceNamespace
+		) {
+			throw new ZyncBaseError("Request was superseded by a newer operation", {
+				code: ErrorCodes.REQUEST_SUPERSEDED,
+				category: "state",
+				retryable: false,
+			});
+		}
 		if (!this.retryPolicy.shouldRetry(err, attempt)) throw err;
 
 		const delay = this.retryPolicy.getDelay(err, attempt);
@@ -641,6 +661,16 @@ export class ConnectionManager {
 		}
 		await sleep(delay);
 		if (this.intentionalDisconnect) throw err;
+		if (
+			msg.type === "PresenceSetNamespace" &&
+			msg.namespace !== this.presenceNamespace
+		) {
+			throw new ZyncBaseError("Request was superseded by a newer operation", {
+				code: ErrorCodes.REQUEST_SUPERSEDED,
+				category: "state",
+				retryable: false,
+			});
+		}
 		return this.dispatchWithRetry(msg, attempt + 1, responseTableIndex);
 	}
 

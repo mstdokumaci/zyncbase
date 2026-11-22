@@ -368,6 +368,64 @@ describe("ConnectionManager", () => {
 			expect(manager.userId).toBe("019c1e50-7d11-7000-8000-000000000003");
 		});
 
+		test("a superseded namespace setup is not retried after a newer switch", async () => {
+			const { manager, mockWs } = makeManager({ reconnectDelay: 10 });
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("first");
+			first.catch(() => {});
+			const firstScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: firstScope.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 50,
+				}),
+			);
+			await tick();
+
+			const second = manager.setPresenceNamespace("second");
+			const secondScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			ack(mockWs, secondScope.id);
+			await second;
+			await new Promise((r) => setTimeout(r, 100));
+
+			const namespaces = mockWs.sentMessages
+				.map((message) => decode(message) as { type: number; namespace?: string })
+				.filter((message) => message.type === WireMessageType.PresenceSetNamespace)
+				.map((message) => message.namespace);
+			expect(namespaces).toEqual(["first", "second"]);
+			manager.disconnect();
+		});
+		test("a queued subscription is rejected when its scope is replaced", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const subscribe = manager.dispatch({ type: "PresenceSubscribe" });
+			const outcome = subscribe.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const switched = manager.setPresenceNamespace("other");
+			const [initial, replacement] = mockWs.sentMessages
+				.slice(1)
+				.map((bytes) => decode(bytes) as { id: number });
+			ack(mockWs, initial.id);
+			await tick();
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+			]);
+			expect(await outcome).toBe("REQUEST_SUPERSEDED");
+			ack(mockWs, replacement.id);
+			await switched;
+			manager.disconnect();
+		});
 		test("a rejected presence switch keeps the previous namespace usable", async () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);

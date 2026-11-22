@@ -680,6 +680,47 @@ describe("PresenceImpl", () => {
 		expect(presence.get(staleUserId)).toBeUndefined();
 	});
 
+	test("a stale subscription completion does not unsubscribe a replacement", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		let resolveStale: (value: OkResponse) => void = () => {};
+		const stalePromise = new Promise<OkResponse>((resolve) => {
+			resolveStale = resolve;
+		});
+		let subscribeCall = 0;
+		let unsubscribes = 0;
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				subscribeCall++;
+				if (subscribeCall === 1) return stalePromise;
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 200,
+					users: [],
+				} as OkResponse);
+			}
+			if (msg.type === "PresenceUnsubscribe") {
+				unsubscribes++;
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		presence.subscribe(() => {});
+		presence.invalidate();
+		presence.replaySubscriptions();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		resolveStale({
+			type: "ok",
+			id: 0,
+			subId: 100,
+			users: [],
+		} as OkResponse);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(unsubscribes).toBe(0);
+	});
 	test("invalidate() resets lastSetTime so first set() after reconnect is not throttled", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);

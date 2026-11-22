@@ -2,7 +2,7 @@
 
 import { ActionsImpl } from "./actions.js";
 import { ConnectionManager } from "./connection.js";
-import { toZyncError, ZyncBaseError } from "./errors.js";
+import { ErrorCodes, toZyncError, ZyncBaseError } from "./errors.js";
 import { PresenceImpl } from "./presence.js";
 import { backoffDelay } from "./retry_policy.js";
 import { StoreImpl } from "./store.js";
@@ -229,12 +229,37 @@ export class ZyncBaseClient<
 			return;
 		}
 
-		await this.conn.setPresenceNamespace(namespace);
-		this.presenceImpl.invalidate();
-		await this.presenceImpl.replaySubscriptions();
-		const replay = this.actionsImpl.replayRegistrations();
-		replay.store.catch(() => {});
-		replay.presence.catch(() => {});
+		this.presenceImpl.clearThrottle(
+			new ZyncBaseError("Presence set superseded by namespace switch", {
+				code: ErrorCodes.REQUEST_SUPERSEDED,
+				category: "state",
+				retryable: false,
+			}),
+		);
+
+		try {
+			await this.conn.setPresenceNamespace(namespace);
+			if (this.conn.getPresenceNamespace() !== namespace) {
+				return;
+			}
+			this.presenceImpl.invalidate();
+			await this.presenceImpl.replaySubscriptions();
+			const replay = this.actionsImpl.replayRegistrations();
+			replay.store.catch(() => {});
+			replay.presence.catch(() => {});
+		} catch (err) {
+			if (
+				err instanceof ZyncBaseError &&
+				(err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED ||
+					err.code === ErrorCodes.REQUEST_SUPERSEDED)
+			) {
+				// Server rejected or superseded switch; previous presence state is preserved
+			} else {
+				// Server unauthorized or reset presence scope; invalidate local cache
+				this.presenceImpl.invalidate();
+			}
+			throw err;
+		}
 	}
 
 	/**
