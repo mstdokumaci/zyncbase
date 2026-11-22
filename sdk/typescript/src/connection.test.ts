@@ -21,6 +21,10 @@ afterEach(() => {
 	restoreFetch();
 });
 
+function sentType(bytes: Uint8Array): number {
+	return (decode(bytes) as { type: number }).type;
+}
+
 async function useCanonicalDeltaSchema(
 	manager: ConnectionManager,
 ): Promise<void> {
@@ -88,36 +92,18 @@ describe("ConnectionManager", () => {
 					userId: packDocId(TEST_USER_ID),
 				}),
 			);
-			await new Promise((r) => setTimeout(r, 0));
-			expect(manager.userId).toBe(TEST_USER_ID);
-
-			const presenceAck = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
-				id: number;
-				type: number;
-			};
-			expect(presenceAck.type).toBe(WireMessageType.PresenceSetNamespace);
-			mockWs.triggerMessage(
-				encodeToBuffer({
-					type: "ok",
-					id: presenceAck.id,
-					userId: packDocId(TEST_USER_ID),
-				}),
-			);
 			await reconnected;
+			expect(manager.userId).toBe(TEST_USER_ID);
 		});
 
 		test("rejects a presence namespace response without a binary user id", async () => {
 			const { manager, mockWs } = makeManager();
-			const connected = manager.connect();
-			await new Promise((resolve) => setTimeout(resolve, 0));
-			mockWs.triggerOpen();
-			mockWs.triggerMessage(
-				encodeToBuffer({ type: "ok", id: 1, userId: packDocId(TEST_USER_ID) }),
-			);
-			await new Promise((resolve) => setTimeout(resolve, 0));
+			await connectManager(manager, mockWs);
+
+			const presence = manager.dispatch({ type: "PresenceSet", data: {} });
 			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
 
-			await expect(connected).rejects.toThrow(
+			await expect(presence).rejects.toThrow(
 				"PresenceSetNamespace response missing binary userId",
 			);
 		});
@@ -135,32 +121,21 @@ describe("ConnectionManager", () => {
 			expect(manager.userId).toBeNull();
 		});
 
-		test("the store scope ack alone provides the user id", async () => {
+		test("connects with the store scope alone, which provides the user id", async () => {
 			const { manager, mockWs } = makeManager();
-			const connected = manager.connect();
-			await new Promise((resolve) => setTimeout(resolve, 0));
-			mockWs.triggerOpen();
-			mockWs.triggerMessage(
-				encodeToBuffer({ type: "ok", id: 1, userId: packDocId(TEST_USER_ID) }),
-			);
-			await new Promise((resolve) => setTimeout(resolve, 0));
+			await connectManager(manager, mockWs);
 
 			expect(manager.userId).toBe(TEST_USER_ID);
-			mockWs.triggerMessage(
-				encodeToBuffer({ type: "ok", id: 2, userId: packDocId(TEST_USER_ID) }),
-			);
-			await connected;
+			expect(mockWs.sentMessages.map((bytes) => sentType(bytes))).toEqual([
+				WireMessageType.StoreSetNamespace,
+			]);
 		});
 
 		test("rejects a presence namespace response with a malformed user id", async () => {
 			const { manager, mockWs } = makeManager();
-			const connected = manager.connect();
-			await new Promise((resolve) => setTimeout(resolve, 0));
-			mockWs.triggerOpen();
-			mockWs.triggerMessage(
-				encodeToBuffer({ type: "ok", id: 1, userId: packDocId(TEST_USER_ID) }),
-			);
-			await new Promise((resolve) => setTimeout(resolve, 0));
+			await connectManager(manager, mockWs);
+
+			const presence = manager.dispatch({ type: "PresenceSet", data: {} });
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "ok",
@@ -169,9 +144,7 @@ describe("ConnectionManager", () => {
 				}),
 			);
 
-			await expect(connected).rejects.toThrow(
-				"invalid userId binary length 15",
-			);
+			await expect(presence).rejects.toThrow("invalid userId binary length 15");
 		});
 
 		test("emits 'statusChange' with 'connected' on open", async () => {
@@ -190,6 +163,558 @@ describe("ConnectionManager", () => {
 			await expect(connectPromise).rejects.toMatchObject({
 				code: "CONNECTION_FAILED",
 			});
+		});
+	});
+
+	describe("presence scope", () => {
+		const tick = () => new Promise((r) => setTimeout(r, 0));
+		const ack = (mockWs: MockWebSocket, id: number) =>
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id, userId: packDocId(TEST_USER_ID) }),
+			);
+
+		test("the first presence message requests the scope once, then everything queued on it", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			const set = manager.dispatch({ type: "PresenceSet", data: {} });
+			const subscribe = manager.dispatch({ type: "PresenceSubscribe" });
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+			]);
+
+			ack(mockWs, 2);
+			await tick();
+			expect(mockWs.sentMessages.slice(2).map(sentType)).toEqual([
+				WireMessageType.PresenceSet,
+				WireMessageType.PresenceSubscribe,
+			]);
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 4 }));
+			await Promise.all([set, subscribe]);
+
+			await Promise.all([
+				manager.dispatch({ type: "PresenceRemove" }),
+				Promise.resolve().then(() =>
+					mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 5 })),
+				),
+			]);
+			expect(sentType(mockWs.sentMessages[4])).toBe(
+				WireMessageType.PresenceRemove,
+			);
+		});
+
+		test("store messages never request the presence scope", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			const query = manager.dispatch({ type: "StoreQuery", table_index: "a" });
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2, value: [] }));
+			await query;
+
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.StoreQuery,
+			]);
+		});
+
+		test("a denied presence scope fails the presence message, not the session", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+
+			const denied = manager.dispatch({ type: "PresenceSet", data: {} });
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: 2,
+					code: "NAMESPACE_UNAUTHORIZED",
+					message: "No access to namespace",
+				}),
+			);
+			await expect(denied).rejects.toMatchObject({
+				code: "NAMESPACE_UNAUTHORIZED",
+			});
+			expect(manager.status).toBe("connected");
+
+			// The next presence message asks again.
+			const retried = manager.dispatch({ type: "PresenceSet", data: {} });
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSetNamespace,
+			);
+			retried.catch(() => {});
+			manager.disconnect();
+		});
+
+		test("only presence-scoped actions request the presence scope", async () => {
+			const { manager, mockWs } = makeManager();
+			await manager.schemaDictionary.processSchemaSync({
+				version: "1.0.0",
+				tables: [],
+				fields: [],
+				fieldFlags: [],
+				actions: ["checkout", "ping"],
+				actionParams: [[], []],
+				actionReturns: [[], []],
+				actionFlags: [0b00, 0b10],
+			});
+			await connectManager(manager, mockWs);
+
+			manager
+				.dispatchNoRetry({ type: "ActionCall", action_id: "checkout" })
+				.catch(() => {});
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.ActionCall,
+			);
+
+			manager
+				.dispatchNoRetry({ type: "ActionCall", action_id: "ping" })
+				.catch(() => {});
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSetNamespace,
+			);
+			ack(mockWs, 3);
+			await tick();
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.ActionCall,
+			);
+			manager.disconnect();
+		});
+
+		test("a reconnect starts without the presence scope", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const first = manager.dispatch({ type: "PresenceSet", data: {} });
+			ack(mockWs, 2);
+			await tick();
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
+			await first;
+
+			mockWs.triggerClose(1006, "gone");
+			const reconnected = manager.connect();
+			await tick();
+			mockWs.triggerOpen();
+			ack(mockWs, 4);
+			await reconnected;
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.StoreSetNamespace,
+			);
+
+			const again = manager.dispatch({ type: "PresenceSet", data: {} });
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSetNamespace,
+			);
+			again.catch(() => {});
+			manager.disconnect();
+		});
+
+		test("an old namespace setup retry does not survive a reconnect", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("public");
+			const outcome = first.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: scope.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 100,
+				}),
+			);
+			await tick();
+
+			mockWs.triggerClose(1006, "gone");
+			const reconnected = manager.connect();
+			await tick();
+			mockWs.triggerOpen();
+			const store = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			const marker = mockWs.sentMessages.length;
+
+			await new Promise((r) => setTimeout(r, 150));
+			const retried = mockWs.sentMessages
+				.slice(marker)
+				.map((message) => decode(message) as { type: number });
+			expect(
+				retried.some(
+					(message) => message.type === WireMessageType.PresenceSetNamespace,
+				),
+			).toBe(false);
+			expect(await outcome).toBe("REQUEST_SUPERSEDED");
+			ack(mockWs, store.id);
+			await reconnected;
+			manager.disconnect();
+		});
+
+		test("a same-namespace call joins a pending scope request", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("public");
+			const second = manager.setPresenceNamespace("public");
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+			]);
+
+			ack(mockWs, 2);
+			await Promise.all([first, second]);
+			await manager.setPresenceNamespace("public");
+			expect(mockWs.sentMessages).toHaveLength(2);
+		});
+
+		test("rapid namespace switch ignores stale responses from superseded requests", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("room1");
+			const firstOutcome = first.catch((err: { code?: string }) => err.code);
+			const second = manager.setPresenceNamespace("room2");
+
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+			]);
+
+			const [firstScope, secondScope] = mockWs.sentMessages
+				.slice(1)
+				.map((bytes) => decode(bytes) as { id: number });
+
+			// Acknowledge firstScope late (with a distinct userId)
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: firstScope.id,
+					userId: packDocId("019c1e50-7d11-7000-8000-000000000002"),
+				}),
+			);
+			await tick();
+
+			// Stale response must not overwrite target namespace or adopt old userId
+			expect(manager.getPresenceNamespace()).toBe("room2");
+			expect(manager.userId).toBe(TEST_USER_ID);
+
+			// Acknowledge secondScope
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: secondScope.id,
+					userId: packDocId("019c1e50-7d11-7000-8000-000000000003"),
+				}),
+			);
+			await second;
+			expect(await firstOutcome).toBe("REQUEST_SUPERSEDED");
+
+			expect(manager.getPresenceNamespace()).toBe("room2");
+			expect(manager.userId).toBe("019c1e50-7d11-7000-8000-000000000003");
+		});
+
+		test("a superseded namespace setup is not retried after a newer switch", async () => {
+			const { manager, mockWs } = makeManager({ reconnectDelay: 10 });
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("first");
+			first.catch(() => {});
+			const firstScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: firstScope.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 50,
+				}),
+			);
+			await tick();
+
+			const second = manager.setPresenceNamespace("second");
+			const secondScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			ack(mockWs, secondScope.id);
+			await second;
+			await new Promise((r) => setTimeout(r, 100));
+
+			const namespaces = mockWs.sentMessages
+				.map(
+					(message) => decode(message) as { type: number; namespace?: string },
+				)
+				.filter(
+					(message) => message.type === WireMessageType.PresenceSetNamespace,
+				)
+				.map((message) => message.namespace);
+			expect(namespaces).toEqual(["first", "second"]);
+			manager.disconnect();
+		});
+		test("an old setup retry stays superseded after returning to the same namespace", async () => {
+			const { manager, mockWs } = makeManager({ reconnectDelay: 10 });
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("first");
+			first.catch(() => {});
+			const firstScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: firstScope.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 50,
+				}),
+			);
+			await tick();
+
+			const second = manager.setPresenceNamespace("second");
+			const secondScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			ack(mockWs, secondScope.id);
+			await second;
+
+			const third = manager.setPresenceNamespace("first");
+			const thirdScope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			ack(mockWs, thirdScope.id);
+			await third;
+			await new Promise((r) => setTimeout(r, 100));
+
+			const namespaces = mockWs.sentMessages
+				.map(
+					(message) => decode(message) as { type: number; namespace?: string },
+				)
+				.filter(
+					(message) => message.type === WireMessageType.PresenceSetNamespace,
+				)
+				.map((message) => message.namespace);
+			expect(namespaces).toEqual(["first", "second", "first"]);
+			manager.disconnect();
+		});
+		test("a shared presence retry is rejected after a namespace switch", async () => {
+			const { manager, mockWs } = makeManager({ reconnectDelay: 10 });
+			await connectManager(manager, mockWs);
+			const setup = manager.setPresenceNamespace("public");
+			ack(mockWs, 2);
+			await setup;
+
+			const shared = manager.dispatch({
+				type: "PresenceSetShared",
+				data: {},
+			});
+			const outcome = shared.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const sharedRequest = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: sharedRequest.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 50,
+				}),
+			);
+			await tick();
+
+			const switched = manager.setPresenceNamespace("other");
+			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			ack(mockWs, scope.id);
+			await switched;
+			await new Promise((r) => setTimeout(r, 100));
+
+			const sharedMessages = mockWs.sentMessages
+				.map((message) => decode(message) as { type: number })
+				.filter(
+					(message) => message.type === WireMessageType.PresenceSetShared,
+				);
+			expect(sharedMessages).toHaveLength(1);
+			expect(await outcome).toBe("REQUEST_SUPERSEDED");
+			manager.disconnect();
+		});
+		test("a queued subscription is rejected when its scope is replaced", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const subscribe = manager.dispatch({ type: "PresenceSubscribe" });
+			const outcome = subscribe.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const switched = manager.setPresenceNamespace("other");
+			const [initial, replacement] = mockWs.sentMessages
+				.slice(1)
+				.map((bytes) => decode(bytes) as { id: number });
+			ack(mockWs, initial.id);
+			await tick();
+			expect(mockWs.sentMessages.map(sentType)).toEqual([
+				WireMessageType.StoreSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+				WireMessageType.PresenceSetNamespace,
+			]);
+			expect(await outcome).toBe("REQUEST_SUPERSEDED");
+			ack(mockWs, replacement.id);
+			await switched;
+			manager.disconnect();
+		});
+		test("a rejected presence switch keeps the previous namespace usable", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const initial = manager.setPresenceNamespace("public");
+			ack(mockWs, 2);
+			await initial;
+
+			const rejected = manager.setPresenceNamespace("other");
+			const rejectedScope = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: rejectedScope.id,
+					code: "NAMESPACE_SWITCH_REJECTED",
+					message: "Namespace switching is not allowed",
+				}),
+			);
+			await expect(rejected).rejects.toMatchObject({
+				code: "NAMESPACE_SWITCH_REJECTED",
+			});
+			expect(manager.getPresenceNamespace()).toBe("public");
+
+			const retried = manager.dispatch({ type: "PresenceSet", data: {} });
+			const presence = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSet,
+			);
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: presence.id }));
+			await retried;
+			expect(manager.getPresenceNamespace()).toBe("public");
+		});
+
+		test("a presence retry does not cross a replacement socket", async () => {
+			const { manager, mockWs } = makeManager({
+				reconnect: false,
+				reconnectDelay: 10,
+			});
+			await connectManager(manager, mockWs);
+			const presence = manager.dispatch({ type: "PresenceSet", data: {} });
+			const outcome = presence.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSetNamespace,
+			);
+			ack(mockWs, scope.id);
+			await tick();
+			const firstAttempt = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSet,
+			);
+
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: firstAttempt.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 100,
+				}),
+			);
+			await tick();
+			mockWs.triggerClose(1006, "gone");
+			const reconnected = manager.connect();
+			await tick();
+			mockWs.triggerOpen();
+			const store = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.StoreSetNamespace,
+			);
+			ack(mockWs, store.id);
+			await reconnected;
+			const marker = mockWs.sentMessages.length;
+
+			await new Promise((r) => setTimeout(r, 150));
+			const retried = mockWs.sentMessages
+				.slice(marker)
+				.map((message) => decode(message) as { type: number });
+			expect(
+				retried.some(
+					(message) =>
+						message.type === WireMessageType.PresenceSet ||
+						message.type === WireMessageType.PresenceSetNamespace,
+				),
+			).toBe(false);
+			expect(await outcome).toBe("REQUEST_SUPERSEDED");
+			manager.disconnect();
+		});
+
+		test("a same-namespace call after disconnect fails with CONNECTION_FAILED", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const ready = manager.setPresenceNamespace("public");
+			ack(mockWs, 2);
+			await ready;
+			manager.disconnect();
+			await expect(
+				manager.setPresenceNamespace("public"),
+			).rejects.toMatchObject({ code: "CONNECTION_FAILED" });
+		});
+
+		test("numeric presence action registrations request the presence scope", async () => {
+			const { manager, mockWs } = makeManager();
+			await manager.schemaDictionary.processSchemaSync({
+				version: "1.0.0",
+				tables: [],
+				fields: [],
+				fieldFlags: [],
+				actions: ["checkout", "ping"],
+				actionParams: [[], []],
+				actionReturns: [[], []],
+				actionFlags: [0b00, 0b10],
+			});
+			await connectManager(manager, mockWs);
+			manager
+				.dispatchNoRetry({ type: "ActionRegister", action_ids: [0] })
+				.catch(() => {});
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.ActionRegister,
+			);
+			manager
+				.dispatchNoRetry({ type: "ActionRegister", action_ids: [1] })
+				.catch(() => {});
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.PresenceSetNamespace,
+			);
+			ack(mockWs, 3);
+			await tick();
+			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
+				WireMessageType.ActionRegister,
+			);
+			manager.disconnect();
 		});
 	});
 
@@ -256,14 +781,14 @@ describe("ConnectionManager", () => {
 				value: 2,
 			});
 
-			const msg1 = decode(mockWs.sentMessages[2]) as Record<string, unknown>;
-			const msg2 = decode(mockWs.sentMessages[3]) as Record<string, unknown>;
+			const msg1 = decode(mockWs.sentMessages[1]) as Record<string, unknown>;
+			const msg2 = decode(mockWs.sentMessages[2]) as Record<string, unknown>;
 
-			expect(msg1.id).toBe(3);
-			expect(msg2.id).toBe(4);
+			expect(msg1.id).toBe(2);
+			expect(msg2.id).toBe(3);
 
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
 			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 4 }));
 			await p1;
 			await p2;
 		});
@@ -278,11 +803,11 @@ describe("ConnectionManager", () => {
 				value: 1,
 			});
 			mockWs.triggerMessage(
-				encodeToBuffer({ type: "ok", id: 3, value: [{ x: 1 }] }),
+				encodeToBuffer({ type: "ok", id: 2, value: [{ x: 1 }] }),
 			);
 
 			const result = await p;
-			expect(result).toMatchObject({ type: "ok", id: 3 });
+			expect(result).toMatchObject({ type: "ok", id: 2 });
 		});
 
 		test("rejects promise on type:error response with matching id", async () => {
@@ -297,7 +822,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 3,
+					id: 2,
 					code: "PERMISSION_DENIED",
 					message: "Not allowed",
 				}),
@@ -330,7 +855,7 @@ describe("ConnectionManager", () => {
 			await connectManager(manager, mockWs);
 
 			const p = manager.dispatchWrite(write);
-			mockWs.triggerMessage(encodeToBuffer({ type: "WriteCommitted", id: 3 }));
+			mockWs.triggerMessage(encodeToBuffer({ type: "WriteCommitted", id: 2 }));
 
 			await expect(p).resolves.toBeUndefined();
 		});
@@ -346,7 +871,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "WriteError",
-					id: 3,
+					id: 2,
 					code: "UNIQUE_CONSTRAINT_VIOLATED",
 					message: "duplicate",
 					phase: "write",
@@ -369,7 +894,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 3,
+					id: 2,
 					code: "PERMISSION_DENIED",
 					message: "Not allowed",
 				}),
@@ -393,7 +918,7 @@ describe("ConnectionManager", () => {
 					"Write outcome not received within 20 ms; the write may still commit",
 			});
 			// A late outcome for the timed-out id is ignored.
-			mockWs.triggerMessage(encodeToBuffer({ type: "WriteCommitted", id: 3 }));
+			mockWs.triggerMessage(encodeToBuffer({ type: "WriteCommitted", id: 2 }));
 		});
 
 		test("rejects writeTimeoutMs outside the timer range", () => {
@@ -418,7 +943,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 3,
+					id: 2,
 					code: "RATE_LIMITED",
 					message: "Too many requests",
 					retryAfter: 5,
@@ -427,7 +952,7 @@ describe("ConnectionManager", () => {
 
 			await expect(p).rejects.toMatchObject({ code: "RATE_LIMITED" });
 			await wait(20);
-			expect(mockWs.sentMessages).toHaveLength(3);
+			expect(mockWs.sentMessages).toHaveLength(2);
 		});
 
 		test("WriteCommitted counts as a liveness response", async () => {
@@ -528,8 +1053,8 @@ describe("ConnectionManager", () => {
 			};
 			mockWs.triggerMessage(encodeToBuffer(delta));
 
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
-			await expect(p).resolves.toMatchObject({ type: "ok", id: 3 });
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 2 }));
+			await expect(p).resolves.toMatchObject({ type: "ok", id: 2 });
 		});
 	});
 
@@ -770,18 +1295,9 @@ describe("ConnectionManager", () => {
 			});
 			expect(mockWs.sentMessages).toHaveLength(1);
 
-			// Complete the handshake: the rejected StoreSet consumed id=2, so
-			// PresenceSetNamespace goes out as id=3.
+			// Complete the handshake.
 			mockWs.triggerMessage(
 				encodeToBuffer({ type: "ok", id: 1, userId: packDocId(TEST_USER_ID) }),
-			);
-			await new Promise((r) => setTimeout(r, 0));
-			mockWs.triggerMessage(
-				encodeToBuffer({
-					type: "ok",
-					id: 3,
-					userId: packDocId("019c1e50-7d11-7000-8000-000000000001"),
-				}),
 			);
 			await connected;
 			manager.disconnect();
@@ -1089,7 +1605,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 3,
+					id: 2,
 					code: "RATE_LIMITED",
 					message: "Too many requests",
 					retryAfter: 50,
@@ -1100,11 +1616,11 @@ describe("ConnectionManager", () => {
 			await new Promise((r) => setTimeout(r, 100));
 
 			// Second attempt: send ok
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 4 }));
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
 
 			const result = await p;
-			expect(result).toMatchObject({ type: "ok", id: 4 });
-			expect(mockWs.sentMessages.length).toBeGreaterThanOrEqual(4);
+			expect(result).toMatchObject({ type: "ok", id: 3 });
+			expect(mockWs.sentMessages.length).toBeGreaterThanOrEqual(3);
 		});
 
 		test("does not retry validation errors", async () => {
@@ -1120,7 +1636,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 3,
+					id: 2,
 					code: "SCHEMA_VALIDATION_FAILED",
 					message: "Invalid data",
 				}),
@@ -1131,7 +1647,7 @@ describe("ConnectionManager", () => {
 			});
 
 			// Only one message sent (no retry)
-			expect(mockWs.sentMessages.length).toBe(3);
+			expect(mockWs.sentMessages.length).toBe(2);
 		});
 
 		test("gives up after maxServerRetries for server errors", async () => {
@@ -1152,7 +1668,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 3,
+					id: 2,
 					code: "INTERNAL_ERROR",
 					message: "Server error",
 				}),
@@ -1165,7 +1681,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 4,
+					id: 3,
 					code: "INTERNAL_ERROR",
 					message: "Server error",
 				}),
@@ -1178,7 +1694,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 5,
+					id: 4,
 					code: "INTERNAL_ERROR",
 					message: "Server error",
 				}),
@@ -1200,7 +1716,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 3,
+					id: 2,
 					code: "RATE_LIMITED",
 					message: "Too many requests",
 				}),
@@ -1209,7 +1725,7 @@ describe("ConnectionManager", () => {
 			await expect(p).rejects.toMatchObject({ code: "RATE_LIMITED" });
 
 			// Only one message sent (no retry)
-			expect(mockWs.sentMessages.length).toBe(3);
+			expect(mockWs.sentMessages.length).toBe(2);
 		});
 
 		test("respects retryAfter delay", async () => {
@@ -1228,7 +1744,7 @@ describe("ConnectionManager", () => {
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "error",
-					id: 3,
+					id: 2,
 					code: "RATE_LIMITED",
 					message: "Too many requests",
 					retryAfter: 200,
@@ -1238,15 +1754,15 @@ describe("ConnectionManager", () => {
 			// Wait for retry (should take ~200ms, not ~10ms)
 			await new Promise((r) => setTimeout(r, 100));
 			// Should still be waiting
-			expect(mockWs.sentMessages.length).toBe(3);
+			expect(mockWs.sentMessages.length).toBe(2);
 
 			// Wait for retry to happen
 			await new Promise((r) => setTimeout(r, 150));
 			// Now retry should have happened
-			expect(mockWs.sentMessages.length).toBe(4);
+			expect(mockWs.sentMessages.length).toBe(3);
 
 			// Send ok to resolve
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 4 }));
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: 3 }));
 			await p;
 
 			const elapsed = Date.now() - startTime;

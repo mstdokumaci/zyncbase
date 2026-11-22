@@ -67,7 +67,7 @@ The TypeScript SDK owns the browser/application API surface, connection lifecycl
 ## Request Flow
 
 1. Public store/presence method validates SDK inputs and builds a semantic command.
-2. `ConnectionManager` ensures the connection and required namespace scope are ready.
+2. `ConnectionManager` ensures the connection and required namespace scope are ready. The connect handshake resolves only the store scope. `dispatch` and `dispatchNoRetry` hold a presence message, or an action message naming a presence-scoped action, until `PresenceSetNamespace` succeeds; the first such message on a socket sends it. A failed request clears it, so the next presence message asks again.
 3. `ConnectionWireCodec` encodes the command using current schema dictionaries and replaces the logical `type` name with its numeric wire ID from the shared registry (`WireMessageType`); `decodeMessage` maps numeric IDs back to the logical `InboundMessage` type names, so the rest of the SDK never sees numeric wire IDs.
 4. `PendingRequests` records the request id; store writes also get the `writeTimeoutMs` timer. Once a write is sent, `StoreImpl` adds it to the overlay and delivers it ([Optimistic Overlay](#optimistic-overlay)).
 5. An `ok` or `error` response resolves/rejects the request. A store write gets no `ok`: `WriteCommitted` resolves it, `WriteError` or `error` rejects it, and writes are never retried.

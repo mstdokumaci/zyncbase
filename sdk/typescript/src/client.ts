@@ -2,7 +2,7 @@
 
 import { ActionsImpl } from "./actions.js";
 import { ConnectionManager } from "./connection.js";
-import { toZyncError, ZyncBaseError } from "./errors.js";
+import { ErrorCodes, toZyncError, ZyncBaseError } from "./errors.js";
 import { PresenceImpl } from "./presence.js";
 import { backoffDelay } from "./retry_policy.js";
 import { StoreImpl } from "./store.js";
@@ -48,6 +48,11 @@ export class ZyncBaseClient<
 	>();
 	/** Whether a connection existed earlier in this process. */
 	private hasConnectedOnce = false;
+	private presenceSwitchGeneration = 0;
+	private presenceSwitchInFlight: {
+		namespace: string;
+		promise: Promise<void>;
+	} | null = null;
 	/** Backoff state for retrying a failed restore. */
 	private restoreAttempt = 0;
 	private restoreTimer: ReturnType<typeof setTimeout> | null = null;
@@ -223,14 +228,51 @@ export class ZyncBaseClient<
 	}
 
 	/** Switch the active presence namespace. */
-	async setPresenceNamespace(namespace: string): Promise<void> {
+	setPresenceNamespace(namespace: string): Promise<void> {
 		const oldNs = this.conn.getPresenceNamespace();
-		if (oldNs === namespace) return;
+		if (oldNs === namespace && this.conn.isPresenceScopeReady()) {
+			return Promise.resolve();
+		}
 
+		const inFlight = this.presenceSwitchInFlight;
+		if (inFlight?.namespace === namespace) return inFlight.promise;
+
+		const promise = this.performPresenceSwitch(namespace);
+		this.presenceSwitchInFlight = { namespace, promise };
+		const clear = () => {
+			if (this.presenceSwitchInFlight?.promise === promise) {
+				this.presenceSwitchInFlight = null;
+			}
+		};
+		promise.then(clear, clear);
+		return promise;
+	}
+	private async performPresenceSwitch(namespace: string): Promise<void> {
+		const switchGeneration = ++this.presenceSwitchGeneration;
+		try {
+			await this.conn.setPresenceNamespace(namespace);
+		} catch (err) {
+			if (this.presenceSwitchGeneration === switchGeneration) {
+				if (
+					err instanceof ZyncBaseError &&
+					(err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED ||
+						err.code === ErrorCodes.REQUEST_SUPERSEDED)
+				) {
+					// Server rejected or superseded switch; previous presence state is preserved
+				} else {
+					// Server unauthorized or reset presence scope; invalidate local cache
+					this.presenceImpl.invalidate();
+				}
+			}
+			throw err;
+		}
+		if (this.presenceSwitchGeneration !== switchGeneration) return;
+		if (this.conn.getPresenceNamespace() !== namespace) return;
 		this.presenceImpl.invalidate();
-		await this.conn.setPresenceNamespace(namespace);
 		await this.presenceImpl.replaySubscriptions();
-		this.actionsImpl.replayRegistrations();
+		const replay = this.actionsImpl.replayRegistrations();
+		replay.store.catch(() => {});
+		replay.presence.catch(() => {});
 	}
 
 	/**
@@ -297,9 +339,43 @@ export class ZyncBaseClient<
 	 * readiness queue. On a connection cycle this ends with `synced`.
 	 */
 	private async _restore(): Promise<void> {
-		await this.presenceImpl.replaySubscriptions();
-		this.actionsImpl.replayRegistrations();
-		await this._restoreStore();
+		const [store, presence] = await Promise.allSettled([
+			this._restoreStore(),
+			this.presenceImpl.replaySubscriptions(),
+		]);
+		await this.conn.awaitSchemaSync();
+		const actions = this.actionsImpl.replayRegistrations();
+		const [storeActions, presenceActions] = await Promise.allSettled([
+			actions.store,
+			actions.presence,
+		]);
+		if (storeActions.status === "rejected") {
+			const error = toZyncError(
+				storeActions.reason,
+				"Store action registration failed",
+				false,
+			);
+			if (error.retryable) throw error;
+		}
+		if (presenceActions.status === "rejected") {
+			const error = toZyncError(
+				presenceActions.reason,
+				"Presence action registration failed",
+				false,
+			);
+			if (error.retryable && store.status !== "rejected") {
+				throw error;
+			}
+		}
+		if (presence.status === "rejected") {
+			const error = toZyncError(presence.reason, "Restore failed", false);
+			if (!error.retryable || store.status === "rejected") {
+				this.emitError(error);
+			} else {
+				throw error;
+			}
+		}
+		if (store.status === "rejected") throw store.reason;
 	}
 
 	/**

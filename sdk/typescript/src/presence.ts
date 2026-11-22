@@ -17,7 +17,6 @@ interface SetWaiter {
 	resolve: () => void;
 	reject: (reason?: unknown) => void;
 }
-
 export interface PresenceConnection {
 	dispatch(msg: Record<string, unknown>): Promise<OkResponse>;
 	onPresenceBroadcast(
@@ -26,6 +25,7 @@ export interface PresenceConnection {
 	on(event: LifecycleEvent, handler: (...args: unknown[]) => void): void;
 	schemaDictionary: SchemaDictionary;
 	readonly userId: string | null;
+	getPresenceNamespace?(): string;
 }
 
 export class PresenceImpl implements Presence {
@@ -35,7 +35,9 @@ export class PresenceImpl implements Presence {
 	private userSubId: number | null = null;
 	private sharedSubId: number | null = null;
 	private userSubPromise: Promise<void> | null = null;
+	private userCleanupPromise: Promise<void> | null = null;
 	private sharedSubPromise: Promise<void> | null = null;
+	private sharedCleanupPromise: Promise<void> | null = null;
 	private userSubGen = 0;
 	private sharedSubGen = 0;
 	private userCallbacks = new Set<(users: PresenceEntry[]) => void>();
@@ -64,7 +66,27 @@ export class PresenceImpl implements Presence {
 		return this.conn.userId;
 	}
 
+	private pendingSetTargetNs: string | null = null;
+
 	set(data: Record<string, unknown>): Promise<void> {
+		const currentNs = this.conn.getPresenceNamespace?.() ?? null;
+		if (
+			this.pendingSetTargetNs !== null &&
+			this.pendingSetTargetNs !== currentNs
+		) {
+			for (const waiter of this.pendingSetWaiters) {
+				waiter.reject(
+					new ZyncBaseError("Presence set superseded by scope change", {
+						code: ErrorCodes.REQUEST_SUPERSEDED,
+						category: "state",
+						retryable: false,
+					}),
+				);
+			}
+			this.pendingSetWaiters = [];
+			this.pendingSetData = null;
+		}
+		this.pendingSetTargetNs = currentNs;
 		let resolve!: () => void;
 		let reject!: (reason?: unknown) => void;
 		const accepted = new Promise<void>((res, rej) => {
@@ -106,8 +128,9 @@ export class PresenceImpl implements Presence {
 	}
 
 	setShared(data: Record<string, unknown>): Promise<void> {
+		const targetNamespace = this.conn.getPresenceNamespace?.() ?? null;
 		return this.dispatchAccepted(
-			{ type: "PresenceSetShared", data },
+			{ type: "PresenceSetShared", data, targetNamespace },
 			"Presence setShared failed",
 		);
 	}
@@ -118,7 +141,20 @@ export class PresenceImpl implements Presence {
 
 	private ensureUserSubscription(): Promise<void> {
 		if (this.userSubId !== null) return Promise.resolve();
-		if (this.userSubPromise !== null) return this.userSubPromise;
+		if (this.userSubPromise !== null) {
+			const retryIfNeeded = () => {
+				if (this.userSubId === null && this.hasUserSubscribers()) {
+					return this.ensureUserSubscription();
+				}
+			};
+			return this.userSubPromise.then(retryIfNeeded, retryIfNeeded);
+		}
+		if (this.userCleanupPromise !== null) {
+			return this.userCleanupPromise.then(
+				() => this.ensureUserSubscription(),
+				() => this.ensureUserSubscription(),
+			);
+		}
 		const gen = this.userSubGen;
 		const pending = this.establishUserSubscription(gen).catch((err) => {
 			const error = toZyncError(err, "Presence subscribe failed");
@@ -149,13 +185,21 @@ export class PresenceImpl implements Presence {
 					retryable: false,
 				});
 			}
-			if (gen !== this.userSubGen || !this.hasUserSubscribers()) {
-				await this.dispatchAccepted(
+			if (gen !== this.userSubGen) {
+				return;
+			}
+			if (!this.hasUserSubscribers()) {
+				const unsub = this.dispatchAccepted(
 					{ type: "PresenceUnsubscribe", subId: ok.subId },
 					"Presence unsubscribe failed",
 				);
-				if (gen !== this.userSubGen || !this.hasUserSubscribers()) return;
-				continue;
+				this.userCleanupPromise = unsub;
+				const clear = () => {
+					if (this.userCleanupPromise === unsub) this.userCleanupPromise = null;
+				};
+				unsub.then(clear, clear);
+				await unsub;
+				return;
 			}
 			this.userSubId = ok.subId;
 			this.populateUserCacheFromSnapshot(ok);
@@ -178,10 +222,16 @@ export class PresenceImpl implements Presence {
 			this.userSubId = null;
 			this.clearUserCache();
 			if (subId !== null) {
-				return this.dispatchAccepted(
+				const unsub = this.dispatchAccepted(
 					{ type: "PresenceUnsubscribe", subId },
 					"Presence unsubscribe failed",
 				);
+				this.userCleanupPromise = unsub;
+				const clear = () => {
+					if (this.userCleanupPromise === unsub) this.userCleanupPromise = null;
+				};
+				unsub.then(clear, clear);
+				return unsub;
 			}
 			if (this.userSubPromise !== null) return this.userSubPromise;
 		}
@@ -190,7 +240,20 @@ export class PresenceImpl implements Presence {
 
 	private ensureSharedSubscription(): Promise<void> {
 		if (this.sharedSubId !== null) return Promise.resolve();
-		if (this.sharedSubPromise !== null) return this.sharedSubPromise;
+		if (this.sharedSubPromise !== null) {
+			const retryIfNeeded = () => {
+				if (this.sharedSubId === null && this.sharedCallbacks.size > 0) {
+					return this.ensureSharedSubscription();
+				}
+			};
+			return this.sharedSubPromise.then(retryIfNeeded, retryIfNeeded);
+		}
+		if (this.sharedCleanupPromise !== null) {
+			return this.sharedCleanupPromise.then(
+				() => this.ensureSharedSubscription(),
+				() => this.ensureSharedSubscription(),
+			);
+		}
 		const gen = this.sharedSubGen;
 		const pending = this.establishSharedSubscription(gen).catch((err) => {
 			const error = toZyncError(err, "Presence subscribeShared failed");
@@ -224,13 +287,23 @@ export class PresenceImpl implements Presence {
 					},
 				);
 			}
-			if (!this.hasCurrentSharedSubscribers(gen)) {
-				await this.dispatchAccepted(
+			if (gen !== this.sharedSubGen) {
+				return;
+			}
+			if (this.sharedCallbacks.size === 0) {
+				const unsub = this.dispatchAccepted(
 					{ type: "PresenceUnsubscribeShared", subId: ok.subId },
 					"Presence unsubscribeShared failed",
 				);
-				if (!this.hasCurrentSharedSubscribers(gen)) return;
-				continue;
+				this.sharedCleanupPromise = unsub;
+				const clear = () => {
+					if (this.sharedCleanupPromise === unsub) {
+						this.sharedCleanupPromise = null;
+					}
+				};
+				unsub.then(clear, clear);
+				await unsub;
+				return;
 			}
 			this.sharedSubId = ok.subId;
 			this.sharedCache =
@@ -245,10 +318,6 @@ export class PresenceImpl implements Presence {
 		});
 	}
 
-	private hasCurrentSharedSubscribers(gen: number): boolean {
-		return gen === this.sharedSubGen && this.sharedCallbacks.size > 0;
-	}
-
 	private cleanupSharedSubscription(): Promise<void> {
 		if (
 			this.sharedCallbacks.size === 0 &&
@@ -258,10 +327,18 @@ export class PresenceImpl implements Presence {
 			this.sharedSubId = null;
 			this.sharedCache = null;
 			if (subId !== null) {
-				return this.dispatchAccepted(
+				const unsub = this.dispatchAccepted(
 					{ type: "PresenceUnsubscribeShared", subId },
 					"Presence unsubscribeShared failed",
 				);
+				this.sharedCleanupPromise = unsub;
+				const clear = () => {
+					if (this.sharedCleanupPromise === unsub) {
+						this.sharedCleanupPromise = null;
+					}
+				};
+				unsub.then(clear, clear);
+				return unsub;
 			}
 			if (this.sharedSubPromise !== null) return this.sharedSubPromise;
 		}
@@ -431,8 +508,10 @@ export class PresenceImpl implements Presence {
 	}
 
 	private sendSet(data: Record<string, unknown>, waiters: SetWaiter[]): void {
+		const targetNamespace =
+			this.pendingSetTargetNs ?? this.conn.getPresenceNamespace?.() ?? null;
 		this.dispatchAccepted(
-			{ type: "PresenceSet", data },
+			{ type: "PresenceSet", data, targetNamespace },
 			"Presence set failed",
 		).then(
 			() => {
@@ -610,7 +689,7 @@ export class PresenceImpl implements Presence {
 		);
 	}
 
-	private clearThrottle(reason?: Error): void {
+	clearThrottle(reason?: Error): void {
 		if (this.throttleTimer !== null) {
 			clearTimeout(this.throttleTimer);
 			this.throttleTimer = null;

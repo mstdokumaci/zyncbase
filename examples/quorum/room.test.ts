@@ -374,7 +374,10 @@ describe("quorum voting", () => {
 			presenceNamespace: roomNamespace(roomB),
 			reconnect: false,
 		});
-		await expect(client.connect()).rejects.toThrow();
+		await client.connect();
+		await expect(client.presence.subscribe(() => {})).rejects.toMatchObject({
+			code: "NAMESPACE_UNAUTHORIZED",
+		});
 		client.disconnect();
 	});
 

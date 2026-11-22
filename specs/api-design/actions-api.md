@@ -90,7 +90,7 @@ An action's operational mode is determined directly by the presence or absence o
 Actions reuse the existing store and presence scopes; there is no separate action namespace.
 
 - An action's `scope` (default `"store"`) selects which scope resolves its namespace and user identity.
-- Calls and registrations require the bound scope to be ready. Before readiness they fail with `SESSION_NOT_READY`.
+- Calls and registrations require the bound scope to be ready. Before readiness they fail with `SESSION_NOT_READY`. The SDK requests the presence scope before the first presence-scoped call or registration on a session.
 - Namespace admission uses the bound scope's existing rules: `storeFilter` for store-scoped actions, `presenceRead` for presence-scoped actions.
 - Switching the bound scope's namespace clears that connection's registrations for the scope, mirroring subscription invalidation. Workers must re-register after a switch.
 - The SDK selects the bound scope per action from the `SchemaSync` dictionaries.

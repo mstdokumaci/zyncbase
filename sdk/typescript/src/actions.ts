@@ -29,6 +29,8 @@ import type {
 
 /** The subset of ConnectionManager that ActionsImpl depends on. */
 export interface ActionsConnection {
+	/** Send a request with automatic retry (e.g. registration). */
+	dispatch?(msg: OutboundRequest): Promise<OkResponse>;
 	/** Send a request without automatic retry (action calls are never retried). */
 	dispatchNoRetry(msg: OutboundRequest): Promise<OkResponse>;
 	/** Encode a one-way outbound message (ActionReply). */
@@ -92,30 +94,53 @@ export class ActionsImpl implements Actions {
 	}
 
 	/** Re-register all handlers after reconnect or a bound-scope namespace switch. */
-	replayRegistrations(): void {
-		if (this.handlers.size === 0 || !this.conn.isSchemaReady()) return;
+	replayRegistrations(): {
+		store: Promise<void>;
+		presence: Promise<void>;
+	} {
+		if (this.handlers.size === 0 || !this.conn.isSchemaReady()) {
+			return { store: Promise.resolve(), presence: Promise.resolve() };
+		}
 
-		const names: string[] = [];
+		const storeNames: string[] = [];
+		const presenceNames: string[] = [];
 		for (const name of this.handlers.keys()) {
 			try {
-				this.conn.schemaDictionary.getAction(name);
-				names.push(name);
+				const action = this.conn.schemaDictionary.getAction(name);
+				if (action.scope === "presence") {
+					presenceNames.push(name);
+				} else {
+					storeNames.push(name);
+				}
 			} catch {
 				// Schema changed and the action no longer exists; drop the handler.
 				this.handlers.delete(name);
 			}
 		}
-		if (names.length > 0) void this.register(names).catch(() => {});
+		return {
+			store:
+				storeNames.length > 0 ? this.register(storeNames) : Promise.resolve(),
+			presence:
+				presenceNames.length > 0
+					? this.register(presenceNames)
+					: Promise.resolve(),
+		};
 	}
 
 	private async register(names: string[]): Promise<void> {
 		try {
-			await this.conn.dispatchNoRetry({
+			const dispatch = this.conn.dispatch
+				? (msg: OutboundRequest) => this.conn.dispatch?.(msg)
+				: (msg: OutboundRequest) => this.conn.dispatchNoRetry(msg);
+			await dispatch({
 				type: "ActionRegister",
 				action_ids: names,
 			});
 		} catch (err) {
-			const error = mapActionError(err);
+			const error =
+				err instanceof ZyncBaseError && err.retryable
+					? err
+					: mapActionError(err);
 			this.emitError(error);
 			throw error;
 		}

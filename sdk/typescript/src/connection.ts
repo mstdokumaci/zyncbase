@@ -140,6 +140,11 @@ export class ConnectionManager {
 	private storeNamespace: string;
 	private currentUserId: string | null = null;
 	private presenceNamespace: string;
+	/** The presence scope request of this socket; null until presence is first used. */
+	private presenceScopePromise: Promise<void> | null = null;
+	private presenceScopeReady = false;
+	private presenceScopeGen = 0;
+	private connectionGeneration = 0;
 
 	private processingPromise: Promise<void> = Promise.resolve();
 
@@ -200,13 +205,136 @@ export class ConnectionManager {
 		return this.presenceNamespace;
 	}
 
-	async setPresenceNamespace(ns: string): Promise<void> {
-		const ok = await this.dispatch({
-			type: "PresenceSetNamespace",
-			namespace: ns,
-		});
-		this.adoptUserId(ok, "PresenceSetNamespace");
+	isPresenceScopeReady(): boolean {
+		return this.presenceScopeReady;
+	}
+
+	/**
+	 * Establish the presence scope in `ns`, or switch it there. Presence
+	 * messages sent meanwhile wait for it.
+	 */
+	setPresenceNamespace(ns: string): Promise<void> {
+		if (
+			this.currentStatus === "connected" &&
+			this.presenceScopeReady &&
+			this.presenceNamespace === ns
+		) {
+			return Promise.resolve();
+		}
+		if (this.presenceScopePromise && this.presenceNamespace === ns) {
+			return this.presenceScopePromise;
+		}
+
+		const gen = ++this.presenceScopeGen;
+		const previousNs = this.presenceNamespace;
+		const previousReady = this.presenceScopeReady;
+		this.presenceScopeReady = false;
 		this.presenceNamespace = ns;
+
+		const scope: Promise<void> = this.dispatchWithRetry(
+			{ type: "PresenceSetNamespace", namespace: ns },
+			0,
+			undefined,
+			gen,
+		)
+			.then((ok) => {
+				if (gen !== this.presenceScopeGen) {
+					throw new ZyncBaseError(
+						"Request was superseded by a newer operation",
+						{
+							code: ErrorCodes.REQUEST_SUPERSEDED,
+							category: "state",
+							retryable: false,
+						},
+					);
+				}
+				this.adoptUserId(ok, "PresenceSetNamespace");
+				this.presenceScopeReady = true;
+			})
+			.catch((err: unknown) => {
+				if (gen === this.presenceScopeGen) {
+					if (
+						err instanceof ZyncBaseError &&
+						err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED
+					) {
+						this.presenceNamespace = previousNs;
+						this.presenceScopeReady = previousReady;
+					} else {
+						this.presenceScopeReady = false;
+					}
+				}
+				throw err;
+			})
+			.finally(() => {
+				if (this.presenceScopePromise === scope) {
+					this.presenceScopePromise = null;
+				}
+			});
+		this.presenceScopePromise = scope;
+		return scope;
+	}
+
+	/**
+	 * Sends `msg` once the scope it needs exists. A session starts with the
+	 * store scope only; the first message that needs the presence scope
+	 * requests it, so a store-only app needs no presence authorization.
+	 */
+	private withPresenceScope<T>(
+		msg: OutboundRequest,
+		send: () => Promise<T>,
+		target = "targetNamespace" in msg && typeof msg.targetNamespace === "string"
+			? msg.targetNamespace
+			: this.presenceNamespace,
+	): Promise<T> {
+		if (this.currentStatus !== "connected" || !this.needsPresenceScope(msg)) {
+			return send();
+		}
+		const pending = this.presenceScopePromise;
+		if (pending) {
+			return pending.then(
+				() => this.withPresenceScope(msg, send, target),
+				(err) => {
+					if (this.presenceScopeReady && this.presenceNamespace === target) {
+						return this.withPresenceScope(msg, send, target);
+					}
+					throw err;
+				},
+			);
+		}
+		if (this.presenceNamespace !== target) {
+			return Promise.reject(this.supersededError());
+		}
+		if (this.presenceScopeReady) return send();
+		return this.setPresenceNamespace(target).then(() =>
+			this.withPresenceScope(msg, send, target),
+		);
+	}
+	private supersededError(): ZyncBaseError {
+		return new ZyncBaseError("Request was superseded by a newer operation", {
+			code: ErrorCodes.REQUEST_SUPERSEDED,
+			category: "state",
+			retryable: false,
+		});
+	}
+
+	/** Presence messages, and action messages naming a presence-scoped action. */
+	private needsPresenceScope(msg: OutboundRequest): boolean {
+		switch (msg.type) {
+			case "ActionCall":
+				return this.isPresenceAction(msg.action_id);
+			case "ActionRegister":
+				return msg.action_ids.some((id) => this.isPresenceAction(id));
+			default:
+				return (
+					msg.type.startsWith("Presence") && msg.type !== "PresenceSetNamespace"
+				);
+		}
+	}
+
+	private isPresenceAction(id: string | number): boolean {
+		const name =
+			typeof id === "number" ? this.schemaDictionary.getActionName(id) : id;
+		return this.schemaDictionary.getAction(name).scope === "presence";
 	}
 
 	private adoptUserId(ok: OkResponse, request: string): void {
@@ -242,6 +370,7 @@ export class ConnectionManager {
 	}
 
 	private teardownSocket(): void {
+		this.connectionGeneration++;
 		this.currentUserId = null;
 		if (this.ws) {
 			const ws = this.ws;
@@ -288,6 +417,10 @@ export class ConnectionManager {
 		this.intentionalDisconnect = false;
 		this.pendingDisconnectError = null;
 		this.currentUserId = null;
+		this.presenceScopePromise = null;
+		this.presenceScopeReady = false;
+		this.presenceScopeGen++;
+		this.connectionGeneration++;
 		this.stopLiveness();
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
@@ -305,7 +438,6 @@ export class ConnectionManager {
 			ws.onopen = () => {
 				this.startLiveness();
 				this.setStoreNamespace(this.storeNamespace)
-					.then(() => this.setPresenceNamespace(this.presenceNamespace))
 					.then(() => {
 						this.reconnectAttempt = 0;
 						this.setStatus("connected");
@@ -426,7 +558,7 @@ export class ConnectionManager {
 	 * which must never be retried because the first attempt may have executed.
 	 */
 	dispatchNoRetry(msg: OutboundRequest): Promise<OkResponse> {
-		return this.sendRequest(msg).result;
+		return this.withPresenceScope(msg, () => this.sendRequest(msg).result);
 	}
 
 	/**
@@ -489,25 +621,61 @@ export class ConnectionManager {
 		return { id, result, debugType: encoded.debugMessage.type };
 	}
 
-	private async dispatchWithRetry(
+	private dispatchWithRetry(
 		msg: OutboundRequest,
 		attempt: number,
 		responseTableIndex?: number,
+		expectedScopeGen?: number,
+		targetNamespace?: string,
+		sessionGeneration?: number,
 	): Promise<OkResponse> {
-		const { result, debugType } = this.sendRequest(msg, responseTableIndex);
-
-		try {
-			return await result;
-		} catch (err) {
-			if (this.intentionalDisconnect) throw err;
-			return this.handleRetryOrThrow(
-				msg,
-				attempt,
-				err,
-				debugType,
-				responseTableIndex,
-			);
+		const target =
+			targetNamespace ??
+			("targetNamespace" in msg && typeof msg.targetNamespace === "string"
+				? msg.targetNamespace
+				: this.presenceNamespace);
+		const session =
+			sessionGeneration ??
+			(this.needsPresenceScope(msg) || msg.type === "PresenceSetNamespace"
+				? this.connectionGeneration
+				: undefined);
+		if (session !== undefined && session !== this.connectionGeneration) {
+			return Promise.reject(this.supersededError());
 		}
+		return this.withPresenceScope(
+			msg,
+			async () => {
+				if (session !== undefined && session !== this.connectionGeneration) {
+					throw this.supersededError();
+				}
+				const scopeGen =
+					expectedScopeGen ??
+					(msg.type === "PresenceSetNamespace"
+						? this.presenceScopeGen
+						: undefined);
+				if (scopeGen !== undefined && scopeGen !== this.presenceScopeGen) {
+					throw this.supersededError();
+				}
+				const { result, debugType } = this.sendRequest(msg, responseTableIndex);
+
+				try {
+					return await result;
+				} catch (err) {
+					if (this.intentionalDisconnect) throw err;
+					return this.handleRetryOrThrow(
+						msg,
+						attempt,
+						err,
+						debugType,
+						responseTableIndex,
+						scopeGen,
+						target,
+						session,
+					);
+				}
+			},
+			target,
+		);
 	}
 
 	private async handleRetryOrThrow(
@@ -516,7 +684,20 @@ export class ConnectionManager {
 		err: unknown,
 		debugType: string,
 		responseTableIndex?: number,
+		expectedScopeGen?: number,
+		targetNamespace?: string,
+		sessionGeneration?: number,
 	): Promise<OkResponse> {
+		if (
+			(expectedScopeGen !== undefined &&
+				expectedScopeGen !== this.presenceScopeGen) ||
+			(sessionGeneration !== undefined &&
+				sessionGeneration !== this.connectionGeneration) ||
+			(msg.type === "PresenceSetNamespace" &&
+				msg.namespace !== this.presenceNamespace)
+		) {
+			throw this.supersededError();
+		}
 		if (!this.retryPolicy.shouldRetry(err, attempt)) throw err;
 
 		const delay = this.retryPolicy.getDelay(err, attempt);
@@ -527,7 +708,24 @@ export class ConnectionManager {
 		}
 		await sleep(delay);
 		if (this.intentionalDisconnect) throw err;
-		return this.dispatchWithRetry(msg, attempt + 1, responseTableIndex);
+		if (
+			(expectedScopeGen !== undefined &&
+				expectedScopeGen !== this.presenceScopeGen) ||
+			(sessionGeneration !== undefined &&
+				sessionGeneration !== this.connectionGeneration) ||
+			(msg.type === "PresenceSetNamespace" &&
+				msg.namespace !== this.presenceNamespace)
+		) {
+			throw this.supersededError();
+		}
+		return this.dispatchWithRetry(
+			msg,
+			attempt + 1,
+			responseTableIndex,
+			expectedScopeGen,
+			targetNamespace,
+			sessionGeneration,
+		);
 	}
 
 	authRefresh(token: string): Promise<void> {
@@ -550,6 +748,10 @@ export class ConnectionManager {
 
 	disconnect(): void {
 		this.intentionalDisconnect = true;
+		this.presenceScopePromise = null;
+		this.presenceScopeReady = false;
+		this.presenceScopeGen++;
+		this.connectionGeneration++;
 		this.currentUserId = null;
 		this.stopLiveness();
 		if (this.reconnectTimer !== null) {
@@ -614,6 +816,7 @@ export class ConnectionManager {
 	}
 
 	private handleSocketClose(code: number, reason: string): void {
+		this.connectionGeneration++;
 		this.currentUserId = null;
 		this.stopLiveness();
 		const closeError = socketCloseError(code, reason);

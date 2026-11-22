@@ -89,10 +89,10 @@ Initiates the connection sequence:
 1. **Ticket exchange** (HTTP POST `/auth/ticket`) — obtains a single-use ticket from the external JWT
 2. **WebSocket upgrade** (`GET /ws?ticket=...`) — opens the WebSocket connection
 3. **`SchemaSync` push** — the server sends a `SchemaSync` message with table and field arrays; the SDK builds its integer routing dictionary from this payload (per ADR-009)
-4. **Scope resolution** — the SDK sends initial store/presence namespace selections; the server resolves each namespace and internal `users.id`
-5. **Recovery** — the SDK replays the application's store subscriptions, presence subscriptions, and action registrations
+4. **Scope resolution** — the SDK sends the store namespace selection; the server resolves the namespace and internal `users.id`. The presence scope is requested later, by the first presence call or presence-scoped action ([Presence API](./presence-api.md)), so a store-only app needs no presence authorization.
+5. **Recovery** — the SDK replays the application's store subscriptions, presence subscriptions, and action registrations; replaying presence subscriptions or presence-scoped registrations requests the presence scope again
 
-The SDK waits for all five steps before resolving the `connect()` promise, so a resolved promise means the client is fully restored. Presence scope acknowledgement installs the canonical internal user UUID before replay begins.
+The SDK waits for all five steps before resolving the `connect()` promise, so a resolved promise means the client is fully restored. The store scope acknowledgement installs the canonical internal user UUID before replay begins.
 
 ```typescript
 await client.connect()
@@ -134,7 +134,7 @@ The SDK therefore emits three ordered events:
 
 | Event | Fires when |
 |-------|-----------|
-| `connected` | The WebSocket is open and the initial required store and presence scopes are resolved. |
+| `connected` | The WebSocket is open and the store scope is resolved. |
 | `reconnected` | The same, but a connection existed earlier in this process. Does not fire on a first connect. |
 | `synced` | Store subscriptions, presence subscriptions, and action registrations have all been replayed. The client is fully restored. |
 
