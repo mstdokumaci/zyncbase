@@ -233,15 +233,6 @@ export class ZyncBaseClient<
 		const switchGeneration = ++this.presenceSwitchGeneration;
 		try {
 			await this.conn.setPresenceNamespace(namespace);
-			if (this.presenceSwitchGeneration !== switchGeneration) return;
-			if (this.conn.getPresenceNamespace() !== namespace) {
-				return;
-			}
-			this.presenceImpl.invalidate();
-			await this.presenceImpl.replaySubscriptions();
-			const replay = this.actionsImpl.replayRegistrations();
-			replay.store.catch(() => {});
-			replay.presence.catch(() => {});
 		} catch (err) {
 			if (this.presenceSwitchGeneration === switchGeneration) {
 				if (
@@ -257,6 +248,13 @@ export class ZyncBaseClient<
 			}
 			throw err;
 		}
+		if (this.presenceSwitchGeneration !== switchGeneration) return;
+		if (this.conn.getPresenceNamespace() !== namespace) return;
+		this.presenceImpl.invalidate();
+		await this.presenceImpl.replaySubscriptions();
+		const replay = this.actionsImpl.replayRegistrations();
+		replay.store.catch(() => {});
+		replay.presence.catch(() => {});
 	}
 
 	/**

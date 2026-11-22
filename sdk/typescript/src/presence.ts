@@ -37,6 +37,7 @@ export class PresenceImpl implements Presence {
 	private userSubPromise: Promise<void> | null = null;
 	private userCleanupPromise: Promise<void> | null = null;
 	private sharedSubPromise: Promise<void> | null = null;
+	private sharedCleanupPromise: Promise<void> | null = null;
 	private userSubGen = 0;
 	private sharedSubGen = 0;
 	private userCallbacks = new Set<(users: PresenceEntry[]) => void>();
@@ -235,7 +236,18 @@ export class PresenceImpl implements Presence {
 
 	private ensureSharedSubscription(): Promise<void> {
 		if (this.sharedSubId !== null) return Promise.resolve();
-		if (this.sharedSubPromise !== null) return this.sharedSubPromise;
+		if (this.sharedSubPromise !== null) {
+			return this.sharedSubPromise.then(() => {
+				if (this.sharedSubId === null && this.sharedCallbacks.size > 0) {
+					return this.ensureSharedSubscription();
+				}
+			});
+		}
+		if (this.sharedCleanupPromise !== null) {
+			return this.sharedCleanupPromise.then(() =>
+				this.ensureSharedSubscription(),
+			);
+		}
 		const gen = this.sharedSubGen;
 		const pending = this.establishSharedSubscription(gen).catch((err) => {
 			const error = toZyncError(err, "Presence subscribeShared failed");
@@ -273,10 +285,18 @@ export class PresenceImpl implements Presence {
 				return;
 			}
 			if (this.sharedCallbacks.size === 0) {
-				await this.dispatchAccepted(
+				const unsub = this.dispatchAccepted(
 					{ type: "PresenceUnsubscribeShared", subId: ok.subId },
 					"Presence unsubscribeShared failed",
 				);
+				this.sharedCleanupPromise = unsub;
+				const clear = () => {
+					if (this.sharedCleanupPromise === unsub) {
+						this.sharedCleanupPromise = null;
+					}
+				};
+				unsub.then(clear, clear);
+				await unsub;
 				return;
 			}
 			this.sharedSubId = ok.subId;
@@ -301,10 +321,18 @@ export class PresenceImpl implements Presence {
 			this.sharedSubId = null;
 			this.sharedCache = null;
 			if (subId !== null) {
-				return this.dispatchAccepted(
+				const unsub = this.dispatchAccepted(
 					{ type: "PresenceUnsubscribeShared", subId },
 					"Presence unsubscribeShared failed",
 				);
+				this.sharedCleanupPromise = unsub;
+				const clear = () => {
+					if (this.sharedCleanupPromise === unsub) {
+						this.sharedCleanupPromise = null;
+					}
+				};
+				unsub.then(clear, clear);
+				return unsub;
 			}
 			if (this.sharedSubPromise !== null) return this.sharedSubPromise;
 		}
