@@ -35,6 +35,7 @@ export class PresenceImpl implements Presence {
 	private userSubId: number | null = null;
 	private sharedSubId: number | null = null;
 	private userSubPromise: Promise<void> | null = null;
+	private userCleanupPromise: Promise<void> | null = null;
 	private sharedSubPromise: Promise<void> | null = null;
 	private userSubGen = 0;
 	private sharedSubGen = 0;
@@ -126,8 +127,9 @@ export class PresenceImpl implements Presence {
 	}
 
 	setShared(data: Record<string, unknown>): Promise<void> {
+		const targetNamespace = this.conn.getPresenceNamespace?.() ?? null;
 		return this.dispatchAccepted(
-			{ type: "PresenceSetShared", data },
+			{ type: "PresenceSetShared", data, targetNamespace },
 			"Presence setShared failed",
 		);
 	}
@@ -138,7 +140,16 @@ export class PresenceImpl implements Presence {
 
 	private ensureUserSubscription(): Promise<void> {
 		if (this.userSubId !== null) return Promise.resolve();
-		if (this.userSubPromise !== null) return this.userSubPromise;
+		if (this.userSubPromise !== null) {
+			return this.userSubPromise.then(() => {
+				if (this.userSubId === null && this.hasUserSubscribers()) {
+					return this.ensureUserSubscription();
+				}
+			});
+		}
+		if (this.userCleanupPromise !== null) {
+			return this.userCleanupPromise.then(() => this.ensureUserSubscription());
+		}
 		const gen = this.userSubGen;
 		const pending = this.establishUserSubscription(gen).catch((err) => {
 			const error = toZyncError(err, "Presence subscribe failed");
@@ -173,10 +184,16 @@ export class PresenceImpl implements Presence {
 				return;
 			}
 			if (!this.hasUserSubscribers()) {
-				await this.dispatchAccepted(
+				const unsub = this.dispatchAccepted(
 					{ type: "PresenceUnsubscribe", subId: ok.subId },
 					"Presence unsubscribe failed",
 				);
+				this.userCleanupPromise = unsub;
+				const clear = () => {
+					if (this.userCleanupPromise === unsub) this.userCleanupPromise = null;
+				};
+				unsub.then(clear, clear);
+				await unsub;
 				return;
 			}
 			this.userSubId = ok.subId;
@@ -200,10 +217,16 @@ export class PresenceImpl implements Presence {
 			this.userSubId = null;
 			this.clearUserCache();
 			if (subId !== null) {
-				return this.dispatchAccepted(
+				const unsub = this.dispatchAccepted(
 					{ type: "PresenceUnsubscribe", subId },
 					"Presence unsubscribe failed",
 				);
+				this.userCleanupPromise = unsub;
+				const clear = () => {
+					if (this.userCleanupPromise === unsub) this.userCleanupPromise = null;
+				};
+				unsub.then(clear, clear);
+				return unsub;
 			}
 			if (this.userSubPromise !== null) return this.userSubPromise;
 		}

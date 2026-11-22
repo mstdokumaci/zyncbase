@@ -329,7 +329,32 @@ export class ZyncBaseClient<
 		]);
 		await this.conn.awaitSchemaSync();
 		const actions = this.actionsImpl.replayRegistrations();
-		await Promise.allSettled([actions.store, actions.presence]);
+		const [storeActions, presenceActions] = await Promise.allSettled([
+			actions.store,
+			actions.presence,
+		]);
+		if (storeActions.status === "rejected") {
+			const error = toZyncError(
+				storeActions.reason,
+				"Store action registration failed",
+				false,
+			);
+			if (error.retryable) throw error;
+		}
+		if (presenceActions.status === "rejected") {
+			const error = toZyncError(
+				presenceActions.reason,
+				"Presence action registration failed",
+				false,
+			);
+			if (
+				error.retryable &&
+				store.status !== "rejected" &&
+				storeActions.status !== "rejected"
+			) {
+				throw error;
+			}
+		}
 		if (presence.status === "rejected") {
 			const error = toZyncError(presence.reason, "Restore failed", false);
 			if (!error.retryable || store.status === "rejected") {

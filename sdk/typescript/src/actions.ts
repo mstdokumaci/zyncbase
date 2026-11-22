@@ -29,6 +29,8 @@ import type {
 
 /** The subset of ConnectionManager that ActionsImpl depends on. */
 export interface ActionsConnection {
+	/** Send a request with automatic retry (e.g. registration). */
+	dispatch?(msg: OutboundRequest): Promise<OkResponse>;
 	/** Send a request without automatic retry (action calls are never retried). */
 	dispatchNoRetry(msg: OutboundRequest): Promise<OkResponse>;
 	/** Encode a one-way outbound message (ActionReply). */
@@ -127,7 +129,10 @@ export class ActionsImpl implements Actions {
 
 	private async register(names: string[]): Promise<void> {
 		try {
-			await this.conn.dispatchNoRetry({
+			const dispatch = this.conn.dispatch
+				? (msg: OutboundRequest) => this.conn.dispatch?.(msg)
+				: (msg: OutboundRequest) => this.conn.dispatchNoRetry(msg);
+			await dispatch({
 				type: "ActionRegister",
 				action_ids: names,
 			});

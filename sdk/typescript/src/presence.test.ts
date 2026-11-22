@@ -698,6 +698,68 @@ describe("PresenceImpl", () => {
 		expect(presence.get(staleUserId)).toBeUndefined();
 	});
 
+	test("a listener joining during stale unsubscribe gets a new subscription", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		let subscribeCalls = 0;
+		let unsubscribeCalls = 0;
+		let resolveReplay: (value: OkResponse) => void = () => {};
+		const replayPromise = new Promise<OkResponse>((resolve) => {
+			resolveReplay = resolve;
+		});
+		let resolveUnsubscribe: (value: OkResponse) => void = () => {};
+		const unsubscribePromise = new Promise<OkResponse>((resolve) => {
+			resolveUnsubscribe = resolve;
+		});
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				subscribeCalls++;
+				if (subscribeCalls === 1) {
+					return Promise.resolve({
+						type: "ok",
+						id: 0,
+						subId: 100,
+						users: [],
+					} as OkResponse);
+				}
+				if (subscribeCalls === 2) return replayPromise;
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 300,
+					users: [],
+				} as OkResponse);
+			}
+			if (msg.type === "PresenceUnsubscribe") {
+				unsubscribeCalls++;
+				return unsubscribePromise;
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		const unsubscribe = await presence.subscribe(() => {});
+		presence.invalidate();
+		const replaying = presence.replaySubscriptions();
+		const closing = unsubscribe();
+		closing.catch(() => {});
+		resolveReplay({
+			type: "ok",
+			id: 0,
+			subId: 200,
+			users: [],
+		} as OkResponse);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(unsubscribeCalls).toBe(1);
+
+		const next = presence.subscribe(() => {});
+		next.catch(() => {});
+		resolveUnsubscribe({ type: "ok", id: 0 } as OkResponse);
+		await replaying;
+		await next;
+
+		expect(subscribeCalls).toBe(3);
+	});
 	test("a stale subscription completion does not unsubscribe a replacement", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);

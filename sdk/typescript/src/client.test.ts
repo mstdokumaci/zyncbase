@@ -553,6 +553,101 @@ describe("ZyncBaseClient", () => {
 		restoreWebSocket();
 	});
 
+	test("a retryable store action replay blocks synced until it recovers", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		try {
+			const synced: string[] = [];
+			client.on("synced", () => synced.push("synced"));
+			const triggerActionSchema = () =>
+				mockWs.triggerMessage(
+					encodeToBuffer({
+						type: "SchemaSync",
+						version: "1.0.0",
+						tables: ["users"],
+						fields: [["id", "name"]],
+						fieldFlags: [[0b10, 0]],
+						actions: ["checkout"],
+						actionParams: [[]],
+						actionReturns: [["order_id"]],
+						actionFlags: [0b00],
+					}),
+				);
+
+			const connected = client.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			triggerNamespaceOk(mockWs);
+			triggerActionSchema();
+			await connected;
+
+			const registered = client.actions.handle("checkout", () => ({
+				order_id: "order-1",
+			}));
+			await new Promise((r) => setTimeout(r, 0));
+			const initial = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			expect(initial.type).toBe(WireMessageType.ActionRegister);
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: initial.id }));
+			await registered;
+			client.disconnect();
+
+			const reconnecting = client.connect();
+			reconnecting.catch(() => {});
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			await handshakeNamespaces(mockWs);
+			const marker = mockWs.sentMessages.length;
+			triggerActionSchema();
+			await waitFor(
+				() =>
+					mockWs.sentMessages
+						.slice(marker)
+						.some(
+							(message) =>
+								(decode(message) as { type: number }).type ===
+								WireMessageType.ActionRegister,
+						),
+				1_000,
+			);
+			const failed = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: failed.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 50));
+			expect(synced).toHaveLength(1);
+
+			await waitFor(
+				() =>
+					mockWs.sentMessages
+						.slice(marker)
+						.filter(
+							(message) =>
+								(decode(message) as { type: number }).type ===
+								WireMessageType.ActionRegister,
+						).length >= 2,
+				1_000,
+			);
+			const retried = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: retried.id }));
+			await reconnecting;
+			await waitFor(() => synced.length === 2);
+		} finally {
+			client.disconnect();
+			restoreWebSocket();
+		}
+	});
 	test("a rejected presence switch preserves active presence consumers", async () => {
 		installMockWebSocket();
 		const client = createClient({

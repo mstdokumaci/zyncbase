@@ -142,7 +142,6 @@ export class ConnectionManager {
 	private presenceNamespace: string;
 	/** The presence scope request of this socket; null until presence is first used. */
 	private presenceScopePromise: Promise<void> | null = null;
-	private presenceScopeActivePromise: Promise<void> | null = null;
 	private presenceScopeReady = false;
 	private presenceScopeGen = 0;
 
@@ -209,27 +208,6 @@ export class ConnectionManager {
 		return this.presenceScopeReady;
 	}
 
-	ensurePresenceScope(): Promise<void> {
-		if (this.currentStatus !== "connected") {
-			return Promise.reject(
-				new ZyncBaseError("Connection is not ready", {
-					code: ErrorCodes.CONNECTION_FAILED,
-					category: "network",
-					retryable: true,
-				}),
-			);
-		}
-		if (this.presenceScopeReady) {
-			return Promise.resolve();
-		}
-		if (this.presenceScopePromise) {
-			return this.presenceScopePromise;
-		}
-
-		this.setPresenceNamespace(this.presenceNamespace);
-		return this.presenceScopePromise ?? Promise.resolve();
-	}
-
 	/**
 	 * Establish the presence scope in `ns`, or switch it there. Presence
 	 * messages sent meanwhile wait for it.
@@ -242,8 +220,8 @@ export class ConnectionManager {
 		) {
 			return Promise.resolve();
 		}
-		if (this.presenceScopeActivePromise && this.presenceNamespace === ns) {
-			return this.presenceScopeActivePromise;
+		if (this.presenceScopePromise && this.presenceNamespace === ns) {
+			return this.presenceScopePromise;
 		}
 
 		const gen = ++this.presenceScopeGen;
@@ -285,32 +263,13 @@ export class ConnectionManager {
 					}
 				}
 				throw err;
+			})
+			.finally(() => {
+				if (this.presenceScopePromise === scope) {
+					this.presenceScopePromise = null;
+				}
 			});
-
-		const scopeWaiter = scope.catch((err: unknown) => {
-			if (
-				err instanceof ZyncBaseError &&
-				err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED &&
-				this.presenceScopeReady
-			) {
-				return;
-			}
-			throw err;
-		});
-		scopeWaiter.catch(() => {});
-
-		const cleanup = () => {
-			if (this.presenceScopeActivePromise === scope) {
-				this.presenceScopeActivePromise = null;
-			}
-			if (this.presenceScopePromise === scopeWaiter) {
-				this.presenceScopePromise = null;
-			}
-		};
-		scope.then(cleanup, cleanup);
-
-		this.presenceScopeActivePromise = scope;
-		this.presenceScopePromise = scopeWaiter;
+		this.presenceScopePromise = scope;
 		return scope;
 	}
 
@@ -322,26 +281,38 @@ export class ConnectionManager {
 	private withPresenceScope<T>(
 		msg: OutboundRequest,
 		send: () => Promise<T>,
+		target = "targetNamespace" in msg && typeof msg.targetNamespace === "string"
+			? msg.targetNamespace
+			: this.presenceNamespace,
 	): Promise<T> {
 		if (this.currentStatus !== "connected" || !this.needsPresenceScope(msg)) {
 			return send();
 		}
-		const expectedNs =
-			"targetNamespace" in msg && typeof msg.targetNamespace === "string"
-				? msg.targetNamespace
-				: this.presenceNamespace;
-		if (this.presenceScopeReady && this.presenceNamespace === expectedNs) {
-			return send();
+		const pending = this.presenceScopePromise;
+		if (pending) {
+			return pending.then(
+				() => this.withPresenceScope(msg, send, target),
+				(err) => {
+					if (this.presenceScopeReady && this.presenceNamespace === target) {
+						return this.withPresenceScope(msg, send, target);
+					}
+					throw err;
+				},
+			);
 		}
-		return this.ensurePresenceScope().then(() => {
-			if (this.presenceNamespace !== expectedNs) {
-				throw new ZyncBaseError("Request was superseded by a newer operation", {
-					code: ErrorCodes.REQUEST_SUPERSEDED,
-					category: "state",
-					retryable: false,
-				});
-			}
-			return send();
+		if (this.presenceNamespace !== target) {
+			return Promise.reject(this.supersededError());
+		}
+		if (this.presenceScopeReady) return send();
+		return this.setPresenceNamespace(target).then(() =>
+			this.withPresenceScope(msg, send, target),
+		);
+	}
+	private supersededError(): ZyncBaseError {
+		return new ZyncBaseError("Request was superseded by a newer operation", {
+			code: ErrorCodes.REQUEST_SUPERSEDED,
+			category: "state",
+			retryable: false,
 		});
 	}
 
@@ -445,7 +416,6 @@ export class ConnectionManager {
 		this.pendingDisconnectError = null;
 		this.currentUserId = null;
 		this.presenceScopePromise = null;
-		this.presenceScopeActivePromise = null;
 		this.presenceScopeReady = false;
 		this.presenceScopeGen++;
 		this.stopLiveness();
@@ -653,34 +623,43 @@ export class ConnectionManager {
 		attempt: number,
 		responseTableIndex?: number,
 		expectedScopeGen?: number,
+		targetNamespace?: string,
 	): Promise<OkResponse> {
-		return this.withPresenceScope(msg, async () => {
-			if (
-				expectedScopeGen !== undefined &&
-				expectedScopeGen !== this.presenceScopeGen
-			) {
-				throw new ZyncBaseError("Request was superseded by a newer operation", {
-					code: ErrorCodes.REQUEST_SUPERSEDED,
-					category: "state",
-					retryable: false,
-				});
-			}
-			const { result, debugType } = this.sendRequest(msg, responseTableIndex);
+		const target =
+			targetNamespace ??
+			("targetNamespace" in msg && typeof msg.targetNamespace === "string"
+				? msg.targetNamespace
+				: this.presenceNamespace);
+		return this.withPresenceScope(
+			msg,
+			async () => {
+				const scopeGen =
+					expectedScopeGen ??
+					(msg.type === "PresenceSetNamespace"
+						? this.presenceScopeGen
+						: undefined);
+				if (scopeGen !== undefined && scopeGen !== this.presenceScopeGen) {
+					throw this.supersededError();
+				}
+				const { result, debugType } = this.sendRequest(msg, responseTableIndex);
 
-			try {
-				return await result;
-			} catch (err) {
-				if (this.intentionalDisconnect) throw err;
-				return this.handleRetryOrThrow(
-					msg,
-					attempt,
-					err,
-					debugType,
-					responseTableIndex,
-					expectedScopeGen,
-				);
-			}
-		});
+				try {
+					return await result;
+				} catch (err) {
+					if (this.intentionalDisconnect) throw err;
+					return this.handleRetryOrThrow(
+						msg,
+						attempt,
+						err,
+						debugType,
+						responseTableIndex,
+						scopeGen,
+						target,
+					);
+				}
+			},
+			target,
+		);
 	}
 
 	private async handleRetryOrThrow(
@@ -690,6 +669,7 @@ export class ConnectionManager {
 		debugType: string,
 		responseTableIndex?: number,
 		expectedScopeGen?: number,
+		targetNamespace?: string,
 	): Promise<OkResponse> {
 		if (
 			(expectedScopeGen !== undefined &&
@@ -697,11 +677,7 @@ export class ConnectionManager {
 			(msg.type === "PresenceSetNamespace" &&
 				msg.namespace !== this.presenceNamespace)
 		) {
-			throw new ZyncBaseError("Request was superseded by a newer operation", {
-				code: ErrorCodes.REQUEST_SUPERSEDED,
-				category: "state",
-				retryable: false,
-			});
+			throw this.supersededError();
 		}
 		if (!this.retryPolicy.shouldRetry(err, attempt)) throw err;
 
@@ -719,17 +695,14 @@ export class ConnectionManager {
 			(msg.type === "PresenceSetNamespace" &&
 				msg.namespace !== this.presenceNamespace)
 		) {
-			throw new ZyncBaseError("Request was superseded by a newer operation", {
-				code: ErrorCodes.REQUEST_SUPERSEDED,
-				category: "state",
-				retryable: false,
-			});
+			throw this.supersededError();
 		}
 		return this.dispatchWithRetry(
 			msg,
 			attempt + 1,
 			responseTableIndex,
 			expectedScopeGen,
+			targetNamespace,
 		);
 	}
 
@@ -754,7 +727,6 @@ export class ConnectionManager {
 	disconnect(): void {
 		this.intentionalDisconnect = true;
 		this.presenceScopePromise = null;
-		this.presenceScopeActivePromise = null;
 		this.presenceScopeReady = false;
 		this.presenceScopeGen++;
 		this.currentUserId = null;

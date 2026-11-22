@@ -495,6 +495,52 @@ describe("ConnectionManager", () => {
 			expect(namespaces).toEqual(["first", "second", "first"]);
 			manager.disconnect();
 		});
+		test("a shared presence retry is rejected after a namespace switch", async () => {
+			const { manager, mockWs } = makeManager({ reconnectDelay: 10 });
+			await connectManager(manager, mockWs);
+			const setup = manager.setPresenceNamespace("public");
+			ack(mockWs, 2);
+			await setup;
+
+			const shared = manager.dispatch({
+				type: "PresenceSetShared",
+				data: {},
+			});
+			const outcome = shared.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const sharedRequest = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: sharedRequest.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 50,
+				}),
+			);
+			await tick();
+
+			const switched = manager.setPresenceNamespace("other");
+			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			ack(mockWs, scope.id);
+			await switched;
+			await new Promise((r) => setTimeout(r, 100));
+
+			const sharedMessages = mockWs.sentMessages
+				.map((message) => decode(message) as { type: number })
+				.filter(
+					(message) => message.type === WireMessageType.PresenceSetShared,
+				);
+			expect(sharedMessages).toHaveLength(1);
+			expect(await outcome).toBe("REQUEST_SUPERSEDED");
+			manager.disconnect();
+		});
 		test("a queued subscription is rejected when its scope is replaced", async () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);
