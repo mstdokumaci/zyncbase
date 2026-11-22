@@ -941,7 +941,7 @@ test("explicit disconnect grants the full reconnect window", () => {
 	expect(world.dirtyRemovedPlayerRows.has("alice")).toBe(true);
 });
 
-test("crossing a country chunk boundary refreshes the roster position, plain moves do not", () => {
+test("crossing a country chunk boundary updates the in-memory position without a roster write", () => {
 	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
 	const data = {
 		name: "Walker",
@@ -958,7 +958,7 @@ test("crossing a country chunk boundary refreshes the roster position, plain mov
 	player.last_y = 10;
 	world.dirtyPlayerRows.clear();
 	world.tick(1);
-	// Still inside the chunk: no roster write.
+	// Still inside the chunk: no position change, no roster write.
 	expect(countryChunkIndex(player.x, player.y)).toBe(
 		countryChunkIndex(COUNTRY_CHUNK_WIDTH - 1, 10),
 	);
@@ -970,11 +970,13 @@ test("crossing a country chunk boundary refreshes the roster position, plain mov
 		if (player.x === COUNTRY_CHUNK_WIDTH) break;
 	}
 	expect(player.x).toBe(COUNTRY_CHUNK_WIDTH);
+	// The next join/capture/leave publication reads this current position, but
+	// the crossing itself does not fan a position-only roster row out.
 	expect(world.playerRow("walker")).toMatchObject({
 		last_x: COUNTRY_CHUNK_WIDTH,
 		last_y: 10,
 	});
-	expect(world.dirtyPlayerRows.has("walker")).toBe(true);
+	expect(world.dirtyPlayerRows.has("walker")).toBe(false);
 });
 
 test("restore clears positions and queues stale roster rows for removal", () => {

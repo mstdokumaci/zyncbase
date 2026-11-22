@@ -1023,13 +1023,13 @@ export class World {
 		player.y = y;
 		const after = countryChunkIndex(x, y);
 		this.dirtyUserChunks.add(userChunkIndex(x, y));
-		// Roster position tracks country-chunk crossings only (not every cell):
-		// exact enough for O(1) locate, quiet enough to keep the cold
-		// subscription cold. per-tick sync if locate misses on fast movers.
+		// Keep the in-memory position current for the next roster publication
+		// (join, capture, leave); a crossing does not queue a roster write, so a
+		// moving player does not fan a position-only row out to every peer. The
+		// client follows the per-tick user-chunk dots.
 		if (after !== before) {
 			player.last_x = x;
 			player.last_y = y;
-			this.dirtyPlayerRows.add(player.id);
 		}
 		if (!this.land[to] || owner === player.country_id) return;
 		// A claim fully surrounded by one enemy country is a one-cell hole the

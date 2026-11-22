@@ -1125,10 +1125,11 @@ function hasOwnRow(
 }
 
 function applyOwnRow(me: PlayerRow) {
-	// The join reply carries the slot, but a reconnect that lands on an older
-	// roster read can arrive first; the row is authoritative either way.
+	// The join reply is current; the roster row may be from the last capture or
+	// leave now that crossings no longer publish positions.
 	mySlot = me.slot;
-	session.retarget(me.last_x, me.last_y);
+	const position = admittedPosition ?? { x: me.last_x, y: me.last_y };
+	session.retarget(position.x, position.y);
 	ownRowMisses = 0;
 }
 
