@@ -142,6 +142,7 @@ export class ConnectionManager {
 	private presenceNamespace: string;
 	/** The presence scope request of this socket; null until presence is first used. */
 	private presenceScopePromise: Promise<void> | null = null;
+	private presenceScopeActivePromise: Promise<void> | null = null;
 	private presenceScopeReady = false;
 	private presenceScopeGen = 0;
 
@@ -208,24 +209,25 @@ export class ConnectionManager {
 		return this.presenceScopeReady;
 	}
 
-	async ensurePresenceScope(
-		ns: string = this.presenceNamespace,
-	): Promise<void> {
+	ensurePresenceScope(): Promise<void> {
 		if (this.currentStatus !== "connected") {
-			throw new ZyncBaseError("Connection is not ready", {
-				code: ErrorCodes.CONNECTION_FAILED,
-				category: "network",
-				retryable: true,
-			});
+			return Promise.reject(
+				new ZyncBaseError("Connection is not ready", {
+					code: ErrorCodes.CONNECTION_FAILED,
+					category: "network",
+					retryable: true,
+				}),
+			);
 		}
-		if (this.presenceScopeReady && this.presenceNamespace === ns) {
-			return;
+		if (this.presenceScopeReady) {
+			return Promise.resolve();
 		}
-		if (this.presenceScopePromise && this.presenceNamespace === ns) {
+		if (this.presenceScopePromise) {
 			return this.presenceScopePromise;
 		}
 
-		return this.setPresenceNamespace(ns);
+		this.setPresenceNamespace(this.presenceNamespace);
+		return this.presenceScopePromise ?? Promise.resolve();
 	}
 
 	/**
@@ -240,8 +242,8 @@ export class ConnectionManager {
 		) {
 			return Promise.resolve();
 		}
-		if (this.presenceScopePromise && this.presenceNamespace === ns) {
-			return this.presenceScopePromise;
+		if (this.presenceScopeActivePromise && this.presenceNamespace === ns) {
+			return this.presenceScopeActivePromise;
 		}
 
 		const gen = ++this.presenceScopeGen;
@@ -283,14 +285,32 @@ export class ConnectionManager {
 					}
 				}
 				throw err;
-			})
-			.finally(() => {
-				if (this.presenceScopePromise === scope) {
-					this.presenceScopePromise = null;
-				}
 			});
 
-		this.presenceScopePromise = scope;
+		const scopeWaiter = scope.catch((err: unknown) => {
+			if (
+				err instanceof ZyncBaseError &&
+				err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED &&
+				this.presenceScopeReady
+			) {
+				return;
+			}
+			throw err;
+		});
+		scopeWaiter.catch(() => {});
+
+		const cleanup = () => {
+			if (this.presenceScopeActivePromise === scope) {
+				this.presenceScopeActivePromise = null;
+			}
+			if (this.presenceScopePromise === scopeWaiter) {
+				this.presenceScopePromise = null;
+			}
+		};
+		scope.then(cleanup, cleanup);
+
+		this.presenceScopeActivePromise = scope;
+		this.presenceScopePromise = scopeWaiter;
 		return scope;
 	}
 
@@ -425,6 +445,7 @@ export class ConnectionManager {
 		this.pendingDisconnectError = null;
 		this.currentUserId = null;
 		this.presenceScopePromise = null;
+		this.presenceScopeActivePromise = null;
 		this.presenceScopeReady = false;
 		this.stopLiveness();
 		this.setStatus("connecting");
@@ -732,6 +753,7 @@ export class ConnectionManager {
 	disconnect(): void {
 		this.intentionalDisconnect = true;
 		this.presenceScopePromise = null;
+		this.presenceScopeActivePromise = null;
 		this.presenceScopeReady = false;
 		this.currentUserId = null;
 		this.stopLiveness();

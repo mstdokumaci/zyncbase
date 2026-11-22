@@ -761,9 +761,10 @@ describe("ZyncBaseClient", () => {
 			);
 			const switching = client.setPresenceNamespace("other");
 			await new Promise((r) => setTimeout(r, 20));
-			const replacement = decode(
-				mockWs.sentMessages.at(-1) as Uint8Array,
-			) as { id: number; type: number };
+			const replacement = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
 			expect(replacement.type).toBe(WireMessageType.PresenceSetNamespace);
 			mockWs.triggerMessage(
 				encodeToBuffer({
@@ -867,6 +868,87 @@ describe("ZyncBaseClient", () => {
 		}
 	});
 
+	test("a delayed rejected switch resumes a queued presence set in the old namespace", async () => {
+		installMockWebSocket();
+		const client = createClient({
+			...defaultOptions,
+			presenceNamespace: "public",
+		});
+		try {
+			const connected = client.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			triggerNamespaceOk(mockWs);
+			triggerSchemaSync(mockWs);
+			await connected;
+
+			const scopeSetup = client.setPresenceNamespace("public");
+			await new Promise((r) => setTimeout(r, 0));
+			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: scope.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await scopeSetup;
+
+			const immediate = client.presence.set({});
+			await new Promise((r) => setTimeout(r, 0));
+			const immediateSet = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id: immediateSet.id }),
+			);
+			await immediate;
+
+			const queued = client.presence.set({});
+			const queuedOutcome = queued.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
+			const switching = client.setPresenceNamespace("other");
+			await new Promise((r) => setTimeout(r, 0));
+			const rejected = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			await new Promise((r) => setTimeout(r, 30));
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: rejected.id,
+					code: "NAMESPACE_SWITCH_REJECTED",
+					message: "Namespace switching is not allowed",
+				}),
+			);
+			await expect(switching).rejects.toMatchObject({
+				code: "NAMESPACE_SWITCH_REJECTED",
+			});
+			await new Promise((r) => setTimeout(r, 20));
+
+			const presenceSets = mockWs.sentMessages.filter((message) => {
+				const msg = decode(message) as { type: number };
+				return msg.type === WireMessageType.PresenceSet;
+			});
+			expect(presenceSets).toHaveLength(2);
+			const resumed = decode(presenceSets.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: resumed.id }));
+			await queued;
+			expect(await queuedOutcome).toBeNull();
+		} finally {
+			client.disconnect();
+			restoreWebSocket();
+		}
+	});
+
 	test("a stale switch promise rejects with REQUEST_SUPERSEDED", async () => {
 		installMockWebSocket();
 		const client = createClient(defaultOptions);
@@ -929,9 +1011,10 @@ describe("ZyncBaseClient", () => {
 				}),
 			);
 			await new Promise((r) => setTimeout(r, 0));
-			const presenceSub = decode(
-				mockWs.sentMessages.at(-1) as Uint8Array,
-			) as { id: number; type: number };
+			const presenceSub = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "ok",
@@ -1002,9 +1085,10 @@ describe("ZyncBaseClient", () => {
 				}),
 			);
 			await new Promise((r) => setTimeout(r, 0));
-			const presenceSub = decode(
-				mockWs.sentMessages.at(-1) as Uint8Array,
-			) as { id: number; type: number };
+			const presenceSub = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "ok",

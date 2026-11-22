@@ -474,6 +474,8 @@ export class ConnectionWireCodec {
 		type: string,
 	): Record<string, unknown> {
 		const wire: Record<string, unknown> = { ...msg };
+		// Client-only routing metadata; never send it to the server.
+		delete wire.targetNamespace;
 
 		if (type === "PresenceSet" && wire.data && typeof wire.data === "object") {
 			wire.data = this.schema.encodePresenceUserValue(

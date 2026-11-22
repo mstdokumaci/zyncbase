@@ -117,6 +117,24 @@ describe("PresenceImpl", () => {
 		}
 	});
 
+	test("queued sets for different targets are not merged", async () => {
+		const conn = createMockConnection();
+		let targetNs = "room-a";
+		Object.assign(conn, { getPresenceNamespace: () => targetNs });
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		presence.set({ status: "active" });
+		const queuedA = presence.set({ cursor: { x: 1, y: 2 } });
+		queuedA.catch(() => {});
+		targetNs = "room-b";
+		const queuedB = presence.set({ status: "away" });
+		queuedB.catch(() => {});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const sets = conn.dispatched.filter((msg) => msg.type === "PresenceSet");
+		expect(sets).toHaveLength(2);
+		expect(sets.at(-1)?.data).toEqual([2, "away"]);
+	});
+
 	test("setShared() dispatches PresenceSetShared with encoded data", async () => {
 		const conn = createMockConnection();
 		await setupSchema(conn.schema);

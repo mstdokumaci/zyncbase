@@ -55,6 +55,21 @@ describe("ConnectionWireCodec", () => {
 		expect(decode(encode(timestamp))).toBe(timestamp);
 	});
 
+	test("strips client-only presence target metadata from the wire", async () => {
+		const codec = await makeCodec();
+		const encoded = codec.encode(
+			{
+				type: "PresenceSet",
+				data: { status: "active" },
+				targetNamespace: "room-a",
+			} as unknown as Parameters<typeof codec.encode>[0],
+			9,
+		);
+		const wire = decode(encoded.bytes) as Record<string, unknown>;
+		expect(wire).not.toHaveProperty("targetNamespace");
+		expect(wire.data).toEqual([2, "active"]);
+	});
+
 	test("encodes schema-aware query fields", async () => {
 		const codec = await makeCodec();
 		const encoded = codec.encode(

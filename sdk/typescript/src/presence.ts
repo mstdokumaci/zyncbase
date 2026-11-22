@@ -67,7 +67,24 @@ export class PresenceImpl implements Presence {
 	private pendingSetTargetNs: string | null = null;
 
 	set(data: Record<string, unknown>): Promise<void> {
-		this.pendingSetTargetNs = this.conn.getPresenceNamespace?.() ?? null;
+		const currentNs = this.conn.getPresenceNamespace?.() ?? null;
+		if (
+			this.pendingSetTargetNs !== null &&
+			this.pendingSetTargetNs !== currentNs
+		) {
+			for (const waiter of this.pendingSetWaiters) {
+				waiter.reject(
+					new ZyncBaseError("Presence set superseded by scope change", {
+						code: ErrorCodes.REQUEST_SUPERSEDED,
+						category: "state",
+						retryable: false,
+					}),
+				);
+			}
+			this.pendingSetWaiters = [];
+			this.pendingSetData = null;
+		}
+		this.pendingSetTargetNs = currentNs;
 		let resolve!: () => void;
 		let reject!: (reason?: unknown) => void;
 		const accepted = new Promise<void>((res, rej) => {
