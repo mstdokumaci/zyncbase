@@ -308,6 +308,48 @@ describe("ConnectionManager", () => {
 			manager.disconnect();
 		});
 
+		test("an old namespace setup retry does not survive a reconnect", async () => {
+			const { manager, mockWs } = makeManager();
+			await connectManager(manager, mockWs);
+			const first = manager.setPresenceNamespace("public");
+			first.catch(() => {});
+			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: scope.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+					retryAfter: 100,
+				}),
+			);
+			await tick();
+
+			mockWs.triggerClose(1006, "gone");
+			const reconnected = manager.connect();
+			await tick();
+			mockWs.triggerOpen();
+			const store = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			ack(mockWs, store.id);
+			await reconnected;
+			const marker = mockWs.sentMessages.length;
+
+			await new Promise((r) => setTimeout(r, 150));
+			const retried = mockWs.sentMessages
+				.slice(marker)
+				.map((message) => decode(message) as { type: number });
+			expect(
+				retried.some(
+					(message) => message.type === WireMessageType.PresenceSetNamespace,
+				),
+			).toBe(false);
+			manager.disconnect();
+		});
+
 		test("a same-namespace call joins a pending scope request", async () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);

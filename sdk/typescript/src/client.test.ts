@@ -1244,6 +1244,86 @@ describe("ZyncBaseClient", () => {
 		restoreWebSocket();
 	});
 
+	test("concurrent same-target switches replay presence once", async () => {
+		installMockWebSocket();
+		const client = createClient(defaultOptions);
+		try {
+			const connected = client.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			triggerNamespaceOk(mockWs);
+			triggerSchemaSync(mockWs);
+			await connected;
+
+			const pendingPresence = client.presence.subscribe(() => {});
+			await new Promise((r) => setTimeout(r, 0));
+			const presenceScope = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number; type: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: presenceScope.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 0));
+			const presenceSub = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: presenceSub.id,
+					subId: 30,
+					users: [],
+				}),
+			);
+			await pendingPresence;
+
+			const marker = mockWs.sentMessages.length;
+			const first = client.setPresenceNamespace("room");
+			first.catch(() => {});
+			const second = client.setPresenceNamespace("room");
+			second.catch(() => {});
+			await new Promise((r) => setTimeout(r, 0));
+			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+				type: number;
+			};
+			expect(scope.type).toBe(WireMessageType.PresenceSetNamespace);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: scope.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 10));
+
+			const replays = mockWs.sentMessages
+				.slice(marker)
+				.map((message) => decode(message) as { id: number; type: number })
+				.filter(
+					(message) => message.type === WireMessageType.PresenceSubscribe,
+				);
+			expect(replays).toHaveLength(1);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: replays[0].id,
+					subId: 31,
+					users: [],
+				}),
+			);
+			await Promise.all([first, second]);
+		} finally {
+			client.disconnect();
+			restoreWebSocket();
+		}
+	});
+
 	test("a rejected namespace switch restores session readiness", async () => {
 		installMockWebSocket();
 		const client = createClient(defaultOptions);

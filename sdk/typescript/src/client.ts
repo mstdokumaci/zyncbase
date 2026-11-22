@@ -48,6 +48,7 @@ export class ZyncBaseClient<
 	>();
 	/** Whether a connection existed earlier in this process. */
 	private hasConnectedOnce = false;
+	private presenceSwitchGeneration = 0;
 	/** Backoff state for retrying a failed restore. */
 	private restoreAttempt = 0;
 	private restoreTimer: ReturnType<typeof setTimeout> | null = null;
@@ -229,8 +230,10 @@ export class ZyncBaseClient<
 			return;
 		}
 
+		const switchGeneration = ++this.presenceSwitchGeneration;
 		try {
 			await this.conn.setPresenceNamespace(namespace);
+			if (this.presenceSwitchGeneration !== switchGeneration) return;
 			if (this.conn.getPresenceNamespace() !== namespace) {
 				return;
 			}
@@ -240,15 +243,17 @@ export class ZyncBaseClient<
 			replay.store.catch(() => {});
 			replay.presence.catch(() => {});
 		} catch (err) {
-			if (
-				err instanceof ZyncBaseError &&
-				(err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED ||
-					err.code === ErrorCodes.REQUEST_SUPERSEDED)
-			) {
-				// Server rejected or superseded switch; previous presence state is preserved
-			} else {
-				// Server unauthorized or reset presence scope; invalidate local cache
-				this.presenceImpl.invalidate();
+			if (this.presenceSwitchGeneration === switchGeneration) {
+				if (
+					err instanceof ZyncBaseError &&
+					(err.code === ErrorCodes.NAMESPACE_SWITCH_REJECTED ||
+						err.code === ErrorCodes.REQUEST_SUPERSEDED)
+				) {
+					// Server rejected or superseded switch; previous presence state is preserved
+				} else {
+					// Server unauthorized or reset presence scope; invalidate local cache
+					this.presenceImpl.invalidate();
+				}
 			}
 			throw err;
 		}

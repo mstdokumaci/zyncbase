@@ -447,6 +447,7 @@ export class ConnectionManager {
 		this.presenceScopePromise = null;
 		this.presenceScopeActivePromise = null;
 		this.presenceScopeReady = false;
+		this.presenceScopeGen++;
 		this.stopLiveness();
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
@@ -755,6 +756,7 @@ export class ConnectionManager {
 		this.presenceScopePromise = null;
 		this.presenceScopeActivePromise = null;
 		this.presenceScopeReady = false;
+		this.presenceScopeGen++;
 		this.currentUserId = null;
 		this.stopLiveness();
 		if (this.reconnectTimer !== null) {
