@@ -144,6 +144,7 @@ export class ConnectionManager {
 	private presenceScopePromise: Promise<void> | null = null;
 	private presenceScopeReady = false;
 	private presenceScopeGen = 0;
+	private connectionGeneration = 0;
 
 	private processingPromise: Promise<void> = Promise.resolve();
 
@@ -369,6 +370,7 @@ export class ConnectionManager {
 	}
 
 	private teardownSocket(): void {
+		this.connectionGeneration++;
 		this.currentUserId = null;
 		if (this.ws) {
 			const ws = this.ws;
@@ -418,6 +420,7 @@ export class ConnectionManager {
 		this.presenceScopePromise = null;
 		this.presenceScopeReady = false;
 		this.presenceScopeGen++;
+		this.connectionGeneration++;
 		this.stopLiveness();
 		this.setStatus("connecting");
 		this.processingPromise = Promise.resolve();
@@ -624,15 +627,27 @@ export class ConnectionManager {
 		responseTableIndex?: number,
 		expectedScopeGen?: number,
 		targetNamespace?: string,
+		sessionGeneration?: number,
 	): Promise<OkResponse> {
 		const target =
 			targetNamespace ??
 			("targetNamespace" in msg && typeof msg.targetNamespace === "string"
 				? msg.targetNamespace
 				: this.presenceNamespace);
+		const session =
+			sessionGeneration ??
+			(this.needsPresenceScope(msg) || msg.type === "PresenceSetNamespace"
+				? this.connectionGeneration
+				: undefined);
+		if (session !== undefined && session !== this.connectionGeneration) {
+			return Promise.reject(this.supersededError());
+		}
 		return this.withPresenceScope(
 			msg,
 			async () => {
+				if (session !== undefined && session !== this.connectionGeneration) {
+					throw this.supersededError();
+				}
 				const scopeGen =
 					expectedScopeGen ??
 					(msg.type === "PresenceSetNamespace"
@@ -655,6 +670,7 @@ export class ConnectionManager {
 						responseTableIndex,
 						scopeGen,
 						target,
+						session,
 					);
 				}
 			},
@@ -670,10 +686,13 @@ export class ConnectionManager {
 		responseTableIndex?: number,
 		expectedScopeGen?: number,
 		targetNamespace?: string,
+		sessionGeneration?: number,
 	): Promise<OkResponse> {
 		if (
 			(expectedScopeGen !== undefined &&
 				expectedScopeGen !== this.presenceScopeGen) ||
+			(sessionGeneration !== undefined &&
+				sessionGeneration !== this.connectionGeneration) ||
 			(msg.type === "PresenceSetNamespace" &&
 				msg.namespace !== this.presenceNamespace)
 		) {
@@ -692,6 +711,8 @@ export class ConnectionManager {
 		if (
 			(expectedScopeGen !== undefined &&
 				expectedScopeGen !== this.presenceScopeGen) ||
+			(sessionGeneration !== undefined &&
+				sessionGeneration !== this.connectionGeneration) ||
 			(msg.type === "PresenceSetNamespace" &&
 				msg.namespace !== this.presenceNamespace)
 		) {
@@ -703,6 +724,7 @@ export class ConnectionManager {
 			responseTableIndex,
 			expectedScopeGen,
 			targetNamespace,
+			sessionGeneration,
 		);
 	}
 
@@ -729,6 +751,7 @@ export class ConnectionManager {
 		this.presenceScopePromise = null;
 		this.presenceScopeReady = false;
 		this.presenceScopeGen++;
+		this.connectionGeneration++;
 		this.currentUserId = null;
 		this.stopLiveness();
 		if (this.reconnectTimer !== null) {
@@ -793,6 +816,7 @@ export class ConnectionManager {
 	}
 
 	private handleSocketClose(code: number, reason: string): void {
+		this.connectionGeneration++;
 		this.currentUserId = null;
 		this.stopLiveness();
 		const closeError = socketCloseError(code, reason);

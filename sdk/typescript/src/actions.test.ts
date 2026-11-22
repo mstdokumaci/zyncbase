@@ -404,4 +404,26 @@ describe("ActionsImpl.handle", () => {
 			true,
 		);
 	});
+	test("a retryable registration failure stays retryable", async () => {
+		let fail = false;
+		const registrationError = new ZyncBaseError("server busy", {
+			code: ErrorCodes.INTERNAL_ERROR,
+			category: "server",
+			retryable: true,
+		});
+		const conn = createMockConnection({
+			errorFor: (msg) =>
+				fail && msg.type === "ActionRegister" ? registrationError : undefined,
+		});
+		await setupSchema(conn.schemaDictionary);
+		const actions = new ActionsImpl(conn);
+		await actions.handle("checkout", () => ({}));
+		fail = true;
+		const replay = actions.replayRegistrations();
+		const rejected = await replay.store.then(
+			() => null,
+			(err: { retryable?: boolean }) => err,
+		);
+		expect(rejected?.retryable).toBe(true);
+	});
 });

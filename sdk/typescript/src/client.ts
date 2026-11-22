@@ -49,6 +49,10 @@ export class ZyncBaseClient<
 	/** Whether a connection existed earlier in this process. */
 	private hasConnectedOnce = false;
 	private presenceSwitchGeneration = 0;
+	private presenceSwitchInFlight: {
+		namespace: string;
+		promise: Promise<void>;
+	} | null = null;
 	/** Backoff state for retrying a failed restore. */
 	private restoreAttempt = 0;
 	private restoreTimer: ReturnType<typeof setTimeout> | null = null;
@@ -224,12 +228,26 @@ export class ZyncBaseClient<
 	}
 
 	/** Switch the active presence namespace. */
-	async setPresenceNamespace(namespace: string): Promise<void> {
+	setPresenceNamespace(namespace: string): Promise<void> {
 		const oldNs = this.conn.getPresenceNamespace();
 		if (oldNs === namespace && this.conn.isPresenceScopeReady()) {
-			return;
+			return Promise.resolve();
 		}
 
+		const inFlight = this.presenceSwitchInFlight;
+		if (inFlight?.namespace === namespace) return inFlight.promise;
+
+		const promise = this.performPresenceSwitch(namespace);
+		this.presenceSwitchInFlight = { namespace, promise };
+		const clear = () => {
+			if (this.presenceSwitchInFlight?.promise === promise) {
+				this.presenceSwitchInFlight = null;
+			}
+		};
+		promise.then(clear, clear);
+		return promise;
+	}
+	private async performPresenceSwitch(namespace: string): Promise<void> {
 		const switchGeneration = ++this.presenceSwitchGeneration;
 		try {
 			await this.conn.setPresenceNamespace(namespace);
@@ -345,11 +363,7 @@ export class ZyncBaseClient<
 				"Presence action registration failed",
 				false,
 			);
-			if (
-				error.retryable &&
-				store.status !== "rejected" &&
-				storeActions.status !== "rejected"
-			) {
+			if (error.retryable && store.status !== "rejected") {
 				throw error;
 			}
 		}

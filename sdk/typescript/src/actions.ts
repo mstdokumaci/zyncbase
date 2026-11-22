@@ -137,7 +137,10 @@ export class ActionsImpl implements Actions {
 				action_ids: names,
 			});
 		} catch (err) {
-			const error = mapActionError(err);
+			const error =
+				err instanceof ZyncBaseError && err.retryable
+					? err
+					: mapActionError(err);
 			this.emitError(error);
 			throw error;
 		}

@@ -312,7 +312,10 @@ describe("ConnectionManager", () => {
 			const { manager, mockWs } = makeManager();
 			await connectManager(manager, mockWs);
 			const first = manager.setPresenceNamespace("public");
-			first.catch(() => {});
+			const outcome = first.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
 			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 				id: number;
 			};
@@ -334,8 +337,6 @@ describe("ConnectionManager", () => {
 			const store = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 				id: number;
 			};
-			ack(mockWs, store.id);
-			await reconnected;
 			const marker = mockWs.sentMessages.length;
 
 			await new Promise((r) => setTimeout(r, 150));
@@ -347,6 +348,9 @@ describe("ConnectionManager", () => {
 					(message) => message.type === WireMessageType.PresenceSetNamespace,
 				),
 			).toBe(false);
+			expect(await outcome).toBe("REQUEST_SUPERSEDED");
+			ack(mockWs, store.id);
+			await reconnected;
 			manager.disconnect();
 		});
 
@@ -603,13 +607,17 @@ describe("ConnectionManager", () => {
 			expect(manager.getPresenceNamespace()).toBe("public");
 		});
 
-		test("a retry on a replacement socket requests the presence scope again", async () => {
+		test("a presence retry does not cross a replacement socket", async () => {
 			const { manager, mockWs } = makeManager({
 				reconnect: false,
 				reconnectDelay: 10,
 			});
 			await connectManager(manager, mockWs);
 			const presence = manager.dispatch({ type: "PresenceSet", data: {} });
+			const outcome = presence.then(
+				() => null,
+				(err: { code?: string }) => err.code,
+			);
 			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 				id: number;
 			};
@@ -647,24 +655,20 @@ describe("ConnectionManager", () => {
 			);
 			ack(mockWs, store.id);
 			await reconnected;
+			const marker = mockWs.sentMessages.length;
 
 			await new Promise((r) => setTimeout(r, 150));
-			const setup = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
-				id: number;
-			};
-			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
-				WireMessageType.PresenceSetNamespace,
-			);
-			ack(mockWs, setup.id);
-			await tick();
-			const retried = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
-				id: number;
-			};
-			expect(sentType(mockWs.sentMessages.at(-1) as Uint8Array)).toBe(
-				WireMessageType.PresenceSet,
-			);
-			mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: retried.id }));
-			await presence;
+			const retried = mockWs.sentMessages
+				.slice(marker)
+				.map((message) => decode(message) as { type: number });
+			expect(
+				retried.some(
+					(message) =>
+						message.type === WireMessageType.PresenceSet ||
+						message.type === WireMessageType.PresenceSetNamespace,
+				),
+			).toBe(false);
+			expect(await outcome).toBe("REQUEST_SUPERSEDED");
 			manager.disconnect();
 		});
 

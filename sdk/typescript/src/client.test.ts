@@ -651,6 +651,175 @@ describe("ZyncBaseClient", () => {
 			restoreWebSocket();
 		}
 	});
+	test("a retryable presence action replay survives store action failure", async () => {
+		installMockWebSocket();
+		const client = createClient({
+			...defaultOptions,
+			retryRateLimits: false,
+		});
+		try {
+			const synced: string[] = [];
+			client.on("synced", () => synced.push("synced"));
+			const triggerActionSchema = () =>
+				mockWs.triggerMessage(
+					encodeToBuffer({
+						type: "SchemaSync",
+						version: "1.0.0",
+						tables: ["users"],
+						fields: [["id", "name"]],
+						fieldFlags: [[0b10, 0]],
+						actions: ["checkout", "ping"],
+						actionParams: [[], []],
+						actionReturns: [[], []],
+						actionFlags: [0b00, 0b10],
+					}),
+				);
+
+			const connected = client.connect();
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			triggerNamespaceOk(mockWs);
+			triggerActionSchema();
+			await connected;
+
+			const storeRegistered = client.actions.handle("checkout", () => ({}));
+			await new Promise((r) => setTimeout(r, 0));
+			const storeRegister = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id: storeRegister.id }),
+			);
+			await storeRegistered;
+
+			const presenceRegistered = client.actions.handle("ping", () => {});
+			await waitFor(
+				() =>
+					(
+						decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+							type: number;
+						}
+					).type === WireMessageType.PresenceSetNamespace,
+				1_000,
+			);
+			const presenceScope = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: presenceScope.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 0));
+			const presenceRegister = decode(
+				mockWs.sentMessages.at(-1) as Uint8Array,
+			) as { id: number };
+			mockWs.triggerMessage(
+				encodeToBuffer({ type: "ok", id: presenceRegister.id }),
+			);
+			await presenceRegistered;
+			client.disconnect();
+
+			const reconnecting = client.connect();
+			reconnecting.catch(() => {});
+			await new Promise((r) => setTimeout(r, 0));
+			mockWs.triggerOpen();
+			await handshakeNamespaces(mockWs);
+			const marker = mockWs.sentMessages.length;
+			triggerActionSchema();
+			await waitFor(() => {
+				const messages = mockWs.sentMessages
+					.slice(marker)
+					.map((message) => decode(message) as { type: number });
+				return (
+					messages.some(
+						(message) => message.type === WireMessageType.PresenceSetNamespace,
+					) &&
+					messages.some(
+						(message) => message.type === WireMessageType.ActionRegister,
+					)
+				);
+			}, 2_000);
+			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
+				id: number;
+			};
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "ok",
+					id: scope.id,
+					userId: packDocId(TEST_USER_ID),
+				}),
+			);
+			await waitFor(
+				() =>
+					mockWs.sentMessages
+						.slice(marker)
+						.filter(
+							(message) =>
+								(decode(message) as { type: number }).type ===
+								WireMessageType.ActionRegister,
+						).length >= 2,
+				2_000,
+			);
+			const registers = mockWs.sentMessages
+				.slice(marker)
+				.map(
+					(message) => decode(message) as { id: number; action_ids: number[] },
+				)
+				.filter((message) => Array.isArray(message.action_ids));
+			const storeReplay = registers.find((message) =>
+				message.action_ids.includes(0),
+			);
+			const presenceReplay = registers.find((message) =>
+				message.action_ids.includes(1),
+			);
+			expect(storeReplay).toBeDefined();
+			expect(presenceReplay).toBeDefined();
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: storeReplay?.id,
+					code: "PERMISSION_DENIED",
+					message: "Store registration denied",
+				}),
+			);
+			mockWs.triggerMessage(
+				encodeToBuffer({
+					type: "error",
+					id: presenceReplay?.id,
+					code: "RATE_LIMITED",
+					message: "Too many requests",
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 50));
+			expect(synced).toHaveLength(1);
+
+			await waitFor(
+				() =>
+					mockWs.sentMessages
+						.slice(marker)
+						.filter(
+							(message) =>
+								(decode(message) as { type: number }).type ===
+								WireMessageType.ActionRegister,
+						).length >= 4,
+				2_000,
+			);
+			const retried = mockWs.sentMessages
+				.slice(-2)
+				.map((message) => decode(message) as { id: number });
+			for (const request of retried) {
+				mockWs.triggerMessage(encodeToBuffer({ type: "ok", id: request.id }));
+			}
+			await reconnecting;
+			await waitFor(() => synced.length === 2);
+		} finally {
+			client.disconnect();
+			restoreWebSocket();
+		}
+	});
 	test("a rejected presence switch preserves active presence consumers", async () => {
 		installMockWebSocket();
 		const client = createClient({
@@ -1381,10 +1550,26 @@ describe("ZyncBaseClient", () => {
 			await pendingPresence;
 
 			const marker = mockWs.sentMessages.length;
+			let firstSettled = false;
+			let secondSettled = false;
 			const first = client.setPresenceNamespace("room");
-			first.catch(() => {});
+			first.then(
+				() => {
+					firstSettled = true;
+				},
+				() => {
+					firstSettled = true;
+				},
+			);
 			const second = client.setPresenceNamespace("room");
-			second.catch(() => {});
+			second.then(
+				() => {
+					secondSettled = true;
+				},
+				() => {
+					secondSettled = true;
+				},
+			);
 			await new Promise((r) => setTimeout(r, 0));
 			const scope = decode(mockWs.sentMessages.at(-1) as Uint8Array) as {
 				id: number;
@@ -1407,6 +1592,8 @@ describe("ZyncBaseClient", () => {
 					(message) => message.type === WireMessageType.PresenceSubscribe,
 				);
 			expect(replays).toHaveLength(1);
+			expect(firstSettled).toBe(false);
+			expect(secondSettled).toBe(false);
 			mockWs.triggerMessage(
 				encodeToBuffer({
 					type: "ok",
@@ -1416,6 +1603,8 @@ describe("ZyncBaseClient", () => {
 				}),
 			);
 			await Promise.all([first, second]);
+			expect(firstSettled).toBe(true);
+			expect(secondSettled).toBe(true);
 		} finally {
 			client.disconnect();
 			restoreWebSocket();

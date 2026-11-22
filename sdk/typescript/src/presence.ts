@@ -142,14 +142,18 @@ export class PresenceImpl implements Presence {
 	private ensureUserSubscription(): Promise<void> {
 		if (this.userSubId !== null) return Promise.resolve();
 		if (this.userSubPromise !== null) {
-			return this.userSubPromise.then(() => {
+			const retryIfNeeded = () => {
 				if (this.userSubId === null && this.hasUserSubscribers()) {
 					return this.ensureUserSubscription();
 				}
-			});
+			};
+			return this.userSubPromise.then(retryIfNeeded, retryIfNeeded);
 		}
 		if (this.userCleanupPromise !== null) {
-			return this.userCleanupPromise.then(() => this.ensureUserSubscription());
+			return this.userCleanupPromise.then(
+				() => this.ensureUserSubscription(),
+				() => this.ensureUserSubscription(),
+			);
 		}
 		const gen = this.userSubGen;
 		const pending = this.establishUserSubscription(gen).catch((err) => {
@@ -237,15 +241,17 @@ export class PresenceImpl implements Presence {
 	private ensureSharedSubscription(): Promise<void> {
 		if (this.sharedSubId !== null) return Promise.resolve();
 		if (this.sharedSubPromise !== null) {
-			return this.sharedSubPromise.then(() => {
+			const retryIfNeeded = () => {
 				if (this.sharedSubId === null && this.sharedCallbacks.size > 0) {
 					return this.ensureSharedSubscription();
 				}
-			});
+			};
+			return this.sharedSubPromise.then(retryIfNeeded, retryIfNeeded);
 		}
 		if (this.sharedCleanupPromise !== null) {
-			return this.sharedCleanupPromise.then(() =>
-				this.ensureSharedSubscription(),
+			return this.sharedCleanupPromise.then(
+				() => this.ensureSharedSubscription(),
+				() => this.ensureSharedSubscription(),
 			);
 		}
 		const gen = this.sharedSubGen;

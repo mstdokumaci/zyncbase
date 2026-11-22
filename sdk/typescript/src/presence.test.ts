@@ -754,6 +754,7 @@ describe("PresenceImpl", () => {
 
 		const next = presence.subscribe(() => {});
 		next.catch(() => {});
+		expect(subscribeCalls).toBe(2);
 		resolveUnsubscribe({ type: "ok", id: 0 } as OkResponse);
 		await replaying;
 		await next;
@@ -809,10 +810,152 @@ describe("PresenceImpl", () => {
 
 		const next = presence.subscribeShared(() => {});
 		next.catch(() => {});
+		expect(subscribeCalls).toBe(2);
 		resolveUnsubscribe({ type: "ok", id: 0 } as OkResponse);
 		await replaying;
 		await next;
 
+		expect(subscribeCalls).toBe(3);
+	});
+	test("a listener joining during failed cleanup still subscribes", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		let subscribeCalls = 0;
+		let unsubscribeCalls = 0;
+		let resolveReplay: (value: OkResponse) => void = () => {};
+		const replayPromise = new Promise<OkResponse>((resolve) => {
+			resolveReplay = resolve;
+		});
+		let rejectUnsubscribe: (reason?: unknown) => void = () => {};
+		const unsubscribePromise = new Promise<OkResponse>((_, reject) => {
+			rejectUnsubscribe = reject;
+		});
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				subscribeCalls++;
+				if (subscribeCalls === 1) {
+					return Promise.resolve({
+						type: "ok",
+						id: 0,
+						subId: 100,
+						users: [],
+					} as OkResponse);
+				}
+				if (subscribeCalls === 2) return replayPromise;
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 300,
+					users: [],
+				} as OkResponse);
+			}
+			if (msg.type === "PresenceUnsubscribe") {
+				unsubscribeCalls++;
+				return unsubscribePromise;
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		const unsubscribe = await presence.subscribe(() => {});
+		presence.invalidate();
+		const replaying = presence.replaySubscriptions();
+		const replayOutcome = replaying.then(
+			() => null,
+			(err: unknown) => err,
+		);
+		const closing = unsubscribe();
+		const closingOutcome = closing.then(
+			() => null,
+			(err: unknown) => err,
+		);
+		resolveReplay({
+			type: "ok",
+			id: 0,
+			subId: 200,
+			users: [],
+		} as OkResponse);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(unsubscribeCalls).toBe(1);
+
+		const next = presence.subscribe(() => {});
+		const nextOutcome = next.then(
+			() => null,
+			(err: unknown) => err,
+		);
+		expect(subscribeCalls).toBe(2);
+		rejectUnsubscribe(new Error("unsubscribe failed"));
+
+		expect(await replayOutcome).toBeInstanceOf(Error);
+		expect(await closingOutcome).toBeInstanceOf(Error);
+		expect(await nextOutcome).toBeNull();
+		expect(subscribeCalls).toBe(3);
+	});
+	test("a shared listener joining during failed cleanup still subscribes", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+		let subscribeCalls = 0;
+		let unsubscribeCalls = 0;
+		let resolveReplay: (value: OkResponse) => void = () => {};
+		const replayPromise = new Promise<OkResponse>((resolve) => {
+			resolveReplay = resolve;
+		});
+		let rejectUnsubscribe: (reason?: unknown) => void = () => {};
+		const unsubscribePromise = new Promise<OkResponse>((_, reject) => {
+			rejectUnsubscribe = reject;
+		});
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribeShared") {
+				subscribeCalls++;
+				if (subscribeCalls === 1) {
+					return Promise.resolve({
+						type: "ok",
+						id: 0,
+						subId: 100,
+					} as OkResponse);
+				}
+				if (subscribeCalls === 2) return replayPromise;
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 300,
+				} as OkResponse);
+			}
+			if (msg.type === "PresenceUnsubscribeShared") {
+				unsubscribeCalls++;
+				return unsubscribePromise;
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		const unsubscribe = await presence.subscribeShared(() => {});
+		presence.invalidate();
+		const replaying = presence.replaySubscriptions();
+		const replayOutcome = replaying.then(
+			() => null,
+			(err: unknown) => err,
+		);
+		const closing = unsubscribe();
+		const closingOutcome = closing.then(
+			() => null,
+			(err: unknown) => err,
+		);
+		resolveReplay({ type: "ok", id: 0, subId: 200 } as OkResponse);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(unsubscribeCalls).toBe(1);
+
+		const next = presence.subscribeShared(() => {});
+		const nextOutcome = next.then(
+			() => null,
+			(err: unknown) => err,
+		);
+		expect(subscribeCalls).toBe(2);
+		rejectUnsubscribe(new Error("unsubscribe failed"));
+
+		expect(await replayOutcome).toBeInstanceOf(Error);
+		expect(await closingOutcome).toBeInstanceOf(Error);
+		expect(await nextOutcome).toBeNull();
 		expect(subscribeCalls).toBe(3);
 	});
 	test("a stale subscription completion does not unsubscribe a replacement", async () => {
