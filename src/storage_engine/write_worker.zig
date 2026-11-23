@@ -1081,13 +1081,22 @@ pub const WriteWorker = struct {
             batch.deinit(self.allocator);
         }
 
+        var resolves = std.ArrayListUnmanaged(WriteOp).empty;
+        try resolves.ensureTotalCapacity(self.allocator, batch_size);
+        defer {
+            for (resolves.items) |op| {
+                op.deinit(self.allocator);
+            }
+            resolves.deinit(self.allocator);
+        }
+
         var last_batch_time = std.Io.Clock.real.now(self.io).toMilliseconds();
 
         while (!self.thread.isRequested()) {
-            // Collect operations for batch
-            while (batch.items.len < batch_size) {
+            // Collect operations for both batches.
+            while (batch.items.len < batch_size and resolves.items.len < batch_size) {
                 if (self.queue.pop()) |op| {
-                    if (tryEnqueueOp(self, op, &batch, &last_batch_time) == .skipped) continue;
+                    if (tryEnqueueOp(self, op, &batch, &resolves, &last_batch_time) == .skipped) continue;
                 } else {
                     break;
                 }
@@ -1096,12 +1105,20 @@ pub const WriteWorker = struct {
             const now = std.Io.Clock.real.now(self.io).toMilliseconds();
             const time_since_last = now - last_batch_time;
 
-            const should_flush = batch.items.len >= batch_size or
+            const batch_ready = batch.items.len >= batch_size or
                 (batch.items.len > 0 and time_since_last >= batch_timeout_ms);
+            // Resolutions commit together; flush them as soon as the queue
+            // drains instead of making a lone connect wait out the batch timeout.
+            const resolves_ready = resolves.items.len > 0 and
+                (resolves.items.len >= batch_size or !self.queue.hasItems() or batch_ready);
 
-            if (should_flush) {
+            if (resolves_ready) {
+                flushResolutions(self, &resolves);
+            }
+
+            if (batch_ready) {
                 flushBatch(self, &batch, &last_batch_time);
-            } else {
+            } else if (resolves.items.len == 0) {
                 const timeout_ns: ?u64 = if (batch.items.len > 0)
                     @as(u64, @intCast(batch_timeout_ms - time_since_last)) * std.time.ns_per_ms
                 else
@@ -1112,9 +1129,12 @@ pub const WriteWorker = struct {
 
         // Drain
         while (self.queue.pop()) |op| {
-            _ = tryEnqueueOp(self, op, &batch, &last_batch_time);
+            _ = tryEnqueueOp(self, op, &batch, &resolves, &last_batch_time);
         }
 
+        if (resolves.items.len > 0) {
+            flushResolutions(self, &resolves);
+        }
         if (batch.items.len > 0) {
             flushBatch(self, &batch, &last_batch_time);
         }
@@ -1126,6 +1146,7 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         op: WriteOp,
         batch: *std.ArrayListUnmanaged(WriteOp),
+        resolves: *std.ArrayListUnmanaged(WriteOp),
         last_batch_time: *i64,
     ) EnqueueResult {
         return switch (op) {
@@ -1139,7 +1160,17 @@ pub const WriteWorker = struct {
                 };
                 break :blk .appended;
             },
-            .batch, .resolve_session, .checkpoint => blk: {
+            .resolve_session => blk: {
+                resolves.append(self.allocator, op) catch |err| {
+                    std.log.err("Failed to append session resolution to batch: {}", .{err});
+                    op.deinit(self.allocator);
+                    self.flush_wg.done(1);
+                    break :blk .skipped;
+                };
+                break :blk .appended;
+            },
+            .batch, .checkpoint => blk: {
+                if (resolves.items.len > 0) flushResolutions(self, resolves);
                 self.executeImmediateOp(op, batch, last_batch_time);
                 break :blk .immediate;
             },
@@ -1313,60 +1344,198 @@ pub const WriteWorker = struct {
         }
     }
 
+    const ResolutionResult = struct {
+        conn_id: u64,
+        msg_id: u64,
+        scope_seq: u64,
+        namespace_id: i64,
+        user_doc_id: DocId,
+        err: ?anyerror,
+        is_presence: bool,
+    };
+
+    /// Ids resolved inside one transaction. Published to the shared caches
+    /// only after COMMIT so a rollback cannot expose uncommitted rows.
+    const LocalCaches = struct {
+        namespaces: std.AutoHashMapUnmanaged(u64, i64) = .empty,
+        identities: std.AutoHashMapUnmanaged(u64, DocId) = .empty,
+
+        fn deinit(self: *LocalCaches, allocator: Allocator) void {
+            self.namespaces.deinit(allocator);
+            self.identities.deinit(allocator);
+        }
+    };
+
+    fn resolveSessionInTx(
+        self: *WriteWorker,
+        sop: anytype,
+        users_table: *const schema_types.Table,
+        local: *LocalCaches,
+        out_namespace_id: *i64,
+        out_user_doc_id: *DocId,
+    ) ?anyerror {
+        const arena_alloc = self.batch_arena.allocator();
+        const ns_key = storage_cache.namespaceCacheKey(sop.namespace);
+        const ns_id = self.namespace_cache.get(ns_key) orelse local.namespaces.get(ns_key) orelse blk: {
+            const ns_stmt = self.resolve_namespace_stmt orelse return error.StatementNotPrepared;
+            const resolved = sql.resolveNamespaceId(&self.conn, ns_stmt, sop.namespace) catch |err| {
+                return errors.classifyError(err);
+            };
+            local.namespaces.put(arena_alloc, ns_key, resolved) catch |err| {
+                std.log.warn("Failed to buffer namespace cache update during session resolution: {}", .{err});
+            };
+            break :blk resolved;
+        };
+        out_namespace_id.* = ns_id;
+
+        const identity_namespace_id = if (users_table.namespaced) ns_id else schema_system.global_namespace_id;
+        const id_key = storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id);
+        out_user_doc_id.* = self.identity_cache.get(id_key) orelse local.identities.get(id_key) orelse blk: {
+            const user_stmt = self.resolve_user_stmt orelse return error.StatementNotPrepared;
+            const created_at = self.claimCreatedAt(users_table.index, sop.timestamp) catch |err| return errors.classifyError(err);
+            const resolved = sql.resolveUserId(
+                self.io,
+                &self.conn,
+                user_stmt,
+                identity_namespace_id,
+                sop.external_user_id,
+                created_at,
+            ) catch |err| {
+                return errors.classifyError(err);
+            };
+            local.identities.put(arena_alloc, id_key, resolved) catch |err| {
+                std.log.warn("Failed to buffer identity cache update during session resolution: {}", .{err});
+            };
+            break :blk resolved;
+        };
+        return null;
+    }
+
+    fn publishLocalCaches(self: *WriteWorker, local: *const LocalCaches) void {
+        var ns_it = local.namespaces.iterator();
+        while (ns_it.next()) |entry| {
+            self.namespace_cache.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*) catch |err| {
+                std.log.warn("Failed to update namespace cache during session resolution: {}", .{err});
+            };
+        }
+        var id_it = local.identities.iterator();
+        while (id_it.next()) |entry| {
+            self.identity_cache.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*) catch |err| {
+                std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
+            };
+        }
+    }
+
+    /// Resolves and dispatches one session outside a batch. The caller owns
+    /// `op`; this is the per-op fallback when a resolution batch rolls back.
     fn executeResolveSessionOp(self: *WriteWorker, sop: anytype) void {
         var namespace_id: i64 = 0;
         var user_doc_id = typed_doc_id.zero;
-        var resolution_err: ?anyerror = null;
+        var local = LocalCaches{};
+        defer local.deinit(self.batch_arena.allocator());
 
-        const ns_stmt = self.resolve_namespace_stmt orelse {
-            resolution_err = error.StatementNotPrepared;
-            self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, resolution_err, sop.is_presence);
-            self.notifyChanges();
+        const users_table = self.schema.table("users") orelse {
+            self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, error.UnknownTable, sop.is_presence);
             return;
         };
-        if (sql.resolveNamespaceId(&self.conn, ns_stmt, sop.namespace)) |ns_id| {
-            namespace_id = ns_id;
+        const resolution_err = self.resolveSessionInTx(sop, users_table, &local, &namespace_id, &user_doc_id);
+        if (resolution_err == null) self.publishLocalCaches(&local);
+        self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, resolution_err, sop.is_presence);
+    }
 
-            self.namespace_cache.put(self.allocator, storage_cache.namespaceCacheKey(sop.namespace), ns_id) catch |err| {
-                std.log.warn("Failed to update namespace cache during session resolution: {}", .{err});
-            };
+    fn resolveSessionsIndividually(self: *WriteWorker, resolves: *std.ArrayListUnmanaged(WriteOp)) void {
+        for (resolves.items) |op| {
+            self.executeResolveSessionOp(op.resolve_session);
+            op.deinit(self.allocator);
+        }
+        self.notifyChanges();
+    }
 
-            const users_table = self.schema.table("users") orelse {
-                resolution_err = error.UnknownTable;
-                self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, resolution_err, sop.is_presence);
-                self.notifyChanges();
-                return;
-            };
-            const identity_namespace_id = if (users_table.namespaced) ns_id else schema_system.global_namespace_id;
+    /// Commits a group of session resolutions in one transaction. Each
+    /// resolution used to commit on its own, so connecting N clients paid N
+    /// namespace commits and N user commits.
+    fn flushResolutions(self: *WriteWorker, resolves: *std.ArrayListUnmanaged(WriteOp)) void {
+        const count = resolves.items.len;
+        if (count == 0) return;
+        std.log.debug("flushResolutions: flushing {} ops", .{count});
 
-            if (self.resolve_user_stmt) |user_stmt| {
-                if (self.claimCreatedAt(users_table.index, sop.timestamp)) |created_at| {
-                    if (sql.resolveUserId(
-                        self.io,
-                        &self.conn,
-                        user_stmt,
-                        identity_namespace_id,
-                        sop.external_user_id,
-                        created_at,
-                    )) |uid| {
-                        user_doc_id = uid;
-                        self.identity_cache.put(self.allocator, storage_cache.identityCacheKey(identity_namespace_id, sop.external_user_id), uid) catch |err| {
-                            std.log.warn("Failed to update identity cache during session resolution: {}", .{err});
-                        };
-                    } else |err| {
-                        resolution_err = errors.classifyError(err);
-                    }
-                } else |err| {
-                    resolution_err = err;
-                }
-            } else {
-                resolution_err = error.StatementNotPrepared;
+        const arena_alloc = self.batch_arena.allocator();
+        _ = self.batch_arena.reset(.retain_capacity);
+
+        var local = LocalCaches{};
+        defer local.deinit(arena_alloc);
+
+        var results = std.ArrayListUnmanaged(ResolutionResult).empty;
+        defer results.deinit(self.allocator);
+        results.ensureTotalCapacity(self.allocator, count) catch {
+            self.resolveSessionsIndividually(resolves);
+            resolves.clearRetainingCapacity();
+            self.endOp(count);
+            return;
+        };
+
+        const users_table = self.schema.table("users") orelse {
+            for (resolves.items) |op| {
+                const sop = op.resolve_session;
+                self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, 0, typed_doc_id.zero, error.UnknownTable, sop.is_presence);
             }
-        } else |err| {
-            resolution_err = errors.classifyError(err);
+            self.finishResolutions(resolves);
+            self.endOp(count);
+            return;
+        };
+
+        var tx_started = false;
+        const outcome: ?anyerror = blk: {
+            execTransactionControlChecked(&self.conn, "BEGIN TRANSACTION", "flushResolutions BEGIN") catch |err| {
+                break :blk err;
+            };
+            tx_started = true;
+            for (resolves.items) |op| {
+                const sop = op.resolve_session;
+                var namespace_id: i64 = 0;
+                var user_doc_id = typed_doc_id.zero;
+                const resolution_err = self.resolveSessionInTx(sop, users_table, &local, &namespace_id, &user_doc_id);
+                results.appendAssumeCapacity(.{
+                    .conn_id = sop.conn_id,
+                    .msg_id = sop.msg_id,
+                    .scope_seq = sop.scope_seq,
+                    .namespace_id = namespace_id,
+                    .user_doc_id = user_doc_id,
+                    .err = resolution_err,
+                    .is_presence = sop.is_presence,
+                });
+                if (resolution_err) |err| break :blk err;
+            }
+            execTransactionControlChecked(&self.conn, "COMMIT", "flushResolutions COMMIT") catch |err| {
+                break :blk err;
+            };
+            tx_started = false;
+            break :blk null;
+        };
+
+        if (outcome != null) {
+            if (tx_started) {
+                execTransactionControl(&self.conn, "ROLLBACK") catch |rollback_err| {
+                    errors.logDatabaseError("flushResolutions ROLLBACK", errors.classifyError(rollback_err), "");
+                };
+            }
+            self.resolveSessionsIndividually(resolves);
+            resolves.clearRetainingCapacity();
+            self.endOp(count);
+            return;
         }
 
-        self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, resolution_err, sop.is_presence);
+        self.publishLocalCaches(&local);
+        for (results.items) |result| {
+            self.dispatchResolution(result.conn_id, result.msg_id, result.scope_seq, result.namespace_id, result.user_doc_id, result.err, result.is_presence);
+        }
+        self.finishResolutions(resolves);
+        self.endOp(count);
+    }
+
+    fn finishResolutions(self: *WriteWorker, resolves: *std.ArrayListUnmanaged(WriteOp)) void {
+        for (resolves.items) |op| op.deinit(self.allocator);
+        resolves.clearRetainingCapacity();
         self.notifyChanges();
     }
 
@@ -1412,6 +1581,7 @@ pub const WriteWorker = struct {
             .resolve_session => |sop| {
                 self.executeResolveSessionOp(sop);
                 op.deinit(self.allocator);
+                self.notifyChanges();
                 self.flush_wg.done(1);
             },
             .checkpoint => |cop| {

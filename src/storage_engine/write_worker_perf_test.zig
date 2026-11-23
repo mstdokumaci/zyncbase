@@ -3,6 +3,7 @@ const std = @import("std");
 
 const config_state = @import("../config/state.zig");
 const memory_strategy = @import("../memory/strategy.zig");
+const schema_system = @import("../schema/system.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -196,4 +197,58 @@ test "WriteWorker: flushBatch throughput" {
     try testing.expect(r100.avg_flush < target_flush_100);
     try testing.expect(r100.avg_drain < target_drain_100);
     try testing.expect(r200.avg_flush < r100.avg_flush * 4.0);
+}
+
+test "WriteWorker: session resolutions commit in batches" {
+    const resolution_count = 2000;
+    var prod_ms: MemoryStrategy = undefined;
+    try prod_ms.init();
+    defer prod_ms.deinit();
+    const allocator = prod_ms.generalAllocator();
+
+    const perf_cfg = config_state.Config.PerformanceConfig{
+        .batch_writes = true,
+        .batch_size = 500,
+        .batch_timeout = 8,
+        .statement_cache_size = 100,
+        .message_buffer_size = 1000,
+    };
+    const users_fields = [_]sth.Field{};
+    const tables = [_]sth.Table{
+        schema_helpers.makeTable("users", &users_fields),
+        items_table,
+    };
+    // File-backed and synchronous=full: one commit per resolution would fsync
+    // twice per client, which is exactly the storm this batch path removes.
+    var ctx: EngineTestContext = undefined;
+    try ctx.initWithPerformance(allocator, "resolve_batch_perf", &tables, perf_cfg, .{
+        .in_memory = false,
+        .reader_pool_size = 1,
+        .synchronous = .full,
+    });
+    defer ctx.deinit();
+
+    // The engine is started without a SessionResolver in tests, so drop the
+    // per-resolution "resolver not set" warnings.
+    const previous_log_level = std.testing.log_level;
+    std.testing.log_level = .err;
+    defer std.testing.log_level = previous_log_level;
+
+    const started = std.Io.Timestamp.now(std.testing.io, .awake);
+    for (0..resolution_count) |i| {
+        var user_buf: [32]u8 = undefined;
+        const user = try std.fmt.bufPrint(&user_buf, "resolve-user-{d}", .{i});
+        try ctx.engine.enqueueSessionResolution(@intCast(i + 1), @intCast(i + 1), 0, "resolve-perf", user, false);
+    }
+    try ctx.engine.flushPendingWrites();
+    const elapsed_ms = @as(f64, @floatFromInt(started.untilNow(std.testing.io, .awake).toNanoseconds())) / std.time.ns_per_ms;
+
+    std.debug.print("flushResolutions ({d} sessions) [ms]: {d:.1}\n", .{ resolution_count, elapsed_ms });
+    try testing.expect(ctx.engine.cachedNamespaceId("resolve-perf") != null);
+    try testing.expect(ctx.engine.cachedUserId(schema_system.global_namespace_id, "resolve-user-0") != null);
+    try testing.expect(ctx.engine.cachedUserId(schema_system.global_namespace_id, "resolve-user-1999") != null);
+
+    // Unbatched this is one namespace + one user commit per client (~4k fsyncs).
+    const target_ms: f64 = if (builtin.sanitize_thread) 10_000 else 1_000;
+    try testing.expect(elapsed_ms < target_ms);
 }
