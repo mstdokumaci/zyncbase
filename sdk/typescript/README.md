@@ -157,6 +157,7 @@ package, or copy this JSON:
 			"update_id": { "type": "string", "minLength": 1, "maxLength": 64 },
 			"part": { "type": "integer", "minimum": 0 },
 			"parts": { "type": "integer", "minimum": 1 },
+			"committed": { "type": "boolean" },
 			"data": { "type": "bytes" }
 		}
 	}

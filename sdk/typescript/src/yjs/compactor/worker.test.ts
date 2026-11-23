@@ -141,6 +141,30 @@ function incrementalUpdates(texts: string[]): Uint8Array[] {
 	return updates;
 }
 
+function seedMarker(
+	client: FakeClient,
+	documentId: string,
+	updateId: string,
+	parts: number,
+	committed: boolean,
+	createdAt?: number,
+): string {
+	const rowId = `${documentId}-${updateId}-marker`;
+	client.store.seed(
+		UPDATES,
+		rowId,
+		{
+			document_id: documentId,
+			update_id: updateId,
+			part: parts,
+			parts,
+			committed,
+		},
+		createdAt,
+	);
+	return rowId;
+}
+
 function stateUpdate(text: string): Uint8Array {
 	const doc = new Y.Doc();
 	doc.getText("content").insert(0, text);
@@ -362,6 +386,101 @@ describe("YjsCompactor", () => {
 		expect(
 			snapshotText(client, DOC_ID, header.current_snapshot_id as string),
 		).toBe(`a${"b".repeat(30)}`);
+	});
+
+	test("abandons an uncommitted multi-part group", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const update = incrementalUpdates(["x".repeat(30)])[0] as Uint8Array;
+		const parts = chunkPayload(update, 8);
+		seedMarker(client, DOC_ID, "abandoned", parts.length, false);
+		for (let index = 0; index < parts.length; index += 1) {
+			seedPart(
+				client,
+				DOC_ID,
+				"abandoned",
+				index,
+				parts.length,
+				parts[index] as Uint8Array,
+			);
+		}
+		const worker = makeWorker(client);
+
+		await worker.runPass();
+
+		expect(updateRows(client)).toEqual([]);
+		expect(readHeader(client).compaction_version).toBe(0);
+		expect(snapshotGroups(client).size).toBe(0);
+	});
+
+	test("keeps parts when the publisher commits before abandonment", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const update = incrementalUpdates(["x".repeat(30)])[0] as Uint8Array;
+		const parts = chunkPayload(update, 8);
+		const markerId = seedMarker(
+			client,
+			DOC_ID,
+			"raced-commit",
+			parts.length,
+			false,
+		);
+		for (let index = 0; index < parts.length; index += 1) {
+			seedPart(
+				client,
+				DOC_ID,
+				"raced-commit",
+				index,
+				parts.length,
+				parts[index] as Uint8Array,
+			);
+		}
+		let raced = false;
+		client.store.beforeBatch = (operations) => {
+			if (raced) return;
+			const remove = operations.find(
+				(operation) =>
+					operation.op === "remove" && operation.path[0] === UPDATES,
+			);
+			if (remove === undefined) return;
+			raced = true;
+			client.store.patch(UPDATES, markerId, { committed: true });
+		};
+		const worker = makeWorker(client);
+
+		await worker.runPass();
+
+		expect(raced).toBe(true);
+		expect(readHeader(client).compaction_version).toBe(0);
+		expect(snapshotGroups(client).size).toBe(0);
+		const rows = updateRows(client);
+		expect(rows.length).toBe(parts.length + 1);
+		expect(rows.some((row) => row.committed === true)).toBe(true);
+	});
+
+	test("keeps an active uncommitted group for a later pass", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const update = incrementalUpdates(["x".repeat(30)])[0] as Uint8Array;
+		const parts = chunkPayload(update, 8);
+		seedMarker(client, DOC_ID, "active", parts.length, false);
+		for (let index = 0; index < parts.length; index += 1) {
+			seedPart(
+				client,
+				DOC_ID,
+				"active",
+				index,
+				parts.length,
+				parts[index] as Uint8Array,
+			);
+		}
+		const worker = makeWorker(client, { updateRetentionMs: 120_000 });
+
+		await worker.runPass();
+
+		expect(readHeader(client).compaction_version).toBe(0);
+		expect(snapshotGroups(client).size).toBe(0);
+		expect(updateRows(client).length).toBe(parts.length + 1);
 	});
 
 	test("retries after a compaction version conflict", async () => {

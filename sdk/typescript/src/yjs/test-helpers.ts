@@ -134,6 +134,10 @@ export class FakeStore {
 
 	/** Runs before a batch validates its conditions; used for CAS races. */
 	beforeBatch: ((operations: BatchOperation[]) => void) | null = null;
+	/** Runs before a set applies; used for commit-marker races. */
+	beforeSet:
+		| ((path: string[], options?: { if?: Record<string, unknown> }) => void)
+		| null = null;
 
 	setNamespace(namespace: string): void {
 		this.namespace = namespace;
@@ -245,8 +249,13 @@ export class FakeStore {
 		if (this.collection(collection).delete(id)) this.notify(collection);
 	}
 
-	async set(path: string[], value: JsonValue): Promise<void> {
+	async set(
+		path: string[],
+		value: JsonValue,
+		options?: { if?: Record<string, unknown> },
+	): Promise<void> {
 		this.setAttempts += 1;
+		this.beforeSet?.(path, options);
 		if (path.length !== 2)
 			throw new Error("FakeStore only supports row writes");
 		const failure = this.writeFailures.shift();
@@ -265,6 +274,12 @@ export class FakeStore {
 		if (!isPlainRecord(value)) throw new Error("Expected an object row");
 		const [collection, id] = path as [string, string];
 		const existing = this.collection(collection).get(id);
+		if (
+			options?.if !== undefined &&
+			(existing === undefined || !matches(existing, options.if))
+		) {
+			throw this.errorFactory("PRECONDITION_FAILED");
+		}
 		const row = {
 			...value,
 			id,

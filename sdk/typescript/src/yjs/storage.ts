@@ -60,6 +60,7 @@ export const yjsStoreSchema = {
 			update_id: { type: "string", minLength: 1, maxLength: 64 },
 			part: { type: "integer", minimum: 0 },
 			parts: { type: "integer", minimum: 1 },
+			committed: { type: "boolean" },
 			data: { type: "bytes" },
 		},
 	},
@@ -83,6 +84,8 @@ export interface ChunkPayloadRow {
 	part: number;
 	parts: number;
 	data?: Uint8Array | null;
+	/** Commit rows default to committed when the field is absent. */
+	committed?: boolean;
 }
 
 /** A fully assembled payload. */
@@ -147,6 +150,7 @@ export class ChunkAssembler {
 		if (payload.parts !== row.parts) return null;
 
 		if (isCommit) {
+			if (row.committed === false) return null;
 			payload.committed = true;
 		} else {
 			payload.chunks.set(row.part, row.data as Uint8Array);

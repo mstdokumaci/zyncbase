@@ -28,6 +28,11 @@ It is the compare-and-swap guard for the header commit. The provider ignores it.
 generation, so cleanup can distinguish a snapshot a writer may still publish
 from an older generation. The provider ignores it.
 
+`yjs_updates` commit rows carry a `committed` flag. The writer creates the
+commit row with `committed = false` before writing parts, then sets it to `true`
+after all parts exist. A group is readable only when its marker is committed.
+This is the update group's commit gate, not document-level publishing.
+
 ## Discovery
 
 Per namespace, the worker keeps an in-memory update cursor.
@@ -58,10 +63,18 @@ document is lost after the cursor advances.
    `Y.Doc`. A missing or incomplete pointed-to snapshot retries the document.
 3. Page updates with `created_at > compacted_through` (or all updates for a
    document with no watermark), ordered ascending.
-4. Assemble complete groups with `ChunkAssembler`; apply each complete update.
-   Track each group's min/max `created_at`.
-5. Groups with no commit:
-   - older than `updateRetentionMs` → abandoned; delete their rows.
+4. Assemble completed groups with `ChunkAssembler`; apply each complete update.
+   Commit rows with `committed = false` are markers and do not complete a group.
+   Track each group's min/max `created_at` and marker row.
+5. Uncommitted groups:
+   - older than `updateRetentionMs` → abandoned.
+     - If the group has an uncommitted marker, remove that marker first with
+       `if: { committed: { eq: false } }`. If the removal fails, the publisher
+       committed first: keep the group and treat it as active for the next
+       pass. If it succeeds, the writer's conditional commit can no longer
+       succeed; delete the remaining parts.
+     - If the group has no marker, delete its rows; there is no publication
+       path.
    - recent → keep, and clamp the new watermark below the earliest incomplete
      row.
 6. Compute:

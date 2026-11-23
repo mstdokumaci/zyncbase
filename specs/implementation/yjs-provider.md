@@ -41,12 +41,18 @@ A logical payload (one update or one snapshot) is stored as one or more rows.
 
 - Single part: `parts = 1`, `part = 0`, `data` present. Complete immediately.
 - Multi part: data rows `part = 0..parts-1`, plus a commit row
-  `part = parts` with no `data`. The commit row is written last.
-- A payload is complete only when every part and (for multi-part) the commit
-  row exist.
+  `part = parts` with no `data`. The writer creates the commit row first with
+  `committed = false`, writes the parts, then commits it with a conditional
+  write `committed = false → true` after all parts are present.
+- A payload is complete only when every part exists and (for multi-part) the
+  commit row is committed. A `committed = false` row is a marker, not a
+  completed payload.
 - Retries reuse the same payload ID and row IDs, so writes are idempotent.
 - Readers accept any chunk size; payloads are self-describing.
-- Incomplete payloads are ignored (in-flight or abandoned writers).
+- Incomplete payloads are ignored (in-flight or abandoned writers). The
+  compactor removes an uncommitted marker before it reclaims the group; after
+  that removal, the writer's conditional commit fails and the group cannot
+  become visible.
 
 ## Snapshot commit protocol (compactor)
 
@@ -113,6 +119,12 @@ written past the failed predecessor. The application calls `flush()` after
 fixing the cause to retry the retained payload; if it still fails, the block
 stays. Partial rows from an interrupted attempt remain but are ignored by
 readers until the compactor cleans them up.
+
+Multi-part writes create the uncommitted commit marker first, then the parts,
+then commit the marker with a conditional write. If the compactor removes an
+abandoned marker first, that conditional commit fails. The provider requeues
+the merged bytes and retries with a new update ID and marker, so the local
+update is not lost.
 
 `flush()` forces the debounce and returns the current drain promise. It rejects
 when the provider is disconnected, a drain loses the connection with unwritten

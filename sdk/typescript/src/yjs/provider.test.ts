@@ -452,6 +452,78 @@ describe("ZyncBaseYjsProvider initial sync", () => {
 		provider.destroy();
 	});
 
+	test("waits for the committed flag on a live multi-part update", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const doc = new Y.Doc();
+		const provider = makeProvider(client, doc);
+		await provider.connect();
+
+		const source = new Y.Doc();
+		source.getText("content").insert(0, "live multi-part");
+		const update = Y.encodeStateAsUpdate(source);
+		const parts = chunkPayload(update, 8);
+		const markerId = "live-commit";
+		client.store.seed(UPDATES, markerId, {
+			document_id: DOC_ID,
+			update_id: "live",
+			part: parts.length,
+			parts: parts.length,
+			committed: false,
+		});
+		for (let index = 0; index < parts.length; index += 1) {
+			client.store.seed(UPDATES, `live-${index}`, {
+				document_id: DOC_ID,
+				update_id: "live",
+				part: index,
+				parts: parts.length,
+				data: parts[index] as Uint8Array,
+			});
+		}
+		expect(doc.getText("content").toString()).toBe("");
+
+		client.store.patch(UPDATES, markerId, { committed: true });
+
+		await waitFor(
+			() => doc.getText("content").toString() === "live multi-part",
+		);
+		source.destroy();
+		provider.destroy();
+	});
+
+	test("requeues when the commit marker is removed before commit", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const doc = new Y.Doc();
+		const provider = makeProvider(client, doc, {
+			chunkSize: 8,
+			retryDelayMs: 5,
+			maxRetryDelayMs: 20,
+		});
+		await provider.connect();
+
+		let raced = false;
+		client.store.beforeSet = (path, options) => {
+			if (raced || options?.if === undefined) return;
+			if (path[0] !== UPDATES) return;
+			const row = client.store.collection(UPDATES).get(path[1] as string);
+			if (row?.committed !== false) return;
+			raced = true;
+			client.store.delete(UPDATES, path[1] as string);
+		};
+
+		doc.getText("content").insert(0, "x".repeat(100));
+		await expect(provider.flush()).rejects.toBeTruthy();
+
+		await waitFor(() =>
+			[...updateGroups(client).values()].some((rows) =>
+				rows.some((row) => row.committed === true),
+			),
+		);
+		expect(raced).toBe(true);
+		provider.destroy();
+	});
+
 	test("re-reads the header when compaction lands during a sync", async () => {
 		const client = new FakeClient();
 		const source = new Y.Doc();

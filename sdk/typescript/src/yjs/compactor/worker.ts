@@ -96,6 +96,7 @@ interface UpdateGroup {
 	min: number;
 	max: number;
 	complete: boolean;
+	markerRowId: string | null;
 	rows: Array<{ id: string; createdAt: number }>;
 }
 
@@ -537,6 +538,7 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 							min: createdAt,
 							max: createdAt,
 							complete: false,
+							markerRowId: null,
 							rows: [],
 						};
 						groups.set(updateId, group);
@@ -547,12 +549,22 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 					if (rowId.length > 0) {
 						group.rows.push({ id: rowId, createdAt });
 					}
+					const committed =
+						value.committed === false
+							? false
+							: value.committed === true
+								? true
+								: undefined;
+					if (part === parts && committed === false && rowId.length > 0) {
+						group.markerRowId = rowId;
+					}
 					const assembled = assembler.add({
 						id: rowId,
 						payloadId: updateId,
 						part,
 						parts,
 						data: data instanceof Uint8Array ? data : null,
+						committed,
 					});
 					if (assembled !== null) {
 						Y.applyUpdate(doc, assembled.bytes);
@@ -566,17 +578,31 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 			const updateCutoff = now - this.updateRetentionMs * 1_000;
 			const completeGroups: UpdateGroup[] = [];
 			const activeIncomplete: UpdateGroup[] = [];
-			const abandoned: Array<{ id: string; createdAt: number }> = [];
 			for (const group of groups.values()) {
 				if (group.complete) {
 					completeGroups.push(group);
-				} else if (group.max < updateCutoff) {
-					abandoned.push(...group.rows);
-				} else {
-					activeIncomplete.push(group);
+					continue;
 				}
+				if (group.max >= updateCutoff) {
+					activeIncomplete.push(group);
+					continue;
+				}
+
+				if (group.markerRowId !== null) {
+					const removed = await this.removeUncommittedMarker(group.markerRowId);
+					if (!removed) {
+						// The publisher committed before the removal. Keep the group
+						// for the next pass.
+						activeIncomplete.push(group);
+						continue;
+					}
+				}
+
+				await this.deleteRows(
+					this.updatesCollection,
+					group.rows.filter((row) => row.id !== group.markerRowId),
+				);
 			}
-			await this.deleteRows(this.updatesCollection, abandoned);
 
 			if (completeGroups.length === 0) {
 				const incomplete = activeIncomplete.length > 0;
@@ -976,6 +1002,22 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 			if (this.stopped) return false;
 		}
 		return true;
+	}
+
+	private async removeUncommittedMarker(rowId: string): Promise<boolean> {
+		try {
+			await this.store.batch([
+				{
+					op: "remove",
+					path: [this.updatesCollection, rowId],
+					if: { committed: { eq: false } },
+				},
+			]);
+			return true;
+		} catch (error) {
+			if (isPreconditionFailed(error)) return false;
+			throw error;
+		}
 	}
 
 	private async deleteRows(
