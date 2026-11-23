@@ -110,6 +110,27 @@ function updateGroups(client: FakeClient): Map<string, FakeRow[]> {
 	return groups;
 }
 
+function applyStoredUpdates(client: FakeClient, doc: Y.Doc): void {
+	for (const rows of updateGroups(client).values()) {
+		const dataRows = rows
+			.filter((row) => row.part !== row.parts)
+			.slice()
+			.sort((a, b) => (a.part as number) - (b.part as number));
+		const length = dataRows.reduce(
+			(sum, row) => sum + (row.data as Uint8Array).length,
+			0,
+		);
+		const merged = new Uint8Array(length);
+		let offset = 0;
+		for (const row of dataRows) {
+			const data = row.data as Uint8Array;
+			merged.set(data, offset);
+			offset += data.length;
+		}
+		Y.applyUpdate(doc, merged);
+	}
+}
+
 describe("ZyncBaseYjsProvider lifecycle", () => {
 	test("auto-connects and emits sync after the initial load", async () => {
 		const client = new FakeClient();
@@ -122,7 +143,7 @@ describe("ZyncBaseYjsProvider lifecycle", () => {
 		provider.on("status", ({ status }) => statuses.push(status));
 		provider.on("sync", (synced) => syncs.push(synced));
 
-		await provider.connect();
+		await waitFor(() => provider.synced);
 
 		expect(client.connectCalls).toBe(1);
 		expect(provider.synced).toBe(true);
@@ -164,6 +185,72 @@ describe("ZyncBaseYjsProvider lifecycle", () => {
 
 		await provider.connect();
 		expect(provider.synced).toBe(true);
+		provider.destroy();
+	});
+
+	test("disconnect during connect makes the next connect start a fresh attempt", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		client.store.deferSubscribe = true;
+		const doc = new Y.Doc();
+		const provider = makeProvider(client, doc);
+
+		const first = provider.connect();
+		await waitFor(() => client.store.pendingSubscribeCount === 1);
+		provider.disconnect();
+		const second = provider.connect();
+		await waitFor(() => client.store.pendingSubscribeCount === 2);
+		client.store.releaseSubscriptions();
+
+		await expect(first).rejects.toBeTruthy();
+		await second;
+		expect(provider.synced).toBe(true);
+		expect(client.store.subscriptions.size).toBe(1);
+		provider.destroy();
+	});
+
+	test("a sync listener that disconnects stops the completion path", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const doc = new Y.Doc();
+		const provider = makeProvider(client, doc);
+		provider.on("sync", (synced) => {
+			if (synced) provider.disconnect();
+		});
+
+		doc.getText("content").insert(0, "pending");
+		await provider.connect();
+
+		expect(provider.synced).toBe(false);
+		expect(provider.status).toBe("disconnected");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(updateRows(client)).toEqual([]);
+		provider.destroy();
+	});
+
+	test("a sync listener disconnecting during resync stops the completion path", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const doc = new Y.Doc();
+		const provider = makeProvider(client, doc);
+		await provider.connect();
+
+		let syncEvents = 0;
+		provider.on("sync", (synced) => {
+			if (!synced) return;
+			syncEvents += 1;
+			provider.disconnect();
+		});
+
+		client.disconnect();
+		client.status = "connected";
+		client.emit("statusChange", "connected");
+		client.emit("synced");
+
+		await waitFor(() => syncEvents === 1);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(provider.synced).toBe(false);
+		expect(provider.status).toBe("disconnected");
 		provider.destroy();
 	});
 
@@ -584,7 +671,7 @@ describe("ZyncBaseYjsProvider local writes", () => {
 		provider.destroy();
 	});
 
-	test("drops a non-retryable write and reports it", async () => {
+	test("blocks later writes after a terminal error and retries on flush", async () => {
 		const client = new FakeClient();
 		seedHeader(client);
 		const doc = new Y.Doc();
@@ -594,12 +681,50 @@ describe("ZyncBaseYjsProvider local writes", () => {
 		const errors: unknown[] = [];
 		provider.on("error", (error) => errors.push(error));
 		client.store.writeFailures.push("PERMISSION_DENIED");
-		doc.getText("content").insert(0, "denied");
+		doc.getText("content").insert(0, "first");
 		await expect(provider.flush()).rejects.toBeTruthy();
 
+		doc.getText("content").insert(5, "second");
 		await new Promise((resolve) => setTimeout(resolve, 30));
-		expect(updateRows(client)).toEqual([]);
-		expect(errors.length).toBe(1);
+		expect(updateGroups(client).size).toBe(0);
+
+		client.store.writeFailures.push("PERMISSION_DENIED");
+		await expect(provider.flush()).rejects.toBeTruthy();
+		expect(updateGroups(client).size).toBe(0);
+
+		await provider.flush();
+
+		expect(updateGroups(client).size).toBe(2);
+		const applied = new Y.Doc();
+		applyStoredUpdates(client, applied);
+		expect(applied.getText("content").toString()).toBe("firstsecond");
+		applied.destroy();
+		expect(errors.length).toBe(2);
+		provider.destroy();
+	});
+
+	test("rejects a drain that loses the connection with bytes still queued", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const doc = new Y.Doc();
+		const provider = makeProvider(client, doc);
+		await provider.connect();
+
+		client.store.pauseNextSet = true;
+		doc.getText("content").insert(0, "first");
+		const flushing = provider.flush();
+		await waitFor(() => client.store.pausedSetCount === 1);
+
+		doc.getText("content").insert(5, "second");
+		client.status = "disconnected";
+		client.store.releaseSets();
+
+		await expect(flushing).rejects.toBeTruthy();
+		expect(updateGroups(client).size).toBe(1);
+
+		client.status = "connected";
+		await provider.flush();
+		expect(updateGroups(client).size).toBe(2);
 		provider.destroy();
 	});
 

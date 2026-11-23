@@ -169,10 +169,10 @@ import { createClient } from "@zyncbase/client";
 import { ZyncBaseYjsProvider } from "@zyncbase/client/yjs";
 
 const client = createClient<ZyncBaseSchema>({ url: "ws://localhost:3000" });
+await client.connect();
 
 const documentId = await client.store.create("yjs_documents", {
 	slug: "notes-demo",
-	title: "Design notes", // optional app-defined field
 });
 
 const doc = new Y.Doc();
@@ -190,12 +190,17 @@ await provider.connect();
 
 - The provider connects the shared client if needed, but never disconnects it.
   `disconnect()`/`destroy()` only stop this provider.
+- The `yjs_documents` schema above only declares the provider fields. Add app
+  fields such as `title` or `owner_id` to that table before writing them.
 - `provider.on("status", ...)`, `"sync"`, `"connection-close"`,
   `"connection-error"`, `"error"`, and `"destroy"` mirror the usual Yjs
   provider surface. `provider.synced` and `provider.connected` are synchronous.
 - The provider takes the document row id, not the slug. Resolve a slug with a
   normal query if your app routes by name.
 - One provider per `Y.Doc`. Multiple documents can share one client.
+- A non-retryable write failure (for example `PERMISSION_DENIED`) blocks later
+  writes and keeps the failed payload queued. Fix the cause and call
+  `flush()` to retry; transient failures retry automatically with backoff.
 
 ### First-class integration
 
@@ -229,8 +234,11 @@ chunks risk `MESSAGE_TOO_LARGE`.
 
 This iteration is the provider only: no compactor, no awareness/cursors, no
 ProseMirror example. Updates are never deleted until a compactor ships, so a
-fresh client reads all retained history once. Seed content after the first
-`sync`; content edited before the provider is constructed is not persisted.
+fresh client reads all retained history once. The SDK also keeps live update
+rows in its materialized subscription view; without a compactor deleting them,
+a long session grows that view. A future delta-only subscription or explicit
+release API will bound it. Seed content after the first `sync`; content edited
+before the provider is constructed is not persisted.
 
 ## License
 

@@ -55,7 +55,7 @@
 		}
 	},
 	"scripts": {
-		"build": "bun build src/index.ts --outdir dist --format esm && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm --target node && bun build src/react/index.ts --outdir dist/react --format esm --external react --banner '\"use client\";' && bun build src/yjs/index.ts --outdir dist/yjs --format esm --external yjs"
+		"build": "rm -rf dist && bun build --root src src/index.ts src/yjs/index.ts --outdir dist --format esm --splitting --external yjs && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm --target node && bun build src/react/index.ts --outdir dist/react --format esm --external react --banner '\"use client\";'"
 	},
 	"dependencies": {
 		"@msgpack/msgpack": "^3.1.3",

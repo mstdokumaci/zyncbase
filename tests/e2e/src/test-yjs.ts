@@ -1,9 +1,14 @@
 import { expect } from "bun:test";
-import { createClient } from "@zyncbase/client";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { createClient, ZyncBaseError } from "@zyncbase/client";
 import { ZyncBaseYjsProvider } from "@zyncbase/client/yjs";
 import * as Y from "yjs";
 
+import { FakeClient } from "../../../sdk/typescript/src/yjs/test-helpers.js";
+
 type Row = Record<string, unknown>;
+type ProviderClient = ConstructorParameters<typeof ZyncBaseYjsProvider>[0];
 
 async function waitFor(predicate: () => boolean, timeoutMs = 10_000) {
 	const deadline = Date.now() + timeoutMs;
@@ -22,7 +27,92 @@ function split(bytes: Uint8Array, chunkSize: number): Uint8Array[] {
 	return parts;
 }
 
+function sourceUpdates(texts: string[]): Uint8Array[] {
+	const source = new Y.Doc();
+	const updates: Uint8Array[] = [];
+	source.on("update", (update: Uint8Array) => updates.push(update));
+	let offset = 0;
+	for (const text of texts) {
+		source.getText("content").insert(offset, text);
+		offset += text.length;
+	}
+	source.destroy();
+	return updates;
+}
+
+/**
+ * The emitted package splits shared modules across entry points. These checks
+ * import the built entries, so they catch a duplicated `ZyncBaseError` class
+ * that source-level unit tests cannot.
+ */
+async function runPackageChecks(): Promise<void> {
+	const entry = readFileSync(
+		join(import.meta.dir, "../../../sdk/typescript/dist/yjs/index.js"),
+		"utf8",
+	);
+	expect(entry).toMatch(/from\s+["']yjs["']/);
+
+	const retryClient = new FakeClient();
+	retryClient.status = "connected";
+	retryClient.store.setErrorFactory((code) =>
+		ZyncBaseError.fromServerResponse({ code, message: code }),
+	);
+	retryClient.store.seed("yjs_documents", "doc-1", {});
+	const retryDoc = new Y.Doc();
+	const retryProvider = new ZyncBaseYjsProvider(
+		retryClient as unknown as ProviderClient,
+		"doc-1",
+		retryDoc,
+		{ connect: false, retryDelayMs: 1, maxRetryDelayMs: 5 },
+	);
+	try {
+		await retryProvider.connect();
+		retryClient.store.writeFailures.push("CONNECTION_FAILED");
+		retryDoc.getText("content").insert(0, "retry");
+		await expect(retryProvider.flush()).rejects.toBeTruthy();
+		await waitFor(() => retryClient.store.collection("yjs_updates").size === 1);
+	} finally {
+		retryProvider.destroy();
+		retryDoc.destroy();
+	}
+
+	const readClient = new FakeClient();
+	readClient.status = "connected";
+	readClient.store.setErrorFactory((code) =>
+		ZyncBaseError.fromServerResponse({ code, message: code }),
+	);
+	readClient.store.seed("yjs_documents", "doc-1", {});
+	const updates = sourceUpdates(["a", "b", "c"]);
+	for (let index = 0; index < updates.length; index += 1) {
+		readClient.store.seed("yjs_updates", `up-${index}`, {
+			document_id: "doc-1",
+			update_id: `up-${index}`,
+			part: 0,
+			parts: 1,
+			data: updates[index] as Uint8Array,
+		});
+	}
+	readClient.store.maxQueryLimit = 2;
+	const readDoc = new Y.Doc();
+	const readProvider = new ZyncBaseYjsProvider(
+		readClient as unknown as ProviderClient,
+		"doc-1",
+		readDoc,
+		{ connect: false, pageSize: 8 },
+	);
+	try {
+		await readProvider.connect();
+		expect(readProvider.synced).toBe(true);
+		expect(readDoc.getText("content").toString()).toBe("abc");
+	} finally {
+		readProvider.destroy();
+		readDoc.destroy();
+	}
+}
+
 export async function run(port: number): Promise<void> {
+	await runPackageChecks();
+
 	const url = `ws://127.0.0.1:${port}`;
 	const clientA = createClient({ url, auth: { anonymous: true } });
 	const clientB = createClient({ url, auth: { anonymous: true } });
@@ -152,12 +242,21 @@ export async function run(port: number): Promise<void> {
 		providerB = null;
 		providerC = null;
 
-		await clientA.store.remove(["yjs_documents", documentId]);
-		const remainingUpdates = await clientA.store.query("yjs_updates", {
-			where: { document_id: documentId },
+		const snapshotsBefore = await clientA.store.query("yjs_snapshots", {
+			where: { document_id: secondDocumentId },
 			limit: 50,
 		});
-		const remainingSnapshots = await clientA.store.query("yjs_snapshots", {
+		expect(snapshotsBefore.length).toBeGreaterThan(0);
+
+		await clientA.store.remove(["yjs_documents", secondDocumentId]);
+		const snapshotsAfter = await clientA.store.query("yjs_snapshots", {
+			where: { document_id: secondDocumentId },
+			limit: 50,
+		});
+		expect(snapshotsAfter.length).toBe(0);
+
+		await clientA.store.remove(["yjs_documents", documentId]);
+		const remainingUpdates = await clientA.store.query("yjs_updates", {
 			where: { document_id: documentId },
 			limit: 50,
 		});
@@ -166,12 +265,9 @@ export async function run(port: number): Promise<void> {
 			limit: 50,
 		});
 		expect(remainingUpdates.length).toBe(0);
-		expect(remainingSnapshots.length).toBe(0);
 		expect(remainingNotes.length).toBe(0);
 		expect(await clientA.store.get(["yjs_documents", documentId])).toBeNull();
 		expect(noteId.length).toBeGreaterThan(0);
-
-		await clientA.store.remove(["yjs_documents", secondDocumentId]);
 	} finally {
 		providerA?.destroy();
 		providerB?.destroy();

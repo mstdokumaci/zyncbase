@@ -132,8 +132,37 @@ export class FakeStore {
 	writeFailures: Array<string | null> = [];
 	/** Runs before a query computes its result. */
 	afterQuery: ((collection: string) => void) | null = null;
+	/** Hold subscriptions until `releaseSubscriptions()` is called. */
+	deferSubscribe = false;
+	/** Hold the next successful `set` until `releaseSets()` is called. */
+	pauseNextSet = false;
+
+	private readonly subscribeResolvers: Array<() => void> = [];
+	private readonly setResolvers: Array<() => void> = [];
+	private errorFactory = (code: string): Error =>
+		ZyncBaseError.fromServerResponse({ code, message: code });
 
 	private clock = 1;
+
+	setErrorFactory(factory: (code: string) => Error): void {
+		this.errorFactory = factory;
+	}
+
+	get pendingSubscribeCount(): number {
+		return this.subscribeResolvers.length;
+	}
+
+	get pausedSetCount(): number {
+		return this.setResolvers.length;
+	}
+
+	releaseSubscriptions(): void {
+		for (const resolve of this.subscribeResolvers.splice(0)) resolve();
+	}
+
+	releaseSets(): void {
+		for (const resolve of this.setResolvers.splice(0)) resolve();
+	}
 
 	collection(name: string): Map<string, FakeRow> {
 		let rows = this.data.get(name);
@@ -190,10 +219,11 @@ export class FakeStore {
 			throw new Error("FakeStore only supports row writes");
 		const failure = this.writeFailures.shift();
 		if (failure !== undefined && failure !== null) {
-			throw ZyncBaseError.fromServerResponse({
-				code: failure,
-				message: failure,
-			});
+			throw this.errorFactory(failure);
+		}
+		if (this.pauseNextSet) {
+			this.pauseNextSet = false;
+			await new Promise<void>((resolve) => this.setResolvers.push(resolve));
 		}
 		if (!isPlainRecord(value)) throw new Error("Expected an object row");
 		const [collection, id] = path as [string, string];
@@ -220,10 +250,7 @@ export class FakeStore {
 	): Promise<JsonValue[] & { nextCursor: string | null }> {
 		this.queries.push({ collection, options });
 		if (options.limit !== undefined && options.limit > this.maxQueryLimit) {
-			throw ZyncBaseError.fromServerResponse({
-				code: "RESPONSE_TOO_LARGE",
-				message: "RESPONSE_TOO_LARGE",
-			});
+			throw this.errorFactory("RESPONSE_TOO_LARGE");
 		}
 		this.afterQuery?.(collection);
 		let rows = [...this.collection(collection).values()].filter((row) =>
@@ -240,7 +267,9 @@ export class FakeStore {
 			rows.length > page.length && page.length > 0
 				? String(page[page.length - 1]?.created_at)
 				: null;
-		const result = page as JsonValue[] & { nextCursor: string | null };
+		const result = page as unknown as JsonValue[] & {
+			nextCursor: string | null;
+		};
 		result.nextCursor = nextCursor;
 		return result;
 	}
@@ -250,6 +279,11 @@ export class FakeStore {
 		options: QueryOptions,
 		callback: (rows: JsonValue[]) => void,
 	): Promise<SubscriptionHandle> {
+		if (this.deferSubscribe) {
+			await new Promise<void>((resolve) =>
+				this.subscribeResolvers.push(resolve),
+			);
+		}
 		const startClock = this.clock;
 		const matching = sortRows(
 			[...this.collection(collection).values()].filter((row) =>

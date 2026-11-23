@@ -111,13 +111,22 @@ batching all chunks would recreate the oversized message that chunking avoids.
 
 Retryable failures keep the plan and retry with exponential backoff. The whole
 payload is rewritten with the same IDs; no partial resume, because an uncertain
-timeout may or may not have committed. Non-retryable failures drop the plan and
-emit `error`. Partial rows remain but are ignored by readers until the compactor
-cleans them up.
+timeout may or may not have committed. A non-retryable failure also keeps the
+plan but sets a write-blocked state: later Yjs deltas queue instead of being
+written past the failed predecessor. The application calls `flush()` after
+fixing the cause to retry the retained payload; if it still fails, the block
+stays. Partial rows from an interrupted attempt remain but are ignored by
+readers until the compactor cleans them up.
 
 `flush()` forces the debounce and returns the current drain promise. It rejects
-when the provider is disconnected or the write fails; bytes stay queued for
-automatic retry.
+when the provider is disconnected, a drain loses the connection with unwritten
+bytes, or a write fails. Terminal write failures are retried by `flush()`;
+transient failures are reported and continue on automatic backoff.
+
+When a drain loses the connection mid-flight, it rejects rather than resolving
+with bytes still queued. The bytes remain buffered and the reconnect path
+resumes draining. The post-drain reschedule requires a connected client and no
+active write block, so an offline drain cannot spin.
 
 ## Sizing
 
@@ -137,6 +146,10 @@ large chunks risk `MESSAGE_TOO_LARGE` and reduce headroom for row overhead.
 
 - No compactor or snapshot writer ships in this iteration. Seeded snapshots are
   read and tested; updates are never deleted.
+- The SDK materializes live subscription rows. Until the compactor deletes old
+  updates, a long session keeps those rows in memory and rescans a growing view.
+  A delta-only subscription or explicit release API is the follow-up; the
+  compactor's retention bounds this in the meantime.
 - No awareness/cursors.
 - The provider does not create document headers.
 - The shared client is never disconnected by the provider.
@@ -154,3 +167,6 @@ large chunks risk `MESSAGE_TOO_LARGE` and reduce headroom for row overhead.
   re-read race, reconnect snapshot reload, connection isolation.
 - `tests/e2e/src/test-yjs.ts`: real-server cross-client sync, forced chunking,
   seeded snapshot recovery, slug lookup, system fields, and cascade delete.
+  It also imports the emitted package and checks shared `ZyncBaseError`
+  identity, retryable/oversized-error recognition across entry points, and
+  `yjs` remaining external.

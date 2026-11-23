@@ -155,6 +155,7 @@ export class ZyncBaseYjsProvider<
 	private flushTimer: ReturnType<typeof setTimeout> | null = null;
 	private retryTimer: ReturnType<typeof setTimeout> | null = null;
 	private retryAttempt = 0;
+	private writeBlocked = false;
 
 	private subscription: SubscriptionHandle | null = null;
 	private syncPromise: Promise<void> | null = null;
@@ -304,6 +305,7 @@ export class ZyncBaseYjsProvider<
 		this.active = false;
 		this.connecting = false;
 		this.generation += 1;
+		this.connectPromise = null;
 		this.syncPromise = null;
 		this.syncQueued = false;
 		this.clearTimers();
@@ -332,26 +334,50 @@ export class ZyncBaseYjsProvider<
 
 	/**
 	 * Forces buffered local edits to be written. Rejects when the provider is
-	 * not connected or a write fails; failed bytes stay queued for retry.
+	 * not connected or a write fails; failed bytes stay queued.
+	 *
+	 * `flush()` is also the explicit retry after a non-retryable write failure:
+	 * it clears the write block and retries the retained payload before any
+	 * later queued deltas. Transient failures are reported to the caller while
+	 * automatic backoff continues.
 	 */
-	flush(): Promise<void> {
+	async flush(): Promise<void> {
 		if (this.destroyed) {
-			return Promise.reject(new Error("Yjs provider has been destroyed"));
+			throw new Error("Yjs provider has been destroyed");
 		}
 		if (
 			this.plan === null &&
 			this.pending.length === 0 &&
 			this.draining === null
 		) {
-			return Promise.resolve();
+			return;
 		}
 		if (!this.active || this.client.status !== "connected") {
-			return Promise.reject(new Error("Yjs provider is not connected"));
+			throw notConnectedError();
 		}
 		if (this.flushTimer !== null) {
 			clearTimeout(this.flushTimer);
 			this.flushTimer = null;
 		}
+		let failure: unknown;
+		if (this.draining !== null) {
+			try {
+				await this.draining;
+			} catch (error) {
+				failure = error;
+			}
+		}
+		if (failure !== undefined && !this.writeBlocked) {
+			if (
+				this.plan === null &&
+				this.pending.length === 0 &&
+				this.draining === null
+			) {
+				return;
+			}
+			throw failure;
+		}
+		this.writeBlocked = false;
 		return this.drain();
 	}
 
@@ -450,6 +476,9 @@ export class ZyncBaseYjsProvider<
 			this.syncRetryAttempt = 0;
 			this.retryAttempt = 0;
 			this.setSynced(true);
+			if (generation !== this.generation || !this.active || this.destroyed) {
+				return;
+			}
 			this.setStatus("connected");
 			void this.drain().catch((error: unknown) => this.emitError(error));
 		} catch (error) {
@@ -474,6 +503,9 @@ export class ZyncBaseYjsProvider<
 				this.syncRetryAttempt = 0;
 				this.retryAttempt = 0;
 				this.setSynced(true);
+				if (generation !== this.generation || !this.active || this.destroyed) {
+					return;
+				}
 				this.setStatus("connected");
 				void this.drain().catch((error: unknown) => this.emitError(error));
 			})
@@ -789,6 +821,8 @@ export class ZyncBaseYjsProvider<
 			if (
 				this.active &&
 				!this.destroyed &&
+				this.client.status === "connected" &&
+				!this.writeBlocked &&
 				this.retryTimer === null &&
 				(this.plan !== null || this.pending.length > 0)
 			) {
@@ -800,16 +834,31 @@ export class ZyncBaseYjsProvider<
 	}
 
 	private async runDrain(): Promise<void> {
-		if (!this.active || this.destroyed) return;
-		if (this.client.status !== "connected") return;
+		if (this.writeBlocked) return;
+		if (!this.active || this.destroyed) {
+			if (this.plan !== null || this.pending.length > 0) {
+				throw notConnectedError();
+			}
+			return;
+		}
+		if (this.client.status !== "connected") {
+			if (this.plan !== null || this.pending.length > 0) {
+				throw notConnectedError();
+			}
+			return;
+		}
 		if (this.retryTimer !== null) {
 			clearTimeout(this.retryTimer);
 			this.retryTimer = null;
 		}
 
 		while (this.plan !== null || this.pending.length > 0) {
-			if (!this.active || this.destroyed) return;
-			if (this.client.status !== "connected") return;
+			if (!this.active || this.destroyed) {
+				throw notConnectedError();
+			}
+			if (this.client.status !== "connected") {
+				throw notConnectedError();
+			}
 
 			if (this.plan === null) {
 				if (this.pending.length === 0) break;
@@ -830,7 +879,7 @@ export class ZyncBaseYjsProvider<
 					this.scheduleRetry();
 					throw error;
 				}
-				this.plan = null;
+				this.writeBlocked = true;
 				this.emitError(error);
 				throw error;
 			}
@@ -923,4 +972,12 @@ export class ZyncBaseYjsProvider<
 
 function abortedError(): Error {
 	return new Error("Yjs provider operation was aborted");
+}
+
+function notConnectedError(): ZyncBaseError {
+	return new ZyncBaseError("Yjs provider is not connected", {
+		code: ErrorCodes.CONNECTION_FAILED,
+		category: "network",
+		retryable: true,
+	});
 }
