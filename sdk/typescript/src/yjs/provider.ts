@@ -360,6 +360,7 @@ export class ZyncBaseYjsProvider<
 			this.flushTimer = null;
 		}
 		let failure: unknown;
+		const wasBlocked = this.writeBlocked;
 		if (this.draining !== null) {
 			try {
 				await this.draining;
@@ -367,7 +368,7 @@ export class ZyncBaseYjsProvider<
 				failure = error;
 			}
 		}
-		if (failure !== undefined && !this.writeBlocked) {
+		if (failure !== undefined) {
 			if (
 				this.plan === null &&
 				this.pending.length === 0 &&
@@ -377,7 +378,7 @@ export class ZyncBaseYjsProvider<
 			}
 			throw failure;
 		}
-		this.writeBlocked = false;
+		if (wasBlocked) this.writeBlocked = false;
 		return this.drain();
 	}
 

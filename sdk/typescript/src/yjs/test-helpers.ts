@@ -136,6 +136,10 @@ export class FakeStore {
 	deferSubscribe = false;
 	/** Hold the next successful `set` until `releaseSets()` is called. */
 	pauseNextSet = false;
+	/** Error code thrown after the paused write resumes. */
+	failPausedSet: string | undefined;
+	/** Number of store write attempts, including failed ones. */
+	setAttempts = 0;
 
 	private readonly subscribeResolvers: Array<() => void> = [];
 	private readonly setResolvers: Array<() => void> = [];
@@ -215,6 +219,7 @@ export class FakeStore {
 	}
 
 	async set(path: string[], value: JsonValue): Promise<void> {
+		this.setAttempts += 1;
 		if (path.length !== 2)
 			throw new Error("FakeStore only supports row writes");
 		const failure = this.writeFailures.shift();
@@ -224,6 +229,11 @@ export class FakeStore {
 		if (this.pauseNextSet) {
 			this.pauseNextSet = false;
 			await new Promise<void>((resolve) => this.setResolvers.push(resolve));
+			if (this.failPausedSet !== undefined) {
+				const code = this.failPausedSet;
+				this.failPausedSet = undefined;
+				throw this.errorFactory(code);
+			}
 		}
 		if (!isPlainRecord(value)) throw new Error("Expected an object row");
 		const [collection, id] = path as [string, string];

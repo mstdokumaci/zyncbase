@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import * as Y from "yjs";
 
+import { ZyncBaseError } from "../errors.js";
 import {
 	YjsDocumentNotFoundError,
 	ZyncBaseYjsProvider,
@@ -725,6 +726,35 @@ describe("ZyncBaseYjsProvider local writes", () => {
 		client.status = "connected";
 		await provider.flush();
 		expect(updateGroups(client).size).toBe(2);
+		provider.destroy();
+	});
+
+	test("propagates a terminal failure from a drain joined by flush", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const doc = new Y.Doc();
+		const provider = makeProvider(client, doc, {
+			writeDebounceMs: 0,
+			retryDelayMs: 5,
+		});
+		await provider.connect();
+
+		client.store.pauseNextSet = true;
+		client.store.failPausedSet = "PERMISSION_DENIED";
+		doc.getText("content").insert(0, "blocked");
+		await waitFor(() => client.store.pausedSetCount === 1);
+
+		const flushing = provider.flush();
+		client.store.releaseSets();
+
+		const error = await flushing.catch((err: unknown) => err);
+		expect(error).toBeInstanceOf(ZyncBaseError);
+		expect((error as ZyncBaseError).code).toBe("PERMISSION_DENIED");
+		expect(client.store.setAttempts).toBe(1);
+		expect(updateGroups(client).size).toBe(0);
+
+		await provider.flush();
+		expect(updateGroups(client).size).toBe(1);
 		provider.destroy();
 	});
 
