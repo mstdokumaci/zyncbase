@@ -1,8 +1,14 @@
 import { expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createClient, ZyncBaseError } from "@zyncbase/client";
+import {
+	createClient,
+	type SchemaLike,
+	type ZyncBaseClient,
+	ZyncBaseError,
+} from "@zyncbase/client";
 import { ZyncBaseYjsProvider } from "@zyncbase/client/yjs";
+import { startYjsCompactor } from "@zyncbase/client/yjs/compactor";
 import * as Y from "yjs";
 
 import { FakeClient } from "../../../sdk/typescript/src/yjs/test-helpers.js";
@@ -17,6 +23,48 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10_000) {
 		await Bun.sleep(10);
 	}
 	throw new Error("Yjs e2e waitFor timed out");
+}
+
+async function waitForCompaction(
+	client: ZyncBaseClient<SchemaLike>,
+	documentId: string,
+	timeoutMs = 15_000,
+	minVersion = 1,
+): Promise<Row> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const header = (await client.store.get([
+			"yjs_documents",
+			documentId,
+		])) as Row | null;
+		if (
+			header !== null &&
+			typeof header.current_snapshot_id === "string" &&
+			typeof header.compaction_version === "number" &&
+			header.compaction_version >= minVersion
+		) {
+			return header;
+		}
+		await Bun.sleep(20);
+	}
+	throw new Error("Yjs compaction timed out");
+}
+
+async function waitForNoUpdates(
+	client: ZyncBaseClient<SchemaLike>,
+	documentId: string,
+	timeoutMs = 10_000,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const rows = await client.store.query("yjs_updates", {
+			where: { document_id: documentId },
+			limit: 50,
+		});
+		if (rows.length === 0) return;
+		await Bun.sleep(20);
+	}
+	throw new Error("Yjs update cleanup timed out");
 }
 
 function split(bytes: Uint8Array, chunkSize: number): Uint8Array[] {
@@ -57,7 +105,9 @@ async function runPackageChecks(): Promise<void> {
 	retryClient.store.setErrorFactory((code) =>
 		ZyncBaseError.fromServerResponse({ code, message: code }),
 	);
-	retryClient.store.seed("yjs_documents", "doc-1", {});
+	retryClient.store.seed("yjs_documents", "doc-1", {
+		compaction_version: 0,
+	});
 	const retryDoc = new Y.Doc();
 	const retryProvider = new ZyncBaseYjsProvider(
 		retryClient as unknown as ProviderClient,
@@ -81,7 +131,9 @@ async function runPackageChecks(): Promise<void> {
 	readClient.store.setErrorFactory((code) =>
 		ZyncBaseError.fromServerResponse({ code, message: code }),
 	);
-	readClient.store.seed("yjs_documents", "doc-1", {});
+	readClient.store.seed("yjs_documents", "doc-1", {
+		compaction_version: 0,
+	});
 	const updates = sourceUpdates(["a", "b", "c"]);
 	for (let index = 0; index < updates.length; index += 1) {
 		readClient.store.seed("yjs_updates", `up-${index}`, {
@@ -117,12 +169,16 @@ export async function run(port: number): Promise<void> {
 	const clientA = createClient({ url, auth: { anonymous: true } });
 	const clientB = createClient({ url, auth: { anonymous: true } });
 	const clientC = createClient({ url, auth: { anonymous: true } });
+	const clientD = createClient({ url, auth: { anonymous: true } });
 	const docA = new Y.Doc();
 	const docB = new Y.Doc();
 	const docC = new Y.Doc();
+	const docD = new Y.Doc();
 	let providerA: ZyncBaseYjsProvider | null = null;
 	let providerB: ZyncBaseYjsProvider | null = null;
 	let providerC: ZyncBaseYjsProvider | null = null;
+	let compactor: ReturnType<typeof startYjsCompactor> | null = null;
+	const compactorErrors: unknown[] = [];
 	let documentId: string | null = null;
 	let secondDocumentId: string | null = null;
 
@@ -131,10 +187,14 @@ export async function run(port: number): Promise<void> {
 			clientA.connect(),
 			clientB.connect(),
 			clientC.connect(),
+			clientD.connect(),
 		]);
 
 		const slug = `yjs-${Date.now()}`;
-		documentId = await clientA.store.create("yjs_documents", { slug });
+		documentId = await clientA.store.create("yjs_documents", {
+			slug,
+			compaction_version: 0,
+		});
 		const noteId = await clientA.store.create("notes", {
 			document_id: documentId,
 			title: "Document note",
@@ -196,8 +256,52 @@ export async function run(port: number): Promise<void> {
 			expect((row.data as Uint8Array).length).toBeLessThanOrEqual(128);
 		}
 
+		compactor = startYjsCompactor(clientD, {
+			intervalMs: 25,
+			updateRetentionMs: 0,
+			snapshotRetentionMs: 0,
+			cleanupIntervalMs: 0,
+			chunkSize: 128,
+			pageSize: 2,
+			onError: (error) => compactorErrors.push(error),
+		});
+		const compactedHeader = await waitForCompaction(clientA, documentId);
+		expect(compactedHeader.compaction_version as number).toBeGreaterThanOrEqual(
+			1,
+		);
+		await waitForNoUpdates(clientA, documentId);
+		const compactedSnapshots = await clientA.store.query("yjs_snapshots", {
+			where: { document_id: documentId },
+			limit: 500,
+		});
+		expect(compactedSnapshots.length).toBeGreaterThan(0);
+		const compactedUpdates = await clientA.store.query("yjs_updates", {
+			where: { document_id: documentId },
+			limit: 50,
+		});
+		expect(compactedUpdates.length).toBe(0);
+
+		const providerD = new ZyncBaseYjsProvider(clientC, documentId, docD, {
+			connect: false,
+			chunkSize: 128,
+			pageSize: 2,
+		});
+		try {
+			await providerD.connect();
+			expect(docD.getText("content").toString()).toBe(text);
+		} finally {
+			providerD.destroy();
+		}
+
+		const postText = `${text} post-compaction`;
+		docA.getText("content").insert(text.length, " post-compaction");
+		await providerA.flush();
+		await waitFor(() => docB.getText("content").toString() === postText);
+		await waitForCompaction(clientA, documentId, 15_000, 2);
+
 		secondDocumentId = await clientA.store.create("yjs_documents", {
 			slug: `${slug}-snapshot`,
+			compaction_version: 0,
 		});
 		const snapshotSource = new Y.Doc();
 		const snapshotText = "snapshot ".repeat(50);
@@ -234,6 +338,10 @@ export async function run(port: number): Promise<void> {
 		});
 		await providerC.connect();
 		expect(docC.getText("content").toString()).toBe(snapshotText);
+
+		await compactor.stop();
+		compactor = null;
+		expect(compactorErrors).toEqual([]);
 
 		providerA.destroy();
 		providerB.destroy();
@@ -272,11 +380,14 @@ export async function run(port: number): Promise<void> {
 		providerA?.destroy();
 		providerB?.destroy();
 		providerC?.destroy();
+		await compactor?.stop().catch(() => {});
 		docA.destroy();
 		docB.destroy();
 		docC.destroy();
+		docD.destroy();
 		clientA.disconnect();
 		clientB.disconnect();
 		clientC.disconnect();
+		clientD.disconnect();
 	}
 }

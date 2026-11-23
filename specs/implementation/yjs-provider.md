@@ -2,10 +2,8 @@
 
 **Source files**: `sdk/typescript/src/yjs/{provider,storage,index}.ts`
 
-The Yjs provider persists a `Y.Doc` in ZyncBase. It is a persistence/sync
-provider, not a wire-protocol provider: Yjs updates are stored as append-only
-rows, and a separate compactor (not part of this iteration) folds them into
-chunked snapshots.
+The Yjs provider persists a `Y.Doc` in ZyncBase. Yjs updates are stored as
+append-only rows, and a separate compactor folds them into chunked snapshots.
 
 ## Data model
 
@@ -23,6 +21,7 @@ Documents are first-class store rows. Other collections can reference
 - `slug` (optional, unique, ≤ 120 chars) — application-facing name.
 - `current_snapshot_id` (optional) — commit pointer to the active snapshot generation.
 - `compacted_through` (optional integer) — max `yjs_updates.created_at` included in that snapshot.
+- `compaction_version` (required integer) — compare-and-swap counter owned by the compactor. Apps create headers with `0`; the provider ignores it.
 - Apps may add fields such as `title` or `owner_id`.
 
 System fields are structural:
@@ -82,13 +81,10 @@ Sync loop (up to 3 passes):
    An incomplete snapshot re-reads the header: if the pointer moved, retry;
    otherwise fail as corrupt.
 3. Page `yjs_updates` for the document, ordered `created_at asc`, and apply
-   complete updates with the provider as the Yjs origin. Reads intentionally do
-   **not** filter by `compacted_through`: a chunked write can straddle a
-   compaction boundary, and excluding its early parts would leave the payload
-   incomplete forever. Updates still retained by the compactor are read and
-   applied; Yjs idempotence makes already-compacted duplicates a no-op. The
-   watermark remains the compactor's deletion marker and a future read
-   optimization once whole-payload atomicity exists.
+   complete updates with the provider as the Yjs origin. Retained updates are
+   read and applied idempotently, so a chunked write that straddles a
+   compaction boundary still reaches a complete payload. Yjs makes
+   already-compacted duplicates a no-op.
 4. Re-read the header. If either pointer changed, repeat so a compaction that
    landed mid-sync cannot hide rows it deleted. Applying a newer snapshot is a
    Yjs no-op for content already present.
@@ -142,21 +138,15 @@ Reads halve `pageSize` and retry on `RESPONSE_TOO_LARGE`. If `pageSize` reaches
 Small chunks increase message count and can touch `maxMessagesPerSecond`;
 large chunks risk `MESSAGE_TOO_LARGE` and reduce headroom for row overhead.
 
-## Limits
+## Operational requirements
 
-- No compactor or snapshot writer ships in this iteration. Seeded snapshots are
-  read and tested; updates are never deleted.
-- The SDK materializes live subscription rows. Until the compactor deletes old
-  updates, a long session keeps those rows in memory and rescans a growing view.
-  A delta-only subscription or explicit release API is the follow-up; the
-  compactor's retention bounds this in the meantime.
-- No awareness/cursors.
-- The provider does not create document headers.
-- The shared client is never disconnected by the provider.
-- The store namespace must stay stable while a provider is active.
-- Deleting a document while providers are active is unsupported; destroy them
-  first. Cascade delete removes snapshots, updates, and app rows referencing
-  the document.
+- The application creates the document header before constructing the provider.
+- The provider uses the shared client; applications own the client lifecycle.
+- Keep the store namespace stable while a provider is active.
+- Destroy active providers before deleting the document header. Cascade delete
+  removes snapshots, updates, and app rows referencing the document.
+- The compactor's `updateRetentionMs` controls how long update rows remain in
+  the SDK's materialized subscription view.
 
 ## Tests
 

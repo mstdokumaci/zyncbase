@@ -15,11 +15,13 @@ export const YJS_UPDATES_COLLECTION = "yjs_updates";
  */
 export const yjsStoreSchema = {
 	yjs_documents: {
+		required: ["compaction_version"],
 		unique: [["slug"]],
 		fields: {
 			slug: { type: "string", minLength: 1, maxLength: 120 },
 			current_snapshot_id: { type: "string", minLength: 1, maxLength: 64 },
 			compacted_through: { type: "integer", minimum: 0 },
+			compaction_version: { type: "integer", minimum: 0 },
 		},
 	},
 	yjs_snapshots: {
@@ -62,6 +64,7 @@ export interface YjsDocumentRow {
 	slug?: string | null;
 	current_snapshot_id?: string | null;
 	compacted_through?: number | null;
+	compaction_version?: number | null;
 	created_at?: number;
 	updated_at?: number;
 }

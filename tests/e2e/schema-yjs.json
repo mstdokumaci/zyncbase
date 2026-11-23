@@ -2,6 +2,7 @@
 	"version": "0.0.1",
 	"store": {
 		"yjs_documents": {
+			"required": ["compaction_version"],
 			"unique": [["slug"]],
 			"fields": {
 				"slug": { "type": "string", "minLength": 1, "maxLength": 120 },
@@ -10,7 +11,8 @@
 					"minLength": 1,
 					"maxLength": 64
 				},
-				"compacted_through": { "type": "integer", "minimum": 0 }
+				"compacted_through": { "type": "integer", "minimum": 0 },
+				"compaction_version": { "type": "integer", "minimum": 0 }
 			}
 		},
 		"yjs_snapshots": {

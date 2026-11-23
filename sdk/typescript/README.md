@@ -128,11 +128,13 @@ package, or copy this JSON:
 ```json
 {
 	"yjs_documents": {
+		"required": ["compaction_version"],
 		"unique": [["slug"]],
 		"fields": {
 			"slug": { "type": "string", "minLength": 1, "maxLength": 120 },
 			"current_snapshot_id": { "type": "string", "minLength": 1, "maxLength": 64 },
-			"compacted_through": { "type": "integer", "minimum": 0 }
+			"compacted_through": { "type": "integer", "minimum": 0 },
+			"compaction_version": { "type": "integer", "minimum": 0 }
 		}
 	},
 	"yjs_snapshots": {
@@ -173,6 +175,7 @@ await client.connect();
 
 const documentId = await client.store.create("yjs_documents", {
 	slug: "notes-demo",
+	compaction_version: 0,
 });
 
 const doc = new Y.Doc();
@@ -190,13 +193,12 @@ await provider.connect();
 
 - The provider connects the shared client if needed, but never disconnects it.
   `disconnect()`/`destroy()` only stop this provider.
-- The `yjs_documents` schema above only declares the provider fields. Add app
-  fields such as `title` or `owner_id` to that table before writing them.
+- The schema above declares the provider fields; add app fields such as `title`
+  or `owner_id` to that table before writing them.
 - `provider.on("status", ...)`, `"sync"`, `"connection-close"`,
   `"connection-error"`, `"error"`, and `"destroy"` mirror the usual Yjs
   provider surface. `provider.synced` and `provider.connected` are synchronous.
-- The provider takes the document row id, not the slug. Resolve a slug with a
-  normal query if your app routes by name.
+- Pass the document row id. Resolve a slug first if your app routes by name.
 - One provider per `Y.Doc`. Multiple documents can share one client.
 - A non-retryable write failure (for example `PERMISSION_DENIED`) blocks later
   writes and keeps the failed payload queued. Fix the cause and call
@@ -230,15 +232,53 @@ with any chunk size. Reads halve `pageSize` and retry on `RESPONSE_TOO_LARGE`.
 Small chunks mean more messages and can touch `maxMessagesPerSecond`; large
 chunks risk `MESSAGE_TOO_LARGE`.
 
-### What ships later
+### Compactor
 
-This iteration is the provider only: no compactor, no awareness/cursors, no
-ProseMirror example. Updates are never deleted until a compactor ships, so a
-fresh client reads all retained history once. The SDK also keeps live update
-rows in its materialized subscription view; without a compactor deleting them,
-a long session grows that view. A future delta-only subscription or explicit
-release API will bound it. Seed content after the first `sync`; content edited
-before the provider is constructed is not persisted.
+The generic long-running compactor ships under `/yjs/compactor`. It is
+editor-agnostic: ProseMirror, Tiptap, and any other Yjs editor just supply the
+`Y.Doc` content. Create a dedicated service client, connect it, and start the
+worker in the app server or a background Bun worker:
+
+```ts
+import { startYjsCompactor } from "@zyncbase/client/yjs/compactor";
+
+const compactorClient = createClient<ZyncBaseSchema>({
+	url: "ws://localhost:3000",
+	auth: { tokenProvider: serviceToken },
+});
+await compactorClient.connect();
+
+const compactor = startYjsCompactor(compactorClient, {
+	// Omit to use the client's current store namespace.
+	namespaces: () => activeNamespaces(),
+	intervalMs: 30_000,
+	updateRetentionMs: 24 * 60 * 60_000,
+	snapshotRetentionMs: 60 * 60_000,
+});
+
+// shutdown
+await compactor.stop();
+```
+
+- Discovers work by scanning `yjs_updates.created_at` with a cursor, then reads
+  the updates above each document's watermark.
+- Writes a chunked snapshot, then commits the header pointer and watermark with
+  a `compaction_version` compare-and-swap.
+- Incomplete update groups are retried and hold the watermark back, so their
+  rows are retained until the group completes.
+- Deletes covered updates and old snapshot generations after the configured
+  retention.
+- Use a dedicated client when `namespaces` is set; the worker switches the
+  client's store namespace.
+- Run one worker per database, or more; the version guard keeps instances safe.
+- `compaction_version` is required on every `yjs_documents` header. Start it at
+  `0`.
+
+### Operational notes
+
+- Seed content after the first `sync`; the provider persists updates emitted
+  after it is constructed.
+- Destroy active providers before deleting a document header.
 
 ## License
 
