@@ -859,7 +859,10 @@ export interface Presence<P = never> {
 	getShared(): PresenceSharedOf<P> | null;
 	/** Scope-resolved internal users.id, or null before scope setup. */
 	readonly localUserId: string | null;
-	/** Remove your presence record; resolves after the server accepts it. */
+	/**
+	 * Remove this connection's presence contribution; resolves after the server accepts it.
+	 * The user leaves only when the last connection for that user in the namespace removes it.
+	 */
 	remove(): Promise<void>;
 }
 

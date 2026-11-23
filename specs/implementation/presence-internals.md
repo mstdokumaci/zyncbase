@@ -37,7 +37,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 
 | Tier | Key | Writer | Reader |
 |------|-----|--------|--------|
-| User presence | namespace id + user doc id + connection id | The owning connection writes/removes its own fields. | Subscribers receive user snapshots and join/update/leave broadcasts. |
+| User presence | namespace id + user doc id | Connections of that user merge into one record; the record lives until the last contributing connection leaves. | Subscribers receive user snapshots and join/update/leave broadcasts. |
 | Shared presence | namespace id + shared field | Authorized connections write shared fields. | Shared subscribers receive full shared snapshots and update broadcasts. |
 
 ## Lifecycle
@@ -47,7 +47,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 3. Client may write user fields with `PresenceSet` or shared fields with `PresenceSetShared`.
 4. Client subscribes to user or shared presence channels.
 5. Server sends snapshots on subscribe and broadcasts subsequent updates.
-6. Disconnect or `PresenceRemove` clears connection-owned user presence and emits leave/update broadcasts.
+6. Disconnect or `PresenceRemove` releases the connection's contribution; the user record, `leave` broadcast, and empty-namespace grace period are produced only when the last connection for that user in the namespace leaves.
 
 ## Wire Contract
 
@@ -68,7 +68,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 
 - Presence state is memory-only; it is not persisted through SQLite.
 - Presence writes must not mutate store records or subscription state.
-- User presence cleanup on disconnect must be idempotent.
+- User presence cleanup on disconnect must be idempotent and remove the user record only when no connection for that user remains in the namespace.
 - Subscriptions must be removed during disconnect teardown.
 - Snapshots and broadcasts must use schema field ids so SDK dictionaries remain stable.
 - Presence implementation must not reuse store APIs for user-facing SDK shape; store and presence stay separate.

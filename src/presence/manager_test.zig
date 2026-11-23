@@ -30,7 +30,7 @@ test "PresenceManager - setUser creates record and queues pending update" {
     });
     defer patch.free(allocator);
 
-    try manager.setUser(1, user_id, patch);
+    try manager.setUser(1, user_id, 1, patch);
 
     try testing.expectEqual(@as(usize, 1), manager.user_state.count());
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
@@ -76,13 +76,13 @@ test "PresenceManager - setUser coalesces pending updates for same user" {
         .{ .idx = 0, .value = .{ .uint = 1 } },
     });
     defer patch1.free(allocator);
-    try manager.setUser(1, user_id, patch1);
+    try manager.setUser(1, user_id, 1, patch1);
 
     var patch2 = try makePresencePatch(allocator, &.{
         .{ .idx = 1, .value = .{ .uint = 2 } },
     });
     defer patch2.free(allocator);
-    try manager.setUser(1, user_id, patch2);
+    try manager.setUser(1, user_id, 1, patch2);
 
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     const merged_patch = manager.pending_user_updates.items[0].patch;
@@ -105,13 +105,13 @@ test "PresenceManager - coalesced pending update replaces duplicate field last-w
         .{ .idx = 0, .value = .{ .float = 1.0 } },
     });
     defer patch1.free(allocator);
-    try manager.setUser(1, user_id, patch1);
+    try manager.setUser(1, user_id, 1, patch1);
 
     var patch2 = try makePresencePatch(allocator, &.{
         .{ .idx = 0, .value = .{ .float = 2.0 } },
     });
     defer patch2.free(allocator);
-    try manager.setUser(1, user_id, patch2);
+    try manager.setUser(1, user_id, 1, patch2);
 
     const merged_patch = manager.pending_user_updates.items[0].patch;
     try testing.expectEqual(@as(usize, 2), merged_patch.arr.len);
@@ -165,7 +165,7 @@ test "PresenceManager - removeUser cleans up and queues leave" {
         .{ .idx = 0, .value = .{ .float = 1.0 } },
     });
     defer patch.free(allocator);
-    try manager.setUser(1, user_id, patch);
+    try manager.setUser(1, user_id, 1, patch);
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
 
     try manager.removeUser(1, user_id);
@@ -209,7 +209,7 @@ test "PresenceManager - onSubscribeUser returns snapshot" {
         .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
     });
     defer patch.free(allocator);
-    try manager.setUser(1, user_id, patch);
+    try manager.setUser(1, user_id, 1, patch);
 
     var snapshot = try manager.onSubscribeUser(1, 100, 1);
     defer snapshot.deinit(allocator);
@@ -309,7 +309,7 @@ test "PresenceManager - setUser cancels grace period" {
         .{ .idx = 0, .value = .{ .float = 1.0 } },
     });
     defer patch.free(allocator);
-    try manager.setUser(1, user_id, patch);
+    try manager.setUser(1, user_id, 1, patch);
     try manager.removeUser(1, user_id);
 
     try testing.expectEqual(@as(usize, 1), manager.namespace_empty_at.count());
@@ -318,7 +318,7 @@ test "PresenceManager - setUser cancels grace period" {
         .{ .idx = 0, .value = .{ .float = 2.0 } },
     });
     defer patch2.free(allocator);
-    try manager.setUser(1, user_id, patch2);
+    try manager.setUser(1, user_id, 1, patch2);
 
     try testing.expectEqual(@as(usize, 0), manager.namespace_empty_at.count());
 }
@@ -342,13 +342,13 @@ test "PresenceManager - multiple users in same namespace" {
         .{ .idx = 2, .value = try msgpack.Payload.strToPayload("a", allocator) },
     });
     defer patch_a.free(allocator);
-    try manager.setUser(1, user_a, patch_a);
+    try manager.setUser(1, user_a, 1, patch_a);
 
     var patch_b = try makePresencePatch(allocator, &.{
         .{ .idx = 2, .value = try msgpack.Payload.strToPayload("b", allocator) },
     });
     defer patch_b.free(allocator);
-    try manager.setUser(1, user_b, patch_b);
+    try manager.setUser(1, user_b, 1, patch_b);
 
     const ns_map = manager.user_state.get(1) orelse return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 2), ns_map.count());
@@ -375,7 +375,7 @@ test "PresenceManager - setUser tracks joined_at timestamp" {
     });
     defer patch.free(allocator);
 
-    try manager.setUser(1, user_id, patch);
+    try manager.setUser(1, user_id, 1, patch);
 
     // Verify joined_at was recorded
     const joined_ns = manager.user_joined_at.get(1) orelse return error.TestExpectedValue;
@@ -388,7 +388,7 @@ test "PresenceManager - setUser tracks joined_at timestamp" {
         .{ .idx = 0, .value = .{ .float = 200.0 } },
     });
     defer patch2.free(allocator);
-    try manager.setUser(1, user_id, patch2);
+    try manager.setUser(1, user_id, 1, patch2);
 
     const joined_ns2 = manager.user_joined_at.get(1) orelse return error.TestExpectedValue;
     const joined_at2 = joined_ns2.get(user_id) orelse return error.TestExpectedValue;
@@ -411,7 +411,7 @@ test "PresenceManager - removeUser cleans up joined_at" {
         .{ .idx = 0, .value = .{ .float = 100.0 } },
     });
     defer patch.free(allocator);
-    try manager.setUser(1, user_id, patch);
+    try manager.setUser(1, user_id, 1, patch);
 
     // Verify joined_at exists
     try testing.expect(manager.user_joined_at.get(1) != null);
@@ -443,7 +443,7 @@ test "PresenceManager - is_new_user flag set correctly" {
         .{ .idx = 0, .value = .{ .float = 100.0 } },
     });
     defer patch1.free(allocator);
-    try manager.setUser(1, user_id, patch1);
+    try manager.setUser(1, user_id, 1, patch1);
     try testing.expect(manager.pending_user_updates.items[0].is_new_user);
 
     // Second setUser is merged into the existing pending join update.
@@ -451,7 +451,7 @@ test "PresenceManager - is_new_user flag set correctly" {
         .{ .idx = 0, .value = .{ .float = 200.0 } },
     });
     defer patch2.free(allocator);
-    try manager.setUser(1, user_id, patch2);
+    try manager.setUser(1, user_id, 1, patch2);
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     try testing.expect(manager.pending_user_updates.items[0].is_new_user);
 
@@ -476,7 +476,7 @@ test "PresenceManager - snapshot includes joined_at" {
         .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
     });
     defer patch.free(allocator);
-    try manager.setUser(1, user_id, patch);
+    try manager.setUser(1, user_id, 1, patch);
 
     var snapshot = try manager.onSubscribeUser(1, 100, 1);
     defer snapshot.deinit(allocator);
@@ -503,7 +503,7 @@ test "PresenceManager - leave event after successful flush is preserved" {
         .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
     });
     defer patch.free(allocator);
-    try manager.setUser(1, user_id, patch);
+    try manager.setUser(1, user_id, 1, patch);
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     try testing.expect(!manager.pending_user_updates.items[0].is_leave);
 
@@ -586,7 +586,7 @@ test "PresenceManager - leave event with leftover transferred item is preserved"
         .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
     });
     defer patch.free(allocator);
-    try manager.setUser(1, user_id, patch);
+    try manager.setUser(1, user_id, 1, patch);
 
     // Flush successfully — pending_user_updates is cleared
     {
@@ -616,7 +616,7 @@ test "PresenceManager - leave event with leftover transferred item is preserved"
         .{ .idx = 0, .value = .{ .float = 42.0 } },
     });
     defer patch2.free(allocator);
-    try manager.setUser(1, user_id, patch2);
+    try manager.setUser(1, user_id, 1, patch2);
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     try testing.expect(manager.pending_user_updates.items[0].patch != .nil);
     try testing.expect(!manager.pending_user_updates.items[0].is_leave);
@@ -678,7 +678,7 @@ test "PresenceManager - setUser after removeUser coalesce resets is_leave" {
         .{ .idx = 2, .value = try msgpack.Payload.strToPayload("online", allocator) },
     });
     defer patch.free(allocator);
-    try manager.setUser(1, user_id, patch);
+    try manager.setUser(1, user_id, 1, patch);
 
     // Flush to clear pending
     {
@@ -708,7 +708,7 @@ test "PresenceManager - setUser after removeUser coalesce resets is_leave" {
         .{ .idx = 0, .value = .{ .float = 42.0 } },
     });
     defer patch2.free(allocator);
-    try manager.setUser(1, user_id, patch2);
+    try manager.setUser(1, user_id, 1, patch2);
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     try testing.expect(!manager.pending_user_updates.items[0].is_new_user);
     try testing.expect(!manager.pending_user_updates.items[0].is_leave);
@@ -724,10 +724,149 @@ test "PresenceManager - setUser after removeUser coalesce resets is_leave" {
         .{ .idx = 1, .value = .{ .float = 99.0 } },
     });
     defer patch3.free(allocator);
-    try manager.setUser(1, user_id, patch3);
+    try manager.setUser(1, user_id, 1, patch3);
 
     try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
     try testing.expect(!manager.pending_user_updates.items[0].is_leave);
     try testing.expect(manager.pending_user_updates.items[0].is_new_user);
     try testing.expect(manager.pending_user_updates.items[0].patch != .nil);
+}
+
+test "PresenceManager - second connection keeps user after first leaves" {
+    const allocator = std.testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = zeroDocId;
+    var patch1 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 100.0 } },
+    });
+    defer patch1.free(allocator);
+    var patch2 = try makePresencePatch(allocator, &.{
+        .{ .idx = 1, .value = .{ .float = 200.0 } },
+    });
+    defer patch2.free(allocator);
+
+    try manager.setUser(1, user_id, 100, patch1);
+    try manager.setUser(1, user_id, 200, patch2);
+    try flushPending(&manager, allocator);
+
+    try manager.removeConnection(1, user_id, 100);
+    try testing.expect(manager.user_state.get(1) != null);
+    try testing.expect(manager.user_connections.get(1) != null);
+    for (manager.pending_user_updates.items) |update| {
+        try testing.expect(!update.is_leave);
+    }
+
+    try manager.removeConnection(1, user_id, 200);
+    try testing.expect(manager.user_state.get(1) == null);
+    try testing.expect(manager.user_connections.get(1) == null);
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    try testing.expect(manager.pending_user_updates.items[0].is_leave);
+}
+
+test "PresenceManager - removeAllForConnection only clears the last connection" {
+    const allocator = std.heap.smp_allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = zeroDocId;
+    var patch1 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 100.0 } },
+    });
+    defer patch1.free(allocator);
+    var patch2 = try makePresencePatch(allocator, &.{
+        .{ .idx = 1, .value = .{ .float = 200.0 } },
+    });
+    defer patch2.free(allocator);
+
+    try manager.setUser(1, user_id, 100, patch1);
+    try manager.setUser(1, user_id, 200, patch2);
+    try flushPending(&manager, allocator);
+
+    try manager.removeAllForConnection(1, user_id, 100);
+    try testing.expect(manager.user_state.get(1) != null);
+    for (manager.pending_user_updates.items) |update| {
+        try testing.expect(!update.is_leave);
+    }
+
+    try manager.removeAllForConnection(1, user_id, 200);
+    try testing.expect(manager.user_state.get(1) == null);
+    try testing.expectEqual(@as(usize, 1), manager.pending_user_updates.items.len);
+    try testing.expect(manager.pending_user_updates.items[0].is_leave);
+}
+
+test "PresenceManager - removeConnection ignores unknown and repeated connections" {
+    const allocator = std.heap.smp_allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = zeroDocId;
+    var patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 100.0 } },
+    });
+    defer patch.free(allocator);
+
+    try manager.setUser(1, user_id, 100, patch);
+
+    // A connection that never wrote presence does not remove the record.
+    try manager.removeConnection(1, user_id, 999);
+    try testing.expect(manager.user_state.get(1) != null);
+
+    try manager.removeConnection(1, user_id, 100);
+    try testing.expect(manager.user_state.get(1) == null);
+
+    // Repeated teardown is a no-op.
+    try manager.removeConnection(1, user_id, 100);
+    try testing.expect(manager.user_state.get(1) == null);
+
+    // A new write from the same connection recreates the record.
+    var patch2 = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 101.0 } },
+    });
+    defer patch2.free(allocator);
+    try manager.setUser(1, user_id, 100, patch2);
+    try testing.expect(manager.user_state.get(1) != null);
+    try manager.removeConnection(1, user_id, 100);
+    try testing.expect(manager.user_state.get(1) == null);
+}
+
+fn flushPending(manager: *PresenceManager, allocator: std.mem.Allocator) !void {
+    var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
+    defer {
+        for (user_batches.items) |*batch| {
+            for (batch.updates.items) |*update| update.patch.free(allocator);
+            batch.updates.deinit(allocator);
+            batch.subscribers.deinit(allocator);
+        }
+        user_batches.deinit(allocator);
+    }
+    var shared_batches = std.ArrayListUnmanaged(PresenceManager.SharedUpdateBatch).empty;
+    defer {
+        for (shared_batches.items) |*batch| {
+            for (batch.updates.items) |*update| update.patch.free(allocator);
+            batch.updates.deinit(allocator);
+            batch.subscribers.deinit(allocator);
+        }
+        shared_batches.deinit(allocator);
+    }
+    try manager.drainPendingBatches(&user_batches, &shared_batches);
 }

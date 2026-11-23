@@ -1286,6 +1286,42 @@ test "StoreService: resolveStoreScope isolates user ids when users is namespaced
     try testing.expect(record != null);
 }
 
+test "StoreService: two connections with the same identity share one user id" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "scope-two-connections", &.{
+        .{ .name = "items", .fields = &.{"name"} },
+    });
+    defer app.deinit();
+
+    const first = try app.resolveStoreScopeForTest("room", "same-user");
+    const second = try app.resolveStoreScopeForTest("room", "same-user");
+
+    try testing.expectEqual(first.namespace_id, second.namespace_id);
+    try testing.expectEqual(first.user_doc_id, second.user_doc_id);
+}
+
+test "Store: closing one connection leaves another connection's scope intact" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "scope-multi-conn-close", &.{
+        .{ .name = "items", .fields = &.{"name"} },
+    });
+    defer app.deinit();
+
+    var first = try app.setupMockConnection();
+    var second = try app.setupMockConnection();
+    const user_id = second.conn.user_doc_id;
+    const namespace_id = second.conn.namespace_id;
+
+    first.deinit();
+
+    try testing.expect(second.conn.store_ready);
+    try testing.expectEqual(namespace_id, second.conn.namespace_id);
+    try testing.expectEqual(user_id, second.conn.user_doc_id);
+    second.deinit();
+}
+
 test "StoreService: create requires all required fields but update does not" {
     const allocator = std.heap.smp_allocator;
     var app: helpers.AppTestContext = undefined;

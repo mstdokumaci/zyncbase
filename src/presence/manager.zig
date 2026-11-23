@@ -27,6 +27,10 @@ pub const PresenceManager = struct {
     // User join timestamps: namespace_id → (users.id → joined_at_ms)
     user_joined_at: std.AutoHashMapUnmanaged(i64, std.AutoHashMapUnmanaged(typed_doc_id.DocId, i64)),
 
+    // Connections contributing presence: namespace_id → (users.id → {conn ids}).
+    // The user record is removed only when the last connection leaves.
+    user_connections: std.AutoHashMapUnmanaged(i64, std.AutoHashMapUnmanaged(typed_doc_id.DocId, std.AutoHashMapUnmanaged(u64, void))),
+
     // Shared state: namespace_id → PresenceRecord
     shared_state: std.AutoHashMapUnmanaged(i64, PresenceRecord),
 
@@ -70,6 +74,7 @@ pub const PresenceManager = struct {
             .shared_fields = shared_fields,
             .user_state = .{},
             .user_joined_at = .{},
+            .user_connections = .{},
             .shared_state = .{},
             .namespace_empty_at = .{},
             .pending_user_updates = .empty,
@@ -99,6 +104,18 @@ pub const PresenceManager = struct {
         }
         self.user_joined_at.deinit(self.allocator);
 
+        // Clean up user_connections
+        var conn_ns_iter = self.user_connections.iterator();
+        while (conn_ns_iter.next()) |ns_entry| {
+            var users = ns_entry.value_ptr.*;
+            var conn_user_iter = users.iterator();
+            while (conn_user_iter.next()) |conn_entry| {
+                conn_entry.value_ptr.deinit(self.allocator);
+            }
+            users.deinit(self.allocator);
+        }
+        self.user_connections.deinit(self.allocator);
+
         // Clean up shared_state
         var shared_iter = self.shared_state.iterator();
         while (shared_iter.next()) |entry| {
@@ -124,15 +141,27 @@ pub const PresenceManager = struct {
     }
 
     /// Set user presence data. Merges the patch into the existing record.
+    /// The connection is tracked so the record survives until the last one leaves.
     pub fn setUser(
         self: *PresenceManager,
         namespace_id: i64,
         user_id: typed_doc_id.DocId,
+        conn_id: u64,
         patch: msgpack.Payload,
     ) !void {
         self.data_mutex.lockUncancelable(self.io);
         defer self.data_mutex.unlock(self.io);
 
+        try self.trackConnectionLocked(namespace_id, user_id, conn_id);
+        try self.setUserLocked(namespace_id, user_id, patch);
+    }
+
+    fn setUserLocked(
+        self: *PresenceManager,
+        namespace_id: i64,
+        user_id: typed_doc_id.DocId,
+        patch: msgpack.Payload,
+    ) !void {
         // Get or create namespace map
         const ns_result = try self.user_state.getOrPut(self.allocator, namespace_id);
         const ns_created = !ns_result.found_existing;
@@ -298,7 +327,7 @@ pub const PresenceManager = struct {
         });
     }
 
-    /// Remove user presence and queue leave broadcast.
+    /// Remove user presence and queue leave broadcast. Unconditional.
     pub fn removeUser(
         self: *PresenceManager,
         namespace_id: i64,
@@ -306,6 +335,31 @@ pub const PresenceManager = struct {
     ) !void {
         self.data_mutex.lockUncancelable(self.io);
         defer self.data_mutex.unlock(self.io);
+
+        try self.removeUserLocked(namespace_id, user_id);
+    }
+
+    /// Remove one connection's contribution. The user record and leave
+    /// broadcast are produced only when no other connection remains.
+    pub fn removeConnection(
+        self: *PresenceManager,
+        namespace_id: i64,
+        user_id: typed_doc_id.DocId,
+        conn_id: u64,
+    ) !void {
+        self.data_mutex.lockUncancelable(self.io);
+        defer self.data_mutex.unlock(self.io);
+
+        const last = self.untrackConnectionLocked(namespace_id, user_id, conn_id) orelse return;
+        if (last) try self.removeUserLocked(namespace_id, user_id);
+    }
+
+    fn removeUserLocked(
+        self: *PresenceManager,
+        namespace_id: i64,
+        user_id: typed_doc_id.DocId,
+    ) !void {
+        self.clearConnectionsLocked(namespace_id, user_id);
 
         const ns_ptr = self.user_state.getPtr(namespace_id) orelse return;
         const removed = ns_ptr.fetchRemove(user_id);
@@ -362,6 +416,57 @@ pub const PresenceManager = struct {
                 .joined_at = 0,
                 .is_leave = true,
             });
+        }
+    }
+
+    fn trackConnectionLocked(
+        self: *PresenceManager,
+        namespace_id: i64,
+        user_id: typed_doc_id.DocId,
+        conn_id: u64,
+    ) !void {
+        const ns_result = try self.user_connections.getOrPut(self.allocator, namespace_id);
+        if (!ns_result.found_existing) ns_result.value_ptr.* = .{};
+        const user_result = try ns_result.value_ptr.getOrPut(self.allocator, user_id);
+        if (!user_result.found_existing) user_result.value_ptr.* = .{};
+        try user_result.value_ptr.put(self.allocator, conn_id, {});
+    }
+
+    /// Returns null when the connection was not tracked, false when other
+    /// connections remain, true when this was the last one.
+    fn untrackConnectionLocked(
+        self: *PresenceManager,
+        namespace_id: i64,
+        user_id: typed_doc_id.DocId,
+        conn_id: u64,
+    ) ?bool {
+        const ns_ptr = self.user_connections.getPtr(namespace_id) orelse return null;
+        const conns = ns_ptr.getPtr(user_id) orelse return null;
+        _ = conns.fetchRemove(conn_id) orelse return null;
+        if (conns.count() > 0) return false;
+
+        conns.deinit(self.allocator);
+        _ = ns_ptr.fetchRemove(user_id);
+        if (ns_ptr.count() == 0) {
+            ns_ptr.deinit(self.allocator);
+            _ = self.user_connections.remove(namespace_id);
+        }
+        return true;
+    }
+
+    fn clearConnectionsLocked(
+        self: *PresenceManager,
+        namespace_id: i64,
+        user_id: typed_doc_id.DocId,
+    ) void {
+        const ns_ptr = self.user_connections.getPtr(namespace_id) orelse return;
+        if (ns_ptr.fetchRemove(user_id)) |removed| {
+            var conns = removed.value;
+            conns.deinit(self.allocator);
+        }
+        if (ns_ptr.count() == 0) {
+            ns_ptr.deinit(self.allocator);
+            _ = self.user_connections.remove(namespace_id);
         }
     }
 
@@ -554,7 +659,7 @@ pub const PresenceManager = struct {
         user_id: typed_doc_id.DocId,
         conn_id: u64,
     ) !void {
-        try self.removeUser(namespace_id, user_id);
+        try self.removeConnection(namespace_id, user_id, conn_id);
         self.onUnsubscribeUser(namespace_id, conn_id);
         self.onUnsubscribeShared(namespace_id, conn_id);
     }

@@ -78,7 +78,7 @@ fn runIteration(
     var last_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds();
     for (0..update_count) |i| {
         const user_id: typed_doc_id.DocId = @intCast(i + 1);
-        try manager.setUser(namespace_id, user_id, patch);
+        try manager.setUser(namespace_id, user_id, 1, patch);
     }
     var now_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds();
     const update_ns: u64 = @intCast(now_ns - last_ns);
@@ -196,7 +196,7 @@ test "PresenceWorker: batched user update fanout throughput" {
 
     // Seed users, then discard their join batch so timed iterations exercise updates.
     for (0..update_count) |i| {
-        try manager.setUser(namespace_id, @intCast(i + 1), patch);
+        try manager.setUser(namespace_id, @intCast(i + 1), 1, patch);
     }
     try discardPending(&manager);
 
@@ -301,6 +301,7 @@ test "PresenceWorker: sparse update latency" {
         try worker.enqueue(.{
             .op = .{ .set_user = .{
                 .namespace_id = namespace_id,
+                .conn_id = 1,
                 .user_id = 1,
                 .patch = try patch.deepClone(allocator),
             } },

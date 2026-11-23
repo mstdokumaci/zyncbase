@@ -13,7 +13,8 @@ Mutating methods (`set`, `remove`, `increment`, `create`, `batch`) resolve when 
 3.  [Batch Operations](#batch-operations)
 4.  [Optimistic Writes](#optimistic-writes)
 5.  [Subscription Lifecycle](#subscription-lifecycle)
-6.  [Path Syntax](#path-syntax-strings-vs-arrays)
+6.  [Multiple Connections per User](#multiple-connections-per-user)
+7.  [Path Syntax](#path-syntax-strings-vs-arrays)
 
 ---
 
@@ -348,6 +349,18 @@ Each handle exposes `getSnapshot()`: a synchronous read of current state, shared
 Snapshots are new arrays per delivery; unchanged records keep their previous object reference, so consumers can use reference equality to skip work.
 
 Snapshots are read-only. Between deltas, repeated reads return the same state; `getSnapshot` never performs I/O and never rejects.
+
+---
+
+## Multiple Connections per User
+
+Store data is scoped to the namespace, not the connection. Every connection authenticated as the same user and bound to the same namespace reads and writes the same rows:
+
+- Each connection has its own scope, session claims, subscriptions, rate limit, and optimistic local state. Two tabs subscribe and receive changes independently; a write committed by one is delivered to the other's subscriptions.
+- `owner_id` is stamped from the writer's resolved user when a row is created and is not rewritten by later updates. All connections of one user share it. There is no automatic `updated_by`; add and maintain an actor field yourself.
+- Writes are never retried and there is no cross-connection dedupe: the same logical action triggered from two tabs runs twice. Use `create` plus a unique constraint for once-only rows, `if` for compare-and-set, and an idempotency field when a write must happen once.
+- Closing one connection does not affect another connection's scope, subscriptions, or pending writes. Committed data is shared; the closing connection's uncommitted optimistic state is lost with it.
+- Rate limits are per connection, so multiple connections of one user multiply the effective request budget. Enforce per-user quotas in data (a counter or unique record), not with the per-connection limiter.
 
 ---
 

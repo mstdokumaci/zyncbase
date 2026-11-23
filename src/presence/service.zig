@@ -56,6 +56,7 @@ pub const PresenceService = struct {
         self.enqueue(.{ .set_user = .{
             .namespace_id = ctx.request.presence_namespace_id,
             .user_id = ctx.request.user_doc_id,
+            .conn_id = ctx.request.conn_id,
             .patch = cloned_patch,
         } });
     }
@@ -77,6 +78,7 @@ pub const PresenceService = struct {
         self.enqueue(.{ .remove_user = .{
             .namespace_id = ctx.request.presence_namespace_id,
             .user_id = ctx.request.user_doc_id,
+            .conn_id = ctx.request.conn_id,
         } });
     }
 

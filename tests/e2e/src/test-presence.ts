@@ -275,6 +275,66 @@ async function testNamespaceSwitch(
 	);
 }
 
+async function testMultipleConnections(
+	url: string,
+	jwtSecret: string,
+	clientB: ZyncBaseClient,
+): Promise<void> {
+	console.log("Test 9: Multiple connections for one user...");
+	const aliceTab1 = new ZyncBaseClient({
+		url,
+		auth: { token: createTestJwt(jwtSecret, "presence-alice") },
+	});
+	const aliceTab2 = new ZyncBaseClient({
+		url,
+		auth: { token: createTestJwt(jwtSecret, "presence-alice") },
+	});
+
+	try {
+		await Promise.all([aliceTab1.connect(), aliceTab2.connect()]);
+		await Promise.all([
+			aliceTab1.setPresenceNamespace("multi-conn"),
+			aliceTab2.setPresenceNamespace("multi-conn"),
+			clientB.setPresenceNamespace("multi-conn"),
+		]);
+
+		await aliceTab1.presence.set({ name: "Alice", status: "active" });
+		await aliceTab2.presence.set({ cursor: { x: 7, y: 9 } });
+
+		await waitForPresence(clientB, (users) =>
+			users.some(
+				(u) =>
+					u.data.name === "Alice" &&
+					(u.data.cursor as { x?: number } | undefined)?.x === 7,
+			),
+		);
+
+		const aliceEntries = clientB.presence
+			.getAll()
+			.filter((u) => u.data.name === "Alice");
+		if (aliceEntries.length !== 1) {
+			throw new Error(
+				`Expected one merged Alice entry, got ${aliceEntries.length}`,
+			);
+		}
+		console.log("  Two same-user connections merge into one presence entry.");
+
+		aliceTab1.close();
+		await sleep(300);
+		if (!clientB.presence.getAll().some((u) => u.data.name === "Alice")) {
+			throw new Error("Alice left after only one of her connections closed");
+		}
+		console.log("  Closing one tab keeps the user present.");
+
+		aliceTab2.close();
+		await waitForPresence(clientB, (users) => users.length === 0);
+		console.log("  Closing the last tab emits leave.");
+	} finally {
+		aliceTab1.close();
+		aliceTab2.close();
+	}
+}
+
 export async function run(port: number, jwtSecret: string) {
 	const url = `ws://127.0.0.1:${port}`;
 	const clientA = new ZyncBaseClient({
@@ -302,6 +362,7 @@ export async function run(port: number, jwtSecret: string) {
 
 		await testRemoveAndThrottle(clientA, clientB, bUsers);
 		await testNamespaceSwitch(clientA, clientB, bUsers);
+		await testMultipleConnections(url, jwtSecret, clientB);
 
 		await unsubB();
 		await unsubShared();
