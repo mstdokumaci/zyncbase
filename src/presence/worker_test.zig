@@ -119,6 +119,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     try worker.enqueue(.{
         .op = .{ .set_user = .{
             .namespace_id = namespace_id,
+            .conn_id = 1,
             .user_id = user_id,
             .patch = cloned_patch,
         } },
@@ -327,6 +328,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
         ops[built] = .{
             .op = .{ .set_user = .{
                 .namespace_id = namespace_id,
+                .conn_id = 1,
                 .user_id = user_id,
                 .patch = try patch.deepClone(allocator),
             } },
@@ -362,6 +364,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
     try worker.enqueue(.{
         .op = .{ .set_user = .{
             .namespace_id = namespace_id,
+            .conn_id = 1,
             .user_id = user_id,
             .patch = try final_patch.deepClone(allocator),
         } },
@@ -432,6 +435,7 @@ test "PresenceWorker: pending-update cap splits broadcasts" {
         ops[i] = .{
             .op = .{ .set_user = .{
                 .namespace_id = namespace_id,
+                .conn_id = 1,
                 .user_id = @intCast(100 + i),
                 .patch = try patch.deepClone(allocator),
             } },
@@ -515,6 +519,7 @@ test "PresenceWorker: window absorbs ops that arrive across producer gaps" {
         try worker.enqueue(.{
             .op = .{ .set_user = .{
                 .namespace_id = namespace_id,
+                .conn_id = 1,
                 .user_id = @intCast(500 + i),
                 .patch = try patch.deepClone(allocator),
             } },
@@ -587,6 +592,7 @@ test "PresenceWorker: zero timeout flushes after every op" {
         ops[i] = .{
             .op = .{ .set_user = .{
                 .namespace_id = namespace_id,
+                .conn_id = 1,
                 .user_id = @intCast(300 + i),
                 .patch = try patch.deepClone(allocator),
             } },
@@ -658,6 +664,7 @@ test "PresenceWorker: dispatchBatches shares message buffer for same sub_id" {
     try worker.enqueue(.{
         .op = .{ .set_user = .{
             .namespace_id = namespace_id,
+            .conn_id = 1,
             .user_id = 99,
             .patch = try patch.deepClone(allocator),
         } },

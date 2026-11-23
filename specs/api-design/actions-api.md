@@ -218,6 +218,17 @@ await server.actions.handle('checkout', async (ctx, params) => {
 - A namespace switch on the action's bound scope invalidates that scope's registrations; the SDK re-registers when the new scope is ready.
 - Round-robin provides no sticky routing: handlers must be stateless across invocations or share state explicitly.
 
+#### Multiple Connections per User
+
+Actions route to connections, not users. If two tabs of the same user call `server.actions.handle()` for the same action in the same namespace, both register as workers and calls alternate between them:
+
+- A call may run in a different tab than the caller. Handlers must not depend on tab-local state (timers, media, DOM, device capabilities).
+- Closing one tab unregisters only that tab and fails its in-flight sync calls with `WORKER_DISCONNECTED`. The server does **not** fail over to another registered tab, because retrying an action whose first attempt may have executed breaks the at-most-once contract.
+- `ActionContext` exposes the caller's `userId`, not the connection. A handler cannot tell which tab invoked it, and there is no targeted routing to a specific connection.
+- The same logical user action triggered from two tabs is two calls; deduplicate with an idempotency key in `params` plus a unique store row or `if` guard.
+
+Run workers as dedicated service connections with a narrow `register` grant, not from user tabs. For a local-first app that must handle actions in a tab, elect one tab in application code (through the store or shared presence) instead of registering from every tab.
+
 > [!WARNING]
 > The `checkout` handler is safe for a single-document counter because `store.increment` + `if` is one atomic statement. It is still **not** a multi-step transaction: a handler that reads other documents, decides, and writes across them can interleave with another handler. Use a batch with per-op `if` for multi-document compare-and-set, or serialize that logic through a single worker. The returned `remaining_coins` is a post-commit read, not the value produced by this handler's write.
 

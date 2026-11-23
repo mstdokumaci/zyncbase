@@ -3,7 +3,7 @@
 The Presence API tracks ephemeral state in real-time. Presence data is typed against the `presence` schema defined in `schema.json`, stored in-memory only, and never persisted to SQLite.
 
 Two tiers of presence state exist:
-- **User state** (`presence.user` fields): one record per connected user, owned by that user, automatically cleaned up on disconnect.
+- **User state** (`presence.user` fields): one record per user per namespace, merged across that user's connections, cleaned up when the last connection for that user in the namespace leaves.
 - **Shared state** (`presence.shared` fields): one record per namespace, writable by any authorized user, persists until all users leave (with a 5-second grace period for reconnects).
 
 Presence methods run in a presence scope. The SDK requests it when the first presence call (or presence-scoped action) is made on a connected session, and every presence call waits for it; `client.setPresenceNamespace(namespace)` requests it immediately and resolves once the server has resolved the namespace string and returned the internal `users.id` as bin16. A session that never uses presence never requests the scope, so a store-only app needs no `presenceRead` grant. When the namespace denies presence, the presence call rejects with `NAMESPACE_UNAUTHORIZED` and the session stays connected. Calling presence methods before the session is connected fails with `CONNECTION_FAILED`.
@@ -16,14 +16,15 @@ Presence methods run in a presence scope. The SDK requests it when the first pre
    - [`presence.get(userId)`](#presencegetuserid)
    - [`presence.getAll(options?)`](#presencegetalloptions)
    - [`presence.remove()`](#presenceremove)
-3. [Shared State Methods](#shared-state-methods)
+3. [Multiple Connections per User](#multiple-connections-per-user)
+4. [Shared State Methods](#shared-state-methods)
    - [`presence.setShared(data)`](#presencesetshareddata)
    - [`presence.subscribeShared(callback)`](#presencesubscribesharedcallback)
    - [`presence.getShared()`](#presencegetshared)
-4. [Namespaces](#presence-namespaces)
-5. [Authorization](#authorization)
-6. [Use Cases & Examples](#use-cases--examples)
-7. [Best Practices](#best-practices)
+5. [Namespaces](#presence-namespaces)
+6. [Authorization](#authorization)
+7. [Use Cases & Examples](#use-cases--examples)
+8. [Best Practices](#best-practices)
 
 ---
 
@@ -155,11 +156,26 @@ Returns `[]` if no active `subscribe()` exists.
 
 ### `presence.remove()`
 
-Remove your presence record and broadcast a `leave` event to all subscribers. Called automatically on disconnect, but available to invoke manually — for example, to go "invisible" without disconnecting. Returns a promise that resolves when the server accepts the request and rejects if it fails.
+Remove this connection's presence contribution. When it is the last connection for the user in the namespace, the record is removed and a `leave` event is broadcast; otherwise the call is a no-op because another connection still contributes. Called automatically on disconnect, but available to invoke manually — for example, to go "invisible" without disconnecting. Returns a promise that resolves when the server accepts the request and rejects if it fails.
 
 ```typescript
 await client.presence.remove()
 ```
+
+---
+
+## Multiple Connections per User
+
+User presence is keyed by namespace and user, not by connection. Two tabs, windows, or devices authenticated as the same user in the same namespace share **one** presence record:
+
+- `presence.set()` merges fields into the shared record; concurrent writers from the same user are last-writer-wins per field. Two cursors for one user cannot be represented.
+- The record and its `joinedAt` survive until the **last** connection for that user in the namespace disconnects or resets its presence scope. Closing one of two tabs does not emit `leave`.
+- `presence.remove()` removes only the calling connection's contribution. When other connections of the same user are still contributing, it is a no-op: the record stays, and nothing is broadcast. The `leave` is emitted only when the last contributing connection is removed.
+- A connection that writes presence again after `presence.remove()` re-joins the record.
+
+The same user in **different** namespaces (for example, two documents open in two tabs) has independent records. Namespace switching is per connection, so one tab changing presence namespace never removes another tab's presence in a different namespace.
+
+Per-tab or per-device state (a cursor per window, an "editing on mobile" badge) is not supported by the user tier. Model it in the store, or add a discriminator to your own data and accept last-writer-wins.
 
 ---
 

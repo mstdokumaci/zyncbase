@@ -365,7 +365,7 @@ Two tiers are supported:
 
 | Key | Description |
 |---|---|
-| `presence.user` | Fields owned per connected user. One record per user per namespace. Cleaned up on disconnect. |
+| `presence.user` | Fields owned per user. One record per user per namespace, merged across that user's connections. Cleaned up when the last connection for that user in the namespace leaves. |
 | `presence.shared` | Fields representing namespace-level state. One record for the entire namespace. Persists until all users leave (5-second grace period). |
 
 ### Presence field constraints

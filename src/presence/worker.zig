@@ -37,6 +37,7 @@ pub const PresenceOp = struct {
         set_user: struct {
             namespace_id: i64,
             user_id: typed_doc_id.DocId,
+            conn_id: u64,
             patch: msgpack.Payload,
         },
         set_shared: struct {
@@ -47,6 +48,7 @@ pub const PresenceOp = struct {
         remove_user: struct {
             namespace_id: i64,
             user_id: typed_doc_id.DocId,
+            conn_id: u64,
         },
         subscribe_user: struct {
             namespace_id: i64,
@@ -206,7 +208,7 @@ pub const PresenceWorker = struct {
 
         switch (op_mut.op) {
             .set_user => |su| {
-                self.presence_manager.setUser(su.namespace_id, su.user_id, su.patch) catch |err| {
+                self.presence_manager.setUser(su.namespace_id, su.user_id, su.conn_id, su.patch) catch |err| {
                     std.log.err("PresenceWorker setUser failed: {}", .{err});
                 };
             },
@@ -216,8 +218,8 @@ pub const PresenceWorker = struct {
                 };
             },
             .remove_user => |ru| {
-                self.presence_manager.removeUser(ru.namespace_id, ru.user_id) catch |err| {
-                    std.log.err("PresenceWorker removeUser failed: {}", .{err});
+                self.presence_manager.removeConnection(ru.namespace_id, ru.user_id, ru.conn_id) catch |err| {
+                    std.log.err("PresenceWorker removeConnection failed: {}", .{err});
                 };
             },
             .subscribe_user => |sub| {
