@@ -17,6 +17,7 @@ import { generateUUIDv7 } from "../../uuid.js";
 import {
 	ChunkAssembler,
 	chunkPayload,
+	parseCommitted,
 	YJS_DOCUMENTS_COLLECTION,
 	YJS_SNAPSHOTS_COLLECTION,
 	YJS_UPDATES_COLLECTION,
@@ -92,12 +93,84 @@ interface NamespaceState {
 	nextCleanupAt: number;
 }
 
+interface UpdateRow {
+	id: string;
+	part: number;
+	parts: number;
+	data: Uint8Array | null;
+	committed: boolean | undefined;
+	createdAt: number;
+}
+
 interface UpdateGroup {
 	min: number;
 	max: number;
-	complete: boolean;
+	rows: UpdateRow[];
+}
+
+interface ClassifiedUpdateGroup {
+	status: "complete" | "committed" | "uncommitted";
+	bytes: Uint8Array | null;
 	markerRowId: string | null;
-	rows: Array<{ id: string; createdAt: number }>;
+}
+
+/**
+ * Derives a group's state from its rows. A multi-part group is complete only
+ * with every part and a commit row that explicitly says `committed = true`.
+ * Single-part groups need no commit row.
+ */
+function classifyUpdateGroup(group: UpdateGroup): ClassifiedUpdateGroup {
+	const marker = group.rows.find((row) => row.part === row.parts) ?? null;
+	const dataRows = group.rows.filter((row) => row.part < row.parts);
+	const parts = marker?.parts ?? dataRows[0]?.parts ?? 0;
+
+	if (parts < 1 || dataRows.some((row) => row.parts !== parts)) {
+		return { status: "uncommitted", bytes: null, markerRowId: null };
+	}
+
+	if (parts === 1) {
+		const row = dataRows[0];
+		if (
+			dataRows.length !== 1 ||
+			row === undefined ||
+			row.part !== 0 ||
+			row.data === null
+		) {
+			return { status: "uncommitted", bytes: null, markerRowId: null };
+		}
+		return { status: "complete", bytes: row.data, markerRowId: null };
+	}
+
+	if (marker === null || marker.committed !== true) {
+		return {
+			status: "uncommitted",
+			bytes: null,
+			markerRowId: marker?.committed === false ? marker.id : null,
+		};
+	}
+
+	if (dataRows.length !== parts) {
+		return { status: "committed", bytes: null, markerRowId: null };
+	}
+
+	dataRows.sort((left, right) => left.part - right.part);
+	let length = 0;
+	for (let index = 0; index < parts; index += 1) {
+		const row = dataRows[index];
+		if (row === undefined || row.part !== index || row.data === null) {
+			return { status: "committed", bytes: null, markerRowId: null };
+		}
+		length += row.data.length;
+	}
+
+	const bytes = new Uint8Array(length);
+	let offset = 0;
+	for (const row of dataRows) {
+		if (row.data === null) continue;
+		bytes.set(row.data, offset);
+		offset += row.data.length;
+	}
+	return { status: "complete", bytes, markerRowId: null };
 }
 
 interface CompactResult {
@@ -511,7 +584,8 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 			};
 			if (watermark !== null) where.created_at = { gt: watermark };
 
-			const assembler = new ChunkAssembler();
+			// The scan holds chunk bytes for the groups it needs to assemble;
+			// maxUpdatesPerPass is the explicit bound on that memory.
 			const groups = new Map<string, UpdateGroup>();
 			for await (const page of this.pages(this.updatesCollection, where, [
 				{ created_at: "asc" },
@@ -534,42 +608,19 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 						typeof value.created_at === "number" ? value.created_at : 0;
 					let group = groups.get(updateId);
 					if (group === undefined) {
-						group = {
-							min: createdAt,
-							max: createdAt,
-							complete: false,
-							markerRowId: null,
-							rows: [],
-						};
+						group = { min: createdAt, max: createdAt, rows: [] };
 						groups.set(updateId, group);
 					}
 					group.min = Math.min(group.min, createdAt);
 					group.max = Math.max(group.max, createdAt);
-					const rowId = typeof value.id === "string" ? value.id : "";
-					if (rowId.length > 0) {
-						group.rows.push({ id: rowId, createdAt });
-					}
-					const committed =
-						value.committed === false
-							? false
-							: value.committed === true
-								? true
-								: undefined;
-					if (part === parts && committed === false && rowId.length > 0) {
-						group.markerRowId = rowId;
-					}
-					const assembled = assembler.add({
-						id: rowId,
-						payloadId: updateId,
+					group.rows.push({
+						id: typeof value.id === "string" ? value.id : "",
 						part,
 						parts,
 						data: data instanceof Uint8Array ? data : null,
-						committed,
+						committed: parseCommitted(value.committed),
+						createdAt,
 					});
-					if (assembled !== null) {
-						Y.applyUpdate(doc, assembled.bytes);
-						group.complete = true;
-					}
 				}
 				if (this.stopped) return { status: "skipped", incomplete: false };
 			}
@@ -579,8 +630,16 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 			const completeGroups: UpdateGroup[] = [];
 			const activeIncomplete: UpdateGroup[] = [];
 			for (const group of groups.values()) {
-				if (group.complete) {
+				const classified = classifyUpdateGroup(group);
+				if (classified.status === "complete" && classified.bytes !== null) {
+					Y.applyUpdate(doc, classified.bytes);
 					completeGroups.push(group);
+					continue;
+				}
+				if (classified.status === "committed") {
+					// Committed data is never deleted, even when a part is still
+					// missing. Retain it until a later pass can apply it.
+					activeIncomplete.push(group);
 					continue;
 				}
 				if (group.max >= updateCutoff) {
@@ -588,8 +647,10 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 					continue;
 				}
 
-				if (group.markerRowId !== null) {
-					const removed = await this.removeUncommittedMarker(group.markerRowId);
+				if (classified.markerRowId !== null) {
+					const removed = await this.removeUncommittedMarker(
+						classified.markerRowId,
+					);
 					if (!removed) {
 						// The publisher committed before the removal. Keep the group
 						// for the next pass.
@@ -600,7 +661,7 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 
 				await this.deleteRows(
 					this.updatesCollection,
-					group.rows.filter((row) => row.id !== group.markerRowId),
+					group.rows.filter((row) => row.id !== classified.markerRowId),
 				);
 			}
 
@@ -716,6 +777,7 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 					part,
 					parts,
 					data: data instanceof Uint8Array ? data : null,
+					committed: parseCommitted(value.committed),
 				});
 				if (assembled !== null) return assembled.bytes;
 			}
@@ -749,6 +811,7 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 				compaction_version: version,
 				part: parts.length,
 				parts: parts.length,
+				committed: true,
 			});
 		}
 		return snapshotId;
@@ -937,7 +1000,7 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 					if (group.parts === null) group.parts = parts;
 					else if (group.parts !== parts) group.mixedParts = true;
 					if (parts === 1 && part === 0) group.complete = true;
-					if (part === parts) group.complete = true;
+					if (part === parts && value.committed === true) group.complete = true;
 				} else {
 					group.mixedParts = true;
 				}

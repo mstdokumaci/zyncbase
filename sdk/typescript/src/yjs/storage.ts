@@ -44,6 +44,7 @@ export const yjsStoreSchema = {
 			compaction_version: { type: "integer", minimum: 0 },
 			part: { type: "integer", minimum: 0 },
 			parts: { type: "integer", minimum: 1 },
+			committed: { type: "boolean" },
 			data: { type: "bytes" },
 		},
 	},
@@ -84,7 +85,7 @@ export interface ChunkPayloadRow {
 	part: number;
 	parts: number;
 	data?: Uint8Array | null;
-	/** Commit rows default to committed when the field is absent. */
+	/** Required on commit rows; a payload is sealed only when this is true. */
 	committed?: boolean;
 }
 
@@ -92,6 +93,14 @@ export interface ChunkPayloadRow {
 export interface AssembledPayload {
 	payloadId: string;
 	bytes: Uint8Array;
+}
+
+/**
+ * Returns an explicit commit flag. Absence is not a default: it means the row
+ * does not seal the payload.
+ */
+export function parseCommitted(value: unknown): boolean | undefined {
+	return value === true ? true : value === false ? false : undefined;
 }
 
 interface PendingPayload {
@@ -122,7 +131,7 @@ export function chunkPayload(
 /**
  * Reassembles chunked payloads delivered in any order. A payload with one part
  * is complete immediately; larger payloads need every part plus a commit row
- * (`part === parts`).
+ * (`part === parts`) with `committed === true`.
  */
 export class ChunkAssembler {
 	private readonly pending = new Map<string, PendingPayload>();
@@ -150,7 +159,7 @@ export class ChunkAssembler {
 		if (payload.parts !== row.parts) return null;
 
 		if (isCommit) {
-			if (row.committed === false) return null;
+			if (row.committed !== true) return null;
 			payload.committed = true;
 		} else {
 			payload.chunks.set(row.part, row.data as Uint8Array);

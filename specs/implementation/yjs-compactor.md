@@ -28,10 +28,12 @@ It is the compare-and-swap guard for the header commit. The provider ignores it.
 generation, so cleanup can distinguish a snapshot a writer may still publish
 from an older generation. The provider ignores it.
 
-`yjs_updates` commit rows carry a `committed` flag. The writer creates the
-commit row with `committed = false` before writing parts, then sets it to `true`
-after all parts exist. A group is readable only when its marker is committed.
-This is the update group's commit gate, not document-level publishing.
+`yjs_updates` and `yjs_snapshots` commit rows carry a `committed` flag. Update
+writers create the commit row with `committed = false` before writing parts,
+then set it to `true` after all parts exist. Snapshot writers set it to `true`
+after writing the parts. A group is readable only when its marker explicitly has
+`committed = true`; an absent or `false` flag never seals it. This is the chunk
+group's commit gate, not document-level publishing.
 
 ## Discovery
 
@@ -63,10 +65,15 @@ document is lost after the cursor advances.
    `Y.Doc`. A missing or incomplete pointed-to snapshot retries the document.
 3. Page updates with `created_at > compacted_through` (or all updates for a
    document with no watermark), ordered ascending.
-4. Assemble completed groups with `ChunkAssembler`; apply each complete update.
-   Commit rows with `committed = false` are markers and do not complete a group.
-   Track each group's min/max `created_at` and marker row.
-5. Uncommitted groups:
+4. Group rows by `update_id` while scanning, then derive each group's state
+   from its rows: complete (single part, or every part plus a commit row that
+   explicitly has `committed = true`), committed-incomplete, or uncommitted.
+   The scan holds chunk bytes for the groups it assembles; `maxUpdatesPerPass`
+   is the explicit memory bound. A marker with `committed = false` does not
+   complete a group.
+5. Committed groups that are still incomplete (a part missing) are retained and
+   treated as active regardless of age; committed data is never deleted.
+6. Uncommitted groups:
    - older than `updateRetentionMs` → abandoned.
      - If the group has an uncommitted marker, remove that marker first with
        `if: { committed: { eq: false } }`. If the removal fails, the publisher
@@ -77,23 +84,23 @@ document is lost after the cursor advances.
        path.
    - recent → keep, and clamp the new watermark below the earliest incomplete
      row.
-6. Compute:
+7. Compute:
    ```text
    maxComplete = max(created_at) over complete groups
    minIncomplete = min(created_at) over active incomplete groups
    nextWatermark = min(maxComplete, minIncomplete - 1)   // if incomplete
    nextWatermark = maxComplete                          // otherwise
    ```
-7. Encode `Y.encodeStateAsUpdate`, split with `chunkSize`, write snapshot parts,
-   then the commit row.
-8. Commit the header atomically:
+8. Encode `Y.encodeStateAsUpdate`, split with `chunkSize`, write snapshot parts,
+   then the commit row with `committed = true`.
+9. Commit the header atomically:
    - `current_snapshot_id = new snapshot`
    - `compacted_through = nextWatermark`
    - `compaction_version = observed + 1`
    - every op guarded by `if: { compaction_version: { eq: observed } }`
-9. On `PRECONDITION_FAILED`, another worker won. Leave the new snapshot chunks
-   for cleanup and retry the document.
-10. Delete update rows in complete groups where
+10. On `PRECONDITION_FAILED`, another worker won. Leave the new snapshot chunks
+    for cleanup and retry the document.
+11. Delete update rows in complete groups where
     `created_at <= nextWatermark` and older than `updateRetentionMs`.
 
 The watermark clamp is what makes reading `created_at > watermark` safe: an
@@ -107,8 +114,8 @@ A bounded header sweep runs every `cleanupIntervalMs`:
 - Delete update rows with `created_at <= compacted_through` and older than
   `updateRetentionMs`.
 - Delete a snapshot generation only when it is not current, is complete (has a
-  commit row), is older than `snapshotRetentionMs`, and every row's
-  `compaction_version` is strictly older than the header's version.
+  commit row with `committed = true`), is older than `snapshotRetentionMs`, and
+  every row's `compaction_version` is strictly older than the header's version.
 - Leave incomplete generations and generations tagged with the current header
   version untouched; a writer may still publish them.
 - Batch removals at 400 ops per batch. Each batch starts with a guarded no-op

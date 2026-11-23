@@ -93,6 +93,7 @@ function seedCommit(
 			update_id: updateId,
 			part,
 			parts,
+			committed: true,
 		},
 		createdAt,
 	);
@@ -124,6 +125,7 @@ function seedSnapshotGroup(
 			compaction_version: version,
 			part: parts.length,
 			parts: parts.length,
+			committed: true,
 		});
 	}
 }
@@ -220,6 +222,7 @@ function snapshotBytes(
 			part,
 			parts,
 			data: data instanceof Uint8Array ? data : null,
+			committed: typeof row.committed === "boolean" ? row.committed : undefined,
 		});
 		if (assembled !== null) return assembled.bytes;
 	}
@@ -481,6 +484,107 @@ describe("YjsCompactor", () => {
 		expect(readHeader(client).compaction_version).toBe(0);
 		expect(snapshotGroups(client).size).toBe(0);
 		expect(updateRows(client).length).toBe(parts.length + 1);
+	});
+
+	test("keeps a committed group that follows more than 512 pending groups", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const update = incrementalUpdates(["committed"])[0] as Uint8Array;
+		const parts = chunkPayload(update, 4);
+		expect(parts.length).toBeGreaterThan(1);
+		seedPart(
+			client,
+			DOC_ID,
+			"committed",
+			0,
+			parts.length,
+			parts[0] as Uint8Array,
+		);
+		for (let index = 0; index < 513; index += 1) {
+			seedPart(
+				client,
+				DOC_ID,
+				`pending-${index}`,
+				0,
+				parts.length,
+				parts[0] as Uint8Array,
+			);
+		}
+		for (let index = 1; index < parts.length; index += 1) {
+			seedPart(
+				client,
+				DOC_ID,
+				"committed",
+				index,
+				parts.length,
+				parts[index] as Uint8Array,
+			);
+		}
+		seedCommit(client, DOC_ID, "committed", parts.length, parts.length);
+		const worker = makeWorker(client);
+
+		await worker.runPass();
+
+		const header = readHeader(client);
+		expect(header.compaction_version).toBe(1);
+		expect(
+			snapshotText(client, DOC_ID, header.current_snapshot_id as string),
+		).toBe("committed");
+		expect(updateRows(client)).toEqual([]);
+	});
+
+	test("retains a committed group with a missing part", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const update = incrementalUpdates(["z".repeat(30)])[0] as Uint8Array;
+		const parts = chunkPayload(update, 8);
+		expect(parts.length).toBeGreaterThan(1);
+		seedPart(
+			client,
+			DOC_ID,
+			"missing-part",
+			0,
+			parts.length,
+			parts[0] as Uint8Array,
+		);
+		seedCommit(client, DOC_ID, "missing-part", parts.length, parts.length);
+		const worker = makeWorker(client);
+
+		await worker.runPass();
+
+		expect(readHeader(client).compaction_version).toBe(0);
+		expect(snapshotGroups(client).size).toBe(0);
+		expect(updateRows(client).length).toBe(2);
+	});
+
+	test("does not seal a group whose commit row lacks committed true", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const update = incrementalUpdates(["q".repeat(30)])[0] as Uint8Array;
+		const parts = chunkPayload(update, 8);
+		for (let index = 0; index < parts.length; index += 1) {
+			seedPart(
+				client,
+				DOC_ID,
+				"unsealed",
+				index,
+				parts.length,
+				parts[index] as Uint8Array,
+			);
+		}
+		client.store.seed(UPDATES, "unsealed-commit", {
+			document_id: DOC_ID,
+			update_id: "unsealed",
+			part: parts.length,
+			parts: parts.length,
+		});
+		const worker = makeWorker(client);
+
+		await worker.runPass();
+
+		expect(readHeader(client).compaction_version).toBe(0);
+		expect(snapshotGroups(client).size).toBe(0);
+		expect(updateRows(client)).toEqual([]);
 	});
 
 	test("retries after a compaction version conflict", async () => {

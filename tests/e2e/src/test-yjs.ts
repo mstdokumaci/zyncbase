@@ -326,6 +326,7 @@ export async function run(port: number): Promise<void> {
 				compaction_version: 0,
 				part: snapshotParts.length,
 				parts: snapshotParts.length,
+				committed: true,
 			});
 		}
 		await clientA.store.set(

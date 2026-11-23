@@ -17,6 +17,7 @@ import { generateUUIDv7 } from "../uuid.js";
 import {
 	ChunkAssembler,
 	chunkPayload,
+	parseCommitted,
 	YJS_DOCUMENTS_COLLECTION,
 	YJS_SNAPSHOTS_COLLECTION,
 	YJS_UPDATES_COLLECTION,
@@ -701,6 +702,7 @@ export class ZyncBaseYjsProvider<
 					part,
 					parts,
 					data: data instanceof Uint8Array ? data : null,
+					committed: parseCommitted(row.committed),
 				});
 				if (assembled === null) continue;
 				try {
@@ -744,12 +746,7 @@ export class ZyncBaseYjsProvider<
 		if (typeof part !== "number" || typeof parts !== "number") return;
 		const data = row.data;
 		if (part < parts && !(data instanceof Uint8Array)) return;
-		const committed =
-			row.committed === false
-				? false
-				: row.committed === true
-					? true
-					: undefined;
+		const committed = parseCommitted(row.committed);
 
 		const assembled = this.assembler.add({
 			id,
@@ -900,9 +897,12 @@ export class ZyncBaseYjsProvider<
 			try {
 				await this.writePlan(plan);
 			} catch (error) {
+				// The failed attempt may have written a marker or parts that the
+				// compactor can reclaim. Never reuse its identities: requeue the
+				// bytes and let the next attempt create a fresh plan.
+				this.pending.unshift(plan.merged);
+				this.plan = null;
 				if (error instanceof YjsUpdateCommitConflictError) {
-					this.pending.unshift(plan.merged);
-					this.plan = null;
 					this.scheduleRetry();
 					throw error;
 				}

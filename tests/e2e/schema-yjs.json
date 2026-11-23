@@ -35,6 +35,7 @@
 				"compaction_version": { "type": "integer", "minimum": 0 },
 				"part": { "type": "integer", "minimum": 0 },
 				"parts": { "type": "integer", "minimum": 1 },
+				"committed": { "type": "boolean" },
 				"data": { "type": "bytes" }
 			}
 		},

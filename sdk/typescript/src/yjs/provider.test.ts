@@ -72,6 +72,7 @@ function seedSnapshot(
 			snapshot_id: snapshotId,
 			part: parts.length,
 			parts: parts.length,
+			committed: true,
 		});
 	}
 }
@@ -373,6 +374,7 @@ describe("ZyncBaseYjsProvider initial sync", () => {
 				update_id: "straddle",
 				part: parts.length,
 				parts: parts.length,
+				committed: true,
 			},
 			20,
 		);
@@ -443,6 +445,7 @@ describe("ZyncBaseYjsProvider initial sync", () => {
 			update_id: "multi",
 			part: parts.length,
 			parts: parts.length,
+			committed: true,
 		});
 
 		await waitFor(
@@ -767,7 +770,7 @@ describe("ZyncBaseYjsProvider local writes", () => {
 
 		await provider.flush();
 
-		expect(updateGroups(client).size).toBe(2);
+		expect(updateGroups(client).size).toBe(1);
 		const applied = new Y.Doc();
 		applyStoredUpdates(client, applied);
 		expect(applied.getText("content").toString()).toBe("firstsecond");
@@ -865,7 +868,7 @@ describe("ZyncBaseYjsProvider local writes", () => {
 		provider.destroy();
 	});
 
-	test("retries the whole payload when a middle chunk fails", async () => {
+	test("retries with fresh identities when a middle chunk fails", async () => {
 		const client = new FakeClient();
 		seedHeader(client);
 		const doc = new Y.Doc();
@@ -881,18 +884,30 @@ describe("ZyncBaseYjsProvider local writes", () => {
 		doc.getText("content").insert(0, text);
 		await expect(provider.flush()).rejects.toBeTruthy();
 
-		await waitFor(() => {
-			const groups = updateGroups(client);
-			if (groups.size !== 1) return false;
-			const rows = [...groups.values()][0] as FakeRow[];
-			const parts = rows[0]?.parts as number;
-			return rows.length === parts + 1;
-		});
+		await waitFor(() =>
+			[...updateGroups(client).values()].some((rows) =>
+				rows.some((row) => row.committed === true),
+			),
+		);
 
-		const rows = [...updateGroups(client).values()][0] as FakeRow[];
-		const parts = rows[0]?.parts as number;
-		expect(parts).toBeGreaterThan(1);
+		const groups = [...updateGroups(client).values()];
+		const committed = groups.find((rows) =>
+			rows.some((row) => row.committed === true),
+		) as FakeRow[];
+		const abandoned = groups.filter(
+			(rows) => !rows.some((row) => row.committed === true),
+		);
+		expect(abandoned.length).toBeGreaterThan(0);
+		for (const rows of abandoned) {
+			expect(rows[0]?.update_id).not.toBe(committed[0]?.update_id);
+		}
+
 		provider.destroy();
+		const reader = new Y.Doc();
+		const readerProvider = makeProvider(client, reader);
+		await readerProvider.connect();
+		expect(reader.getText("content").toString()).toBe(text);
+		readerProvider.destroy();
 	});
 });
 

@@ -146,6 +146,7 @@ package, or copy this JSON:
 			"compaction_version": { "type": "integer", "minimum": 0 },
 			"part": { "type": "integer", "minimum": 0 },
 			"parts": { "type": "integer", "minimum": 1 },
+			"committed": { "type": "boolean" },
 			"data": { "type": "bytes" }
 		}
 	},
@@ -266,8 +267,9 @@ await compactor.stop();
   the updates above each document's watermark.
 - Writes a chunked snapshot, then commits the header pointer and watermark with
   a `compaction_version` compare-and-swap.
-- Incomplete update groups are retried and hold the watermark back, so their
-  rows are retained until the group completes.
+- Incomplete update groups are retried and hold the watermark back. A group
+  whose commit row explicitly says `committed = true` is retained even if a part
+  is missing; abandoned uncommitted groups are reclaimed after retention.
 - Deletes covered updates and old snapshot generations after the configured
   retention.
 - Use a dedicated client when `namespaces` is set; the worker switches the

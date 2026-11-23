@@ -41,13 +41,16 @@ A logical payload (one update or one snapshot) is stored as one or more rows.
 
 - Single part: `parts = 1`, `part = 0`, `data` present. Complete immediately.
 - Multi part: data rows `part = 0..parts-1`, plus a commit row
-  `part = parts` with no `data`. The writer creates the commit row first with
-  `committed = false`, writes the parts, then commits it with a conditional
-  write `committed = false → true` after all parts are present.
-- A payload is complete only when every part exists and (for multi-part) the
-  commit row is committed. A `committed = false` row is a marker, not a
-  completed payload.
-- Retries reuse the same payload ID and row IDs, so writes are idempotent.
+  `part = parts` with no `data` and a `committed` flag. Update writers create
+  the commit row first with `committed = false`, write the parts, then commit
+  it with a conditional write `committed = false → true`. Snapshot writers
+  write the commit row with `committed = true` after the parts.
+- A payload is complete only when every part exists and the commit row
+  explicitly has `committed = true`. There is no default: an absent or `false`
+  flag means uncommitted and never seals the payload.
+- A failed write attempt requeues its bytes. The next attempt uses a fresh
+  payload ID and row IDs; the abandoned rows are ignored until the compactor
+  reclaims them.
 - Readers accept any chunk size; payloads are self-describing.
 - Incomplete payloads are ignored (in-flight or abandoned writers). The
   compactor removes an uncommitted marker before it reclaims the group; after
@@ -58,7 +61,7 @@ A logical payload (one update or one snapshot) is stored as one or more rows.
 
 1. Load the current snapshot and updates; apply both to a temporary `Y.Doc`.
 2. Encode with `Y.encodeStateAsUpdate`.
-3. Write `yjs_snapshots` parts, then the commit row.
+3. Write `yjs_snapshots` parts, then the commit row with `committed = true`.
 4. Atomically set `current_snapshot_id` and `compacted_through` on the header.
    `compacted_through` is the max `created_at` of updates actually applied.
    **This header write is the commit.**
@@ -111,14 +114,15 @@ After `writeDebounceMs`, pending updates are merged with `Y.mergeUpdates` and
 written as one payload. Writes are serialized and one row per message is sent:
 batching all chunks would recreate the oversized message that chunking avoids.
 
-Retryable failures keep the plan and retry with exponential backoff. The whole
-payload is rewritten with the same IDs; no partial resume, because an uncertain
-timeout may or may not have committed. A non-retryable failure also keeps the
-plan but sets a write-blocked state: later Yjs deltas queue instead of being
-written past the failed predecessor. The application calls `flush()` after
-fixing the cause to retry the retained payload; if it still fails, the block
-stays. Partial rows from an interrupted attempt remain but are ignored by
-readers until the compactor cleans them up.
+Retryable failures requeue the merged bytes and retry with exponential backoff.
+Every attempt creates a fresh update ID and row IDs; no partial resume, because
+an uncertain timeout may or may not have committed and the compactor may
+already have reclaimed the failed attempt. A non-retryable failure also
+requeues the bytes and sets a write-blocked state: later Yjs deltas queue
+instead of being written past the failed predecessor. The application calls
+`flush()` after fixing the cause to retry the retained payload; if it still
+fails, the block stays. Partial rows from an interrupted attempt remain but are
+ignored by readers until the compactor cleans them up.
 
 Multi-part writes create the uncommitted commit marker first, then the parts,
 then commit the marker with a conditional write. If the compactor removes an
