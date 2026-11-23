@@ -849,6 +849,71 @@ test "PresenceManager - removeConnection ignores unknown and repeated connection
     try testing.expect(manager.user_state.get(1) == null);
 }
 
+test "PresenceManager - failed setUser does not keep a stale connection registration" {
+    const allocator = std.testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = zeroDocId;
+    var valid = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 100.0 } },
+    });
+    defer valid.free(allocator);
+
+    // A contributes and its join is flushed.
+    try manager.setUser(1, user_id, 100, valid);
+    try flushPending(&manager, allocator);
+
+    // B is newly tracked; setUserLocked rejects the out-of-range field.
+    var invalid = try makePresencePatch(allocator, &.{
+        .{ .idx = 99, .value = .{ .float = 1.0 } },
+    });
+    defer invalid.free(allocator);
+    try testing.expectError(error.InvalidFieldIndex, manager.setUser(1, user_id, 200, invalid));
+
+    // B must be rolled back, leaving A as the last contributor.
+    try manager.removeConnection(1, user_id, 100);
+    try testing.expect(manager.user_state.get(1) == null);
+    try testing.expect(manager.user_connections.get(1) == null);
+}
+
+test "PresenceManager - failed setUser keeps an existing connection registration" {
+    const allocator = std.testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = zeroDocId;
+    var valid = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 100.0 } },
+    });
+    defer valid.free(allocator);
+    var invalid = try makePresencePatch(allocator, &.{
+        .{ .idx = 99, .value = .{ .float = 1.0 } },
+    });
+    defer invalid.free(allocator);
+
+    try manager.setUser(1, user_id, 100, valid);
+    try flushPending(&manager, allocator);
+
+    // The connection was tracked before this call; a failed write keeps it.
+    try testing.expectError(error.InvalidFieldIndex, manager.setUser(1, user_id, 100, invalid));
+
+    try manager.removeConnection(1, user_id, 100);
+    try testing.expect(manager.user_state.get(1) == null);
+}
+
 fn flushPending(manager: *PresenceManager, allocator: std.mem.Allocator) !void {
     var user_batches = std.ArrayListUnmanaged(PresenceManager.UserUpdateBatch).empty;
     defer {

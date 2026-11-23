@@ -152,7 +152,10 @@ pub const PresenceManager = struct {
         self.data_mutex.lockUncancelable(self.io);
         defer self.data_mutex.unlock(self.io);
 
-        try self.trackConnectionLocked(namespace_id, user_id, conn_id);
+        const added = try self.trackConnectionLocked(namespace_id, user_id, conn_id);
+        errdefer if (added) {
+            _ = self.untrackConnectionLocked(namespace_id, user_id, conn_id);
+        };
         try self.setUserLocked(namespace_id, user_id, patch);
     }
 
@@ -424,12 +427,14 @@ pub const PresenceManager = struct {
         namespace_id: i64,
         user_id: typed_doc_id.DocId,
         conn_id: u64,
-    ) !void {
+    ) !bool {
         const ns_result = try self.user_connections.getOrPut(self.allocator, namespace_id);
         if (!ns_result.found_existing) ns_result.value_ptr.* = .{};
         const user_result = try ns_result.value_ptr.getOrPut(self.allocator, user_id);
         if (!user_result.found_existing) user_result.value_ptr.* = .{};
+        const was_tracked = user_result.value_ptr.contains(conn_id);
         try user_result.value_ptr.put(self.allocator, conn_id, {});
+        return !was_tracked;
     }
 
     /// Returns null when the connection was not tracked, false when other
