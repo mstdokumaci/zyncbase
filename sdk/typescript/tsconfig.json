@@ -18,6 +18,7 @@
 		"dist",
 		"src/**/*.test.ts",
 		"src/test-helpers.ts",
-		"src/filter_eval.vectors.ts"
+		"src/filter_eval.vectors.ts",
+		"src/yjs/test-helpers.ts"
 	]
 }
