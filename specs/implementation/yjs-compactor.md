@@ -65,12 +65,13 @@ document is lost after the cursor advances.
    `Y.Doc`. A missing or incomplete pointed-to snapshot retries the document.
 3. Page updates with `created_at > compacted_through` (or all updates for a
    document with no watermark), ordered ascending.
-4. Group rows by `update_id` while scanning, then derive each group's state
-   from its rows: complete (single part, or every part plus a commit row that
-   explicitly has `committed = true`), committed-incomplete, or uncommitted.
-   The scan holds chunk bytes for the groups it assembles; `maxUpdatesPerPass`
-   is the explicit memory bound. A marker with `committed = false` does not
-   complete a group.
+4. Group rows by `update_id` while paging. Assemble each page as it arrives and
+   apply a group as soon as it is complete (single part, or every part plus a
+   commit row that explicitly has `committed = true`). Completed groups release
+   their chunk bytes immediately; only incomplete groups keep buffers until they
+   complete or retention reclaims them. `maxUpdatesPerPass` is a discovery
+   bound, not a per-document scan bound; `compactDocument` reads all rows above
+   the watermark. A marker with `committed = false` does not complete a group.
 5. Committed groups that are still incomplete (a part missing) are retained and
    treated as active regardless of age; committed data is never deleted.
 6. Uncommitted groups:
