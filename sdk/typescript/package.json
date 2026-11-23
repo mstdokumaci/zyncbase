@@ -20,6 +20,10 @@
 		"./yjs": {
 			"types": "./dist/yjs/index.d.ts",
 			"import": "./dist/yjs/index.js"
+		},
+		"./yjs/compactor": {
+			"types": "./dist/yjs/compactor/index.d.ts",
+			"import": "./dist/yjs/compactor/index.js"
 		}
 	},
 	"bin": {
@@ -55,7 +59,7 @@
 		}
 	},
 	"scripts": {
-		"build": "rm -rf dist && bun build --root src src/index.ts src/yjs/index.ts --outdir dist --format esm --splitting --external yjs && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm --target node && bun build src/react/index.ts --outdir dist/react --format esm --external react --banner '\"use client\";'"
+		"build": "rm -rf dist && bun build --root src src/index.ts src/yjs/index.ts src/yjs/compactor/index.ts --outdir dist --format esm --splitting --external yjs && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm --target node && bun build src/react/index.ts --outdir dist/react --format esm --external react --banner '\"use client\";'"
 	},
 	"dependencies": {
 		"@msgpack/msgpack": "^3.1.3",

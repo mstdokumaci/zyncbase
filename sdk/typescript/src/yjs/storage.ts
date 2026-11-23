@@ -15,15 +15,23 @@ export const YJS_UPDATES_COLLECTION = "yjs_updates";
  */
 export const yjsStoreSchema = {
 	yjs_documents: {
+		required: ["compaction_version"],
 		unique: [["slug"]],
 		fields: {
 			slug: { type: "string", minLength: 1, maxLength: 120 },
 			current_snapshot_id: { type: "string", minLength: 1, maxLength: 64 },
 			compacted_through: { type: "integer", minimum: 0 },
+			compaction_version: { type: "integer", minimum: 0 },
 		},
 	},
 	yjs_snapshots: {
-		required: ["document_id", "snapshot_id", "part", "parts"],
+		required: [
+			"document_id",
+			"snapshot_id",
+			"compaction_version",
+			"part",
+			"parts",
+		],
 		unique: [["snapshot_id", "part"]],
 		fields: {
 			document_id: {
@@ -33,8 +41,10 @@ export const yjsStoreSchema = {
 				indexed: true,
 			},
 			snapshot_id: { type: "string", minLength: 1, maxLength: 64 },
+			compaction_version: { type: "integer", minimum: 0 },
 			part: { type: "integer", minimum: 0 },
 			parts: { type: "integer", minimum: 1 },
+			committed: { type: "boolean" },
 			data: { type: "bytes" },
 		},
 	},
@@ -51,6 +61,7 @@ export const yjsStoreSchema = {
 			update_id: { type: "string", minLength: 1, maxLength: 64 },
 			part: { type: "integer", minimum: 0 },
 			parts: { type: "integer", minimum: 1 },
+			committed: { type: "boolean" },
 			data: { type: "bytes" },
 		},
 	},
@@ -62,6 +73,7 @@ export interface YjsDocumentRow {
 	slug?: string | null;
 	current_snapshot_id?: string | null;
 	compacted_through?: number | null;
+	compaction_version?: number | null;
 	created_at?: number;
 	updated_at?: number;
 }
@@ -73,12 +85,22 @@ export interface ChunkPayloadRow {
 	part: number;
 	parts: number;
 	data?: Uint8Array | null;
+	/** Required on commit rows; a payload is sealed only when this is true. */
+	committed?: boolean;
 }
 
 /** A fully assembled payload. */
 export interface AssembledPayload {
 	payloadId: string;
 	bytes: Uint8Array;
+}
+
+/**
+ * Returns an explicit commit flag. Absence is not a default: it means the row
+ * does not seal the payload.
+ */
+export function parseCommitted(value: unknown): boolean | undefined {
+	return value === true ? true : value === false ? false : undefined;
 }
 
 interface PendingPayload {
@@ -109,7 +131,7 @@ export function chunkPayload(
 /**
  * Reassembles chunked payloads delivered in any order. A payload with one part
  * is complete immediately; larger payloads need every part plus a commit row
- * (`part === parts`).
+ * (`part === parts`) with `committed === true`.
  */
 export class ChunkAssembler {
 	private readonly pending = new Map<string, PendingPayload>();
@@ -137,6 +159,7 @@ export class ChunkAssembler {
 		if (payload.parts !== row.parts) return null;
 
 		if (isCommit) {
+			if (row.committed !== true) return null;
 			payload.committed = true;
 		} else {
 			payload.chunks.set(row.part, row.data as Uint8Array);

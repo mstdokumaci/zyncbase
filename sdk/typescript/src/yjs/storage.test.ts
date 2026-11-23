@@ -65,6 +65,7 @@ describe("ChunkAssembler", () => {
 			payloadId: "u2",
 			part: 2,
 			parts: 2,
+			committed: true,
 		});
 		expect([...(result?.bytes ?? [])]).toEqual([1, 2, 3, 4]);
 		expect(assembler.size).toBe(0);
@@ -102,8 +103,43 @@ describe("ChunkAssembler", () => {
 			}),
 		).toBeNull();
 		expect(
-			assembler.add({ id: "row-2", payloadId: "u4", part: 2, parts: 2 }),
+			assembler.add({
+				id: "row-2",
+				payloadId: "u4",
+				part: 2,
+				parts: 2,
+				committed: true,
+			}),
 		).toBeNull();
+	});
+
+	test("requires an explicit committed flag on the commit row", () => {
+		for (const committed of [undefined, false]) {
+			const assembler = new ChunkAssembler();
+			assembler.add({
+				id: "row-1",
+				payloadId: "u7",
+				part: 0,
+				parts: 2,
+				data: new Uint8Array([1]),
+			});
+			assembler.add({
+				id: "row-2",
+				payloadId: "u7",
+				part: 1,
+				parts: 2,
+				data: new Uint8Array([2]),
+			});
+			expect(
+				assembler.add({
+					id: "row-3",
+					payloadId: "u7",
+					part: 2,
+					parts: 2,
+					committed,
+				}),
+			).toBeNull();
+		}
 	});
 
 	test("ignores malformed rows", () => {

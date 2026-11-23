@@ -1,6 +1,7 @@
 import type { ZyncBaseClient } from "../client.js";
 import { ZyncBaseError } from "../errors.js";
 import type {
+	BatchOperation,
 	ConnectionStatus,
 	JsonValue,
 	SubscriptionHandle,
@@ -20,6 +21,7 @@ type QueryOptions = {
 };
 
 interface FakeSubscription {
+	namespace: string;
 	collection: string;
 	where: Record<string, unknown> | undefined;
 	orderBy: ReadonlyArray<Record<string, "asc" | "desc">>;
@@ -122,9 +124,33 @@ function sortRows(
 
 /** Minimal in-memory stand-in for the SDK store. */
 export class FakeStore {
-	readonly data = new Map<string, Map<string, FakeRow>>();
+	private readonly namespaceData = new Map<
+		string,
+		Map<string, Map<string, FakeRow>>
+	>();
 	readonly queries: Array<{ collection: string; options: QueryOptions }> = [];
 	readonly subscriptions = new Set<FakeSubscription>();
+	private namespace = "public";
+
+	/** Runs before a batch validates its conditions; used for CAS races. */
+	beforeBatch: ((operations: BatchOperation[]) => void) | null = null;
+	/** Runs before a set applies; used for commit-marker races. */
+	beforeSet:
+		| ((path: string[], options?: { if?: Record<string, unknown> }) => void)
+		| null = null;
+
+	setNamespace(namespace: string): void {
+		this.namespace = namespace;
+	}
+
+	private dataFor(namespace: string): Map<string, Map<string, FakeRow>> {
+		let data = this.namespaceData.get(namespace);
+		if (data === undefined) {
+			data = new Map();
+			this.namespaceData.set(namespace, data);
+		}
+		return data;
+	}
 
 	/** Fail queries whose limit exceeds this value with RESPONSE_TOO_LARGE. */
 	maxQueryLimit = Number.POSITIVE_INFINITY;
@@ -146,7 +172,7 @@ export class FakeStore {
 	private errorFactory = (code: string): Error =>
 		ZyncBaseError.fromServerResponse({ code, message: code });
 
-	private clock = 1;
+	private clock = Date.now() * 1_000 - 60_000_000;
 
 	setErrorFactory(factory: (code: string) => Error): void {
 		this.errorFactory = factory;
@@ -169,10 +195,15 @@ export class FakeStore {
 	}
 
 	collection(name: string): Map<string, FakeRow> {
-		let rows = this.data.get(name);
+		return this.collectionIn(this.namespace, name);
+	}
+
+	private collectionIn(namespace: string, name: string): Map<string, FakeRow> {
+		const data = this.dataFor(namespace);
+		let rows = data.get(name);
 		if (rows === undefined) {
 			rows = new Map();
-			this.data.set(name, rows);
+			data.set(name, rows);
 		}
 		return rows;
 	}
@@ -218,8 +249,13 @@ export class FakeStore {
 		if (this.collection(collection).delete(id)) this.notify(collection);
 	}
 
-	async set(path: string[], value: JsonValue): Promise<void> {
+	async set(
+		path: string[],
+		value: JsonValue,
+		options?: { if?: Record<string, unknown> },
+	): Promise<void> {
 		this.setAttempts += 1;
+		this.beforeSet?.(path, options);
 		if (path.length !== 2)
 			throw new Error("FakeStore only supports row writes");
 		const failure = this.writeFailures.shift();
@@ -238,6 +274,12 @@ export class FakeStore {
 		if (!isPlainRecord(value)) throw new Error("Expected an object row");
 		const [collection, id] = path as [string, string];
 		const existing = this.collection(collection).get(id);
+		if (
+			options?.if !== undefined &&
+			(existing === undefined || !matches(existing, options.if))
+		) {
+			throw this.errorFactory("PRECONDITION_FAILED");
+		}
 		const row = {
 			...value,
 			id,
@@ -246,6 +288,108 @@ export class FakeStore {
 		} as FakeRow;
 		this.collection(collection).set(id, row);
 		this.notify(collection);
+	}
+
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: test fake mirrors the SDK's atomic batch semantics.
+	async batch(operations: BatchOperation[]): Promise<void> {
+		this.beforeBatch?.(operations);
+		const backup = new Map<string, Map<string, FakeRow | undefined>>();
+		const save = (collection: string, id: string): void => {
+			let rows = backup.get(collection);
+			if (rows === undefined) {
+				rows = new Map();
+				backup.set(collection, rows);
+			}
+			if (!rows.has(id)) rows.set(id, this.collection(collection).get(id));
+		};
+
+		for (const operation of operations) {
+			const [collection, id] = operation.path as [string, string];
+			save(collection, id);
+			if (operation.if === undefined) continue;
+			const row = this.collection(collection).get(id);
+			if (row === undefined || !matches(row, operation.if)) {
+				throw this.errorFactory("PRECONDITION_FAILED");
+			}
+		}
+
+		const collections = new Set<string>();
+		try {
+			for (const operation of operations) {
+				const [collection, id] = operation.path as [string, string];
+				collections.add(collection);
+				if (operation.op === "remove") {
+					if (operation.path.length === 2) {
+						this.collection(collection).delete(id);
+					} else {
+						const row = this.collection(collection).get(id);
+						if (row !== undefined) {
+							const field = operation.path[2] as string;
+							const next = { ...row, updated_at: this.clock++ } as FakeRow;
+							delete next[field];
+							this.collection(collection).set(id, next);
+						}
+					}
+					continue;
+				}
+				if (operation.op === "increment") {
+					const existing = this.collection(collection).get(id) ?? {
+						id,
+						created_at: this.clock++,
+						updated_at: this.clock++,
+					};
+					const row = { ...existing, updated_at: this.clock++ } as FakeRow;
+					const field = operation.path[2] as string;
+					const current = row[field];
+					row[field] =
+						(typeof current === "number" ? current : 0) + operation.by;
+					this.collection(collection).set(id, row);
+					continue;
+				}
+				if (operation.path.length === 2) {
+					if (!isPlainRecord(operation.value)) {
+						throw new Error("Expected an object row");
+					}
+					const existing = this.collection(collection).get(id);
+					const row = {
+						...operation.value,
+						id,
+						created_at: existing?.created_at ?? this.clock++,
+						updated_at: this.clock++,
+					} as FakeRow;
+					this.collection(collection).set(id, row);
+				} else {
+					const existing = this.collection(collection).get(id) ?? {
+						id,
+						created_at: this.clock++,
+						updated_at: this.clock++,
+					};
+					const row = {
+						...existing,
+						updated_at: this.clock++,
+					} as FakeRow;
+					row[operation.path[2] as string] =
+						operation.value === undefined ? null : operation.value;
+					this.collection(collection).set(id, row);
+				}
+			}
+		} catch (error) {
+			for (const [collection, rows] of backup) {
+				for (const [id, row] of rows) {
+					if (row === undefined) this.collection(collection).delete(id);
+					else this.collection(collection).set(id, row);
+				}
+			}
+			throw error;
+		}
+		for (const collection of collections) this.notify(collection);
+	}
+
+	async remove(path: string[]): Promise<void> {
+		if (path.length !== 2)
+			throw new Error("FakeStore only supports row removes");
+		const [collection, id] = path as [string, string];
+		if (this.collection(collection).delete(id)) this.notify(collection);
 	}
 
 	async get(path: string[]): Promise<JsonValue | null> {
@@ -303,6 +447,7 @@ export class FakeStore {
 		);
 		const initial = matching.slice(0, options.limit ?? matching.length);
 		const subscription: FakeSubscription = {
+			namespace: this.namespace,
 			collection,
 			where: options.where,
 			orderBy: options.orderBy ?? [{ created_at: "asc" }],
@@ -324,7 +469,12 @@ export class FakeStore {
 	}
 
 	private snapshot(subscription: FakeSubscription): JsonValue[] {
-		const rows = [...this.collection(subscription.collection).values()].filter(
+		const rows = [
+			...this.collectionIn(
+				subscription.namespace,
+				subscription.collection,
+			).values(),
+		].filter(
 			(row) =>
 				matches(row, subscription.where) &&
 				(subscription.initialIds.has(row.id) ||
@@ -336,6 +486,7 @@ export class FakeStore {
 	notify(collection: string): void {
 		for (const subscription of [...this.subscriptions]) {
 			if (subscription.collection !== collection) continue;
+			if (subscription.namespace !== this.namespace) continue;
 			subscription.callback(this.snapshot(subscription));
 		}
 	}
@@ -350,6 +501,10 @@ export class FakeClient {
 	connectCalls = 0;
 
 	private readonly listeners = new Map<string, Set<Listener>>();
+
+	async setStoreNamespace(namespace: string): Promise<void> {
+		this.store.setNamespace(namespace);
+	}
 
 	async connect(): Promise<void> {
 		this.connectCalls += 1;

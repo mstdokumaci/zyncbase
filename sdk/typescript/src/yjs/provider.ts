@@ -17,6 +17,7 @@ import { generateUUIDv7 } from "../uuid.js";
 import {
 	ChunkAssembler,
 	chunkPayload,
+	parseCommitted,
 	YJS_DOCUMENTS_COLLECTION,
 	YJS_SNAPSHOTS_COLLECTION,
 	YJS_UPDATES_COLLECTION,
@@ -47,6 +48,14 @@ export class YjsDocumentNotFoundError extends Error {
 		super(`Yjs document header not found: ${documentId}`);
 		this.name = "YjsDocumentNotFoundError";
 		this.documentId = documentId;
+	}
+}
+
+/** The compactor removed an uncommitted update group before this writer committed it. */
+class YjsUpdateCommitConflictError extends Error {
+	constructor() {
+		super("Yjs update group was abandoned before its commit marker");
+		this.name = "YjsUpdateCommitConflictError";
 	}
 }
 
@@ -116,6 +125,13 @@ function isRetryable(error: unknown): boolean {
 	// non-retryable.
 	if (error.code === ErrorCodes.SESSION_NOT_READY) return true;
 	return error.retryable;
+}
+
+function isPreconditionFailed(error: unknown): boolean {
+	return (
+		error instanceof ZyncBaseError &&
+		error.code === ErrorCodes.PRECONDITION_FAILED
+	);
 }
 
 /**
@@ -686,6 +702,7 @@ export class ZyncBaseYjsProvider<
 					part,
 					parts,
 					data: data instanceof Uint8Array ? data : null,
+					committed: parseCommitted(row.committed),
 				});
 				if (assembled === null) continue;
 				try {
@@ -710,8 +727,11 @@ export class ZyncBaseYjsProvider<
 	private ingestUpdateRow(row: JsonValue): void {
 		if (!isRecord(row)) return;
 		const id = row.id;
-		if (typeof id !== "string" || this.seenRows.has(id)) return;
-		remember(this.seenRows, id, SEEN_ROW_LIMIT);
+		if (typeof id !== "string") return;
+		const updatedAt = typeof row.updated_at === "number" ? row.updated_at : 0;
+		const seenKey = `${id}:${updatedAt}`;
+		if (this.seenRows.has(seenKey)) return;
+		remember(this.seenRows, seenKey, SEEN_ROW_LIMIT);
 
 		const updateId = row.update_id;
 		if (
@@ -726,6 +746,7 @@ export class ZyncBaseYjsProvider<
 		if (typeof part !== "number" || typeof parts !== "number") return;
 		const data = row.data;
 		if (part < parts && !(data instanceof Uint8Array)) return;
+		const committed = parseCommitted(row.committed);
 
 		const assembled = this.assembler.add({
 			id,
@@ -733,6 +754,7 @@ export class ZyncBaseYjsProvider<
 			part,
 			parts,
 			data: data instanceof Uint8Array ? data : null,
+			committed,
 		});
 		if (assembled === null) return;
 
@@ -875,6 +897,15 @@ export class ZyncBaseYjsProvider<
 			try {
 				await this.writePlan(plan);
 			} catch (error) {
+				// The failed attempt may have written a marker or parts that the
+				// compactor can reclaim. Never reuse its identities: requeue the
+				// bytes and let the next attempt create a fresh plan.
+				this.pending.unshift(plan.merged);
+				this.plan = null;
+				if (error instanceof YjsUpdateCommitConflictError) {
+					this.scheduleRetry();
+					throw error;
+				}
 				if (isRetryable(error)) {
 					this.emitError(error);
 					this.scheduleRetry();
@@ -904,28 +935,53 @@ export class ZyncBaseYjsProvider<
 	}
 
 	private async writePlan(plan: WritePlan): Promise<void> {
-		for (let index = 0; index < plan.parts.length; index += 1) {
+		const parts = plan.parts;
+		const markerIndex = parts.length;
+		const markerRowId =
+			parts.length > 1 ? (plan.rowIds[markerIndex] as string) : null;
+
+		if (markerRowId !== null) {
+			await this.store.set([this.updatesCollection, markerRowId], {
+				document_id: this.documentId,
+				update_id: plan.updateId,
+				part: parts.length,
+				parts: parts.length,
+				committed: false,
+			});
+		}
+
+		for (let index = 0; index < parts.length; index += 1) {
 			await this.store.set(
 				[this.updatesCollection, plan.rowIds[index] as string],
 				{
 					document_id: this.documentId,
 					update_id: plan.updateId,
 					part: index,
-					parts: plan.parts.length,
-					data: plan.parts[index] as Uint8Array,
+					parts: parts.length,
+					data: parts[index] as Uint8Array,
 				},
 			);
 		}
-		if (plan.parts.length > 1) {
-			await this.store.set(
-				[this.updatesCollection, plan.rowIds[plan.parts.length] as string],
-				{
-					document_id: this.documentId,
-					update_id: plan.updateId,
-					part: plan.parts.length,
-					parts: plan.parts.length,
-				},
-			);
+
+		if (markerRowId !== null) {
+			try {
+				await this.store.set(
+					[this.updatesCollection, markerRowId],
+					{
+						document_id: this.documentId,
+						update_id: plan.updateId,
+						part: parts.length,
+						parts: parts.length,
+						committed: true,
+					},
+					{ if: { committed: { eq: false } } },
+				);
+			} catch (error) {
+				if (isPreconditionFailed(error)) {
+					throw new YjsUpdateCommitConflictError();
+				}
+				throw error;
+			}
 		}
 	}
 

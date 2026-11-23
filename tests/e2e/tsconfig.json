@@ -15,7 +15,10 @@
 		"paths": {
 			"@zyncbase/client": ["sdk/typescript/src/index.ts"],
 			"@zyncbase/client/react": ["sdk/typescript/src/react/index.ts"],
-			"@zyncbase/client/yjs": ["sdk/typescript/src/yjs/index.ts"]
+			"@zyncbase/client/yjs": ["sdk/typescript/src/yjs/index.ts"],
+			"@zyncbase/client/yjs/compactor": [
+				"sdk/typescript/src/yjs/compactor/index.ts"
+			]
 		}
 	},
 	"include": ["src/**/*.ts"]

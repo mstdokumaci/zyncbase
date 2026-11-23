@@ -2,10 +2,8 @@
 
 **Source files**: `sdk/typescript/src/yjs/{provider,storage,index}.ts`
 
-The Yjs provider persists a `Y.Doc` in ZyncBase. It is a persistence/sync
-provider, not a wire-protocol provider: Yjs updates are stored as append-only
-rows, and a separate compactor (not part of this iteration) folds them into
-chunked snapshots.
+The Yjs provider persists a `Y.Doc` in ZyncBase. Yjs updates are stored as
+append-only rows, and a separate compactor folds them into chunked snapshots.
 
 ## Data model
 
@@ -23,6 +21,7 @@ Documents are first-class store rows. Other collections can reference
 - `slug` (optional, unique, ≤ 120 chars) — application-facing name.
 - `current_snapshot_id` (optional) — commit pointer to the active snapshot generation.
 - `compacted_through` (optional integer) — max `yjs_updates.created_at` included in that snapshot.
+- `compaction_version` (required integer) — compare-and-swap counter owned by the compactor. Apps create headers with `0`; the provider ignores it.
 - Apps may add fields such as `title` or `owner_id`.
 
 System fields are structural:
@@ -42,18 +41,27 @@ A logical payload (one update or one snapshot) is stored as one or more rows.
 
 - Single part: `parts = 1`, `part = 0`, `data` present. Complete immediately.
 - Multi part: data rows `part = 0..parts-1`, plus a commit row
-  `part = parts` with no `data`. The commit row is written last.
-- A payload is complete only when every part and (for multi-part) the commit
-  row exist.
-- Retries reuse the same payload ID and row IDs, so writes are idempotent.
+  `part = parts` with no `data` and a `committed` flag. Update writers create
+  the commit row first with `committed = false`, write the parts, then commit
+  it with a conditional write `committed = false → true`. Snapshot writers
+  write the commit row with `committed = true` after the parts.
+- A payload is complete only when every part exists and the commit row
+  explicitly has `committed = true`. There is no default: an absent or `false`
+  flag means uncommitted and never seals the payload.
+- A failed write attempt requeues its bytes. The next attempt uses a fresh
+  payload ID and row IDs; the abandoned rows are ignored until the compactor
+  reclaims them.
 - Readers accept any chunk size; payloads are self-describing.
-- Incomplete payloads are ignored (in-flight or abandoned writers).
+- Incomplete payloads are ignored (in-flight or abandoned writers). The
+  compactor removes an uncommitted marker before it reclaims the group; after
+  that removal, the writer's conditional commit fails and the group cannot
+  become visible.
 
 ## Snapshot commit protocol (compactor)
 
 1. Load the current snapshot and updates; apply both to a temporary `Y.Doc`.
 2. Encode with `Y.encodeStateAsUpdate`.
-3. Write `yjs_snapshots` parts, then the commit row.
+3. Write `yjs_snapshots` parts, then the commit row with `committed = true`.
 4. Atomically set `current_snapshot_id` and `compacted_through` on the header.
    `compacted_through` is the max `created_at` of updates actually applied.
    **This header write is the commit.**
@@ -82,13 +90,10 @@ Sync loop (up to 3 passes):
    An incomplete snapshot re-reads the header: if the pointer moved, retry;
    otherwise fail as corrupt.
 3. Page `yjs_updates` for the document, ordered `created_at asc`, and apply
-   complete updates with the provider as the Yjs origin. Reads intentionally do
-   **not** filter by `compacted_through`: a chunked write can straddle a
-   compaction boundary, and excluding its early parts would leave the payload
-   incomplete forever. Updates still retained by the compactor are read and
-   applied; Yjs idempotence makes already-compacted duplicates a no-op. The
-   watermark remains the compactor's deletion marker and a future read
-   optimization once whole-payload atomicity exists.
+   complete updates with the provider as the Yjs origin. Retained updates are
+   read and applied idempotently, so a chunked write that straddles a
+   compaction boundary still reaches a complete payload. Yjs makes
+   already-compacted duplicates a no-op.
 4. Re-read the header. If either pointer changed, repeat so a compaction that
    landed mid-sync cannot hide rows it deleted. Applying a newer snapshot is a
    Yjs no-op for content already present.
@@ -109,14 +114,21 @@ After `writeDebounceMs`, pending updates are merged with `Y.mergeUpdates` and
 written as one payload. Writes are serialized and one row per message is sent:
 batching all chunks would recreate the oversized message that chunking avoids.
 
-Retryable failures keep the plan and retry with exponential backoff. The whole
-payload is rewritten with the same IDs; no partial resume, because an uncertain
-timeout may or may not have committed. A non-retryable failure also keeps the
-plan but sets a write-blocked state: later Yjs deltas queue instead of being
-written past the failed predecessor. The application calls `flush()` after
-fixing the cause to retry the retained payload; if it still fails, the block
-stays. Partial rows from an interrupted attempt remain but are ignored by
-readers until the compactor cleans them up.
+Retryable failures requeue the merged bytes and retry with exponential backoff.
+Every attempt creates a fresh update ID and row IDs; no partial resume, because
+an uncertain timeout may or may not have committed and the compactor may
+already have reclaimed the failed attempt. A non-retryable failure also
+requeues the bytes and sets a write-blocked state: later Yjs deltas queue
+instead of being written past the failed predecessor. The application calls
+`flush()` after fixing the cause to retry the retained payload; if it still
+fails, the block stays. Partial rows from an interrupted attempt remain but are
+ignored by readers until the compactor cleans them up.
+
+Multi-part writes create the uncommitted commit marker first, then the parts,
+then commit the marker with a conditional write. If the compactor removes an
+abandoned marker first, that conditional commit fails. The provider requeues
+the merged bytes and retries with a new update ID and marker, so the local
+update is not lost.
 
 `flush()` forces the debounce and returns the current drain promise. It rejects
 when the provider is disconnected, a drain loses the connection with unwritten
@@ -142,21 +154,15 @@ Reads halve `pageSize` and retry on `RESPONSE_TOO_LARGE`. If `pageSize` reaches
 Small chunks increase message count and can touch `maxMessagesPerSecond`;
 large chunks risk `MESSAGE_TOO_LARGE` and reduce headroom for row overhead.
 
-## Limits
+## Operational requirements
 
-- No compactor or snapshot writer ships in this iteration. Seeded snapshots are
-  read and tested; updates are never deleted.
-- The SDK materializes live subscription rows. Until the compactor deletes old
-  updates, a long session keeps those rows in memory and rescans a growing view.
-  A delta-only subscription or explicit release API is the follow-up; the
-  compactor's retention bounds this in the meantime.
-- No awareness/cursors.
-- The provider does not create document headers.
-- The shared client is never disconnected by the provider.
-- The store namespace must stay stable while a provider is active.
-- Deleting a document while providers are active is unsupported; destroy them
-  first. Cascade delete removes snapshots, updates, and app rows referencing
-  the document.
+- The application creates the document header before constructing the provider.
+- The provider uses the shared client; applications own the client lifecycle.
+- Keep the store namespace stable while a provider is active.
+- Destroy active providers before deleting the document header. Cascade delete
+  removes snapshots, updates, and app rows referencing the document.
+- The compactor's `updateRetentionMs` controls how long update rows remain in
+  the SDK's materialized subscription view.
 
 ## Tests
 
