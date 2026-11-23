@@ -1,0 +1,156 @@
+# Yjs Provider
+
+**Source files**: `sdk/typescript/src/yjs/{provider,storage,index}.ts`
+
+The Yjs provider persists a `Y.Doc` in ZyncBase. It is a persistence/sync
+provider, not a wire-protocol provider: Yjs updates are stored as append-only
+rows, and a separate compactor (not part of this iteration) folds them into
+chunked snapshots.
+
+## Data model
+
+Documents are first-class store rows. Other collections can reference
+`yjs_documents.id` with a foreign key.
+
+| Collection | Owner | Purpose |
+|---|---|---|
+| `yjs_documents` | application | One header row per document: slug, app metadata, snapshot commit pointer, compaction watermark |
+| `yjs_snapshots` | compactor | Chunked compacted `Y.Doc` state |
+| `yjs_updates` | providers | Chunked append-only incremental updates |
+
+`yjs_documents` fields:
+
+- `slug` (optional, unique, ≤ 120 chars) — application-facing name.
+- `current_snapshot_id` (optional) — commit pointer to the active snapshot generation.
+- `compacted_through` (optional integer) — max `yjs_updates.created_at` included in that snapshot.
+- Apps may add fields such as `title` or `owner_id`.
+
+System fields are structural:
+
+- `yjs_documents.id` is the document identity and FK target.
+- `yjs_documents.updated_at` changes when metadata or the snapshot pointer is written.
+- `yjs_updates.created_at` orders paging and retention and drives `compacted_through`.
+- Snapshot/update row `id` values are the per-chunk row identities.
+
+`yjs_snapshots` and `yjs_updates` both reference `yjs_documents` with
+`onDelete: "cascade"`. Deleting a document header deletes its content.
+
+## Chunk protocol
+
+A logical payload (one update or one snapshot) is stored as one or more rows.
+`chunkSize` is the maximum `data` bytes per row.
+
+- Single part: `parts = 1`, `part = 0`, `data` present. Complete immediately.
+- Multi part: data rows `part = 0..parts-1`, plus a commit row
+  `part = parts` with no `data`. The commit row is written last.
+- A payload is complete only when every part and (for multi-part) the commit
+  row exist.
+- Retries reuse the same payload ID and row IDs, so writes are idempotent.
+- Readers accept any chunk size; payloads are self-describing.
+- Incomplete payloads are ignored (in-flight or abandoned writers).
+
+## Snapshot commit protocol (compactor)
+
+1. Load the current snapshot and updates; apply both to a temporary `Y.Doc`.
+2. Encode with `Y.encodeStateAsUpdate`.
+3. Write `yjs_snapshots` parts, then the commit row.
+4. Atomically set `current_snapshot_id` and `compacted_through` on the header.
+   `compacted_through` is the max `created_at` of updates actually applied.
+   **This header write is the commit.**
+5. Delete old snapshot generations and covered updates older than the retention
+   window.
+
+Never delete before step 4. `created_at` is assigned by the server at commit, so
+an update that commits after the scan has a timestamp greater than
+`compacted_through` and is not incorrectly considered included.
+
+## Provider sync
+
+`connect()`:
+
+1. Ensure the shared client is connected (only when `client.status === "disconnected"`).
+2. Subscribe to `yjs_updates` for `document_id`, ordered `created_at desc`,
+   `limit: 1`. Awaiting the subscription is the session-readiness barrier.
+3. Read the `yjs_documents` header by id. Missing → `YjsDocumentNotFoundError`.
+4. Run the sync loop. On success emit `sync(true)` and flush buffered local edits.
+
+Sync loop (up to 3 passes):
+
+1. Read the header; note `current_snapshot_id` and `compacted_through`.
+2. If a snapshot pointer exists and has not been applied in this run, page
+   `yjs_snapshots` by `{ document_id, snapshot_id }`, assemble, and apply.
+   An incomplete snapshot re-reads the header: if the pointer moved, retry;
+   otherwise fail as corrupt.
+3. Page `yjs_updates` for the document, ordered `created_at asc`, and apply
+   complete updates with the provider as the Yjs origin. Reads intentionally do
+   **not** filter by `compacted_through`: a chunked write can straddle a
+   compaction boundary, and excluding its early parts would leave the payload
+   incomplete forever. Updates still retained by the compactor are read and
+   applied; Yjs idempotence makes already-compacted duplicates a no-op. The
+   watermark remains the compactor's deletion marker and a future read
+   optimization once whole-payload atomicity exists.
+4. Re-read the header. If either pointer changed, repeat so a compaction that
+   landed mid-sync cannot hide rows it deleted. Applying a newer snapshot is a
+   Yjs no-op for content already present.
+
+The subscription callback receives the SDK's full materialized view each
+delivery. `seenRowIds` (bounded) prevents reprocessing, and `applied` update
+IDs (bounded) prevent re-applying payloads. Evicting either is safe because
+Yjs updates are idempotent.
+
+On client reconnect, the SDK replays subscriptions with a fresh snapshot.
+The provider then reruns the sync loop and re-reads the document snapshot,
+because updates written while offline may already have been compacted away.
+
+## Local writes
+
+`doc.on("update")` buffers updates whose origin is not a provider instance.
+After `writeDebounceMs`, pending updates are merged with `Y.mergeUpdates` and
+written as one payload. Writes are serialized and one row per message is sent:
+batching all chunks would recreate the oversized message that chunking avoids.
+
+Retryable failures keep the plan and retry with exponential backoff. The whole
+payload is rewritten with the same IDs; no partial resume, because an uncertain
+timeout may or may not have committed. Non-retryable failures drop the plan and
+emit `error`. Partial rows remain but are ignored by readers until the compactor
+cleans them up.
+
+`flush()` forces the debounce and returns the current drain promise. It rejects
+when the provider is disconnected or the write fails; bytes stay queued for
+automatic retry.
+
+## Sizing
+
+| Option | Default | Server limit |
+|---|---|---|
+| `chunkSize` | 32 KiB | `security.maxMessageSize` (1 MiB default) per write message |
+| `pageSize` | 64 | `security.maxQueryResponseSize` (8 MiB default) per read |
+| `writeDebounceMs` | 150 | — |
+
+Reads halve `pageSize` and retry on `RESPONSE_TOO_LARGE`. If `pageSize` reaches
+1 and the read still fails, `chunkSize` is too large for the configured limit.
+
+Small chunks increase message count and can touch `maxMessagesPerSecond`;
+large chunks risk `MESSAGE_TOO_LARGE` and reduce headroom for row overhead.
+
+## Limits
+
+- No compactor or snapshot writer ships in this iteration. Seeded snapshots are
+  read and tested; updates are never deleted.
+- No awareness/cursors.
+- The provider does not create document headers.
+- The shared client is never disconnected by the provider.
+- The store namespace must stay stable while a provider is active.
+- Deleting a document while providers are active is unsupported; destroy them
+  first. Cascade delete removes snapshots, updates, and app rows referencing
+  the document.
+
+## Tests
+
+- `sdk/typescript/src/yjs/storage.test.ts`: chunk split/assembly edge cases.
+- `sdk/typescript/src/yjs/provider.test.ts`: lifecycle, snapshot and history
+  paging, snapshot plus retained updates, a chunked update straddling the
+  compaction watermark, multi-part commit gating, write retry/chunking, header
+  re-read race, reconnect snapshot reload, connection isolation.
+- `tests/e2e/src/test-yjs.ts`: real-server cross-client sync, forced chunking,
+  seeded snapshot recovery, slug lookup, system fields, and cascade delete.

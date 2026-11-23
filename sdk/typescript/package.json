@@ -16,6 +16,10 @@
 		"./react": {
 			"types": "./dist/react/index.d.ts",
 			"import": "./dist/react/index.js"
+		},
+		"./yjs": {
+			"types": "./dist/yjs/index.d.ts",
+			"import": "./dist/yjs/index.js"
 		}
 	},
 	"bin": {
@@ -27,7 +31,9 @@
 		"database",
 		"presence",
 		"sync",
-		"collaboration"
+		"collaboration",
+		"yjs",
+		"crdt"
 	],
 	"repository": {
 		"type": "git",
@@ -37,15 +43,19 @@
 		"access": "public"
 	},
 	"peerDependencies": {
-		"react": "^19.0.0"
+		"react": "^19.0.0",
+		"yjs": "^13.6.0"
 	},
 	"peerDependenciesMeta": {
 		"react": {
 			"optional": true
+		},
+		"yjs": {
+			"optional": true
 		}
 	},
 	"scripts": {
-		"build": "bun build src/index.ts --outdir dist --format esm && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm --target node && bun build src/react/index.ts --outdir dist/react --format esm --external react --banner '\"use client\";'"
+		"build": "bun build src/index.ts --outdir dist --format esm && tsc --emitDeclarationOnly --outDir dist && bun build cli/generate.ts --outdir dist/cli --format esm --target node && bun build src/react/index.ts --outdir dist/react --format esm --external react --banner '\"use client\";' && bun build src/yjs/index.ts --outdir dist/yjs --format esm --external yjs"
 	},
 	"dependencies": {
 		"@msgpack/msgpack": "^3.1.3",
@@ -54,6 +64,7 @@
 	"devDependencies": {
 		"@types/bun": "^1.3.11",
 		"fast-check": "^3.0.0",
-		"typescript": "^5.0.0"
+		"typescript": "^5.0.0",
+		"yjs": "^13.6.0"
 	}
 }

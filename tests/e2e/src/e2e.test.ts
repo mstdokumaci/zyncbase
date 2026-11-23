@@ -32,6 +32,7 @@ import { run as runShutdown } from "./test-shutdown";
 import { run as runSorting } from "./test-sorting";
 import { run as runStoreOnly } from "./test-store-only";
 import { run as runSync } from "./test-sync";
+import { run as runYjs } from "./test-yjs";
 
 setDefaultTimeout(90_000);
 
@@ -243,6 +244,24 @@ describe("ZyncBase E2E", () => {
 				},
 				async ({ port }) => {
 					await runResponseLimit(port);
+				},
+			);
+		});
+	});
+
+	test("Yjs provider syncs, chunks, snapshots, and cascades", async () => {
+		await runE2ETest("Yjs provider", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-yjs.json"),
+					dataDir: ctx.dataPath("yjs"),
+					configName: "zyncbase-config-yjs.json",
+					authPath: ctx.schemaPath("auth-allow-all.json"),
+					maxMessagesPerSecond: 10_000,
+				},
+				async ({ port }) => {
+					await runYjs(port);
 				},
 			);
 		});
