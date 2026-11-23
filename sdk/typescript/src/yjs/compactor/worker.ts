@@ -2,8 +2,8 @@
 
 import * as Y from "yjs";
 
-import type { ZyncBaseClient } from "../client.js";
-import { ErrorCodes, ZyncBaseError } from "../errors.js";
+import type { ZyncBaseClient } from "../../client.js";
+import { ErrorCodes, ZyncBaseError } from "../../errors.js";
 import type {
 	BatchOperation,
 	CollectionsOf,
@@ -12,15 +12,15 @@ import type {
 	SchemaLike,
 	SortClause,
 	Store,
-} from "../types.js";
-import { generateUUIDv7 } from "../uuid.js";
+} from "../../types.js";
+import { generateUUIDv7 } from "../../uuid.js";
 import {
 	ChunkAssembler,
 	chunkPayload,
 	YJS_DOCUMENTS_COLLECTION,
 	YJS_SNAPSHOTS_COLLECTION,
 	YJS_UPDATES_COLLECTION,
-} from "./storage.js";
+} from "../storage.js";
 
 export type YjsCompactorPhase =
 	| "pass"
@@ -97,6 +97,21 @@ interface UpdateGroup {
 	max: number;
 	complete: boolean;
 	rows: Array<{ id: string; createdAt: number }>;
+}
+
+interface CompactResult {
+	status: "compacted" | "skipped" | "incomplete" | "conflict";
+	incomplete: boolean;
+}
+
+interface SnapshotCleanupGroup {
+	max: number;
+	rows: string[];
+	complete: boolean;
+	writerVersion: number | null;
+	mixedVersion: boolean;
+	parts: number | null;
+	mixedParts: boolean;
 }
 
 const RETRY_BASE_MS = 1_000;
@@ -366,7 +381,10 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 			if (this.stopped) break;
 			try {
 				const result = await this.compactDocument(namespace, documentId);
-				if (result === "compacted" || result === "skipped") {
+				if (
+					(result.status === "compacted" || result.status === "skipped") &&
+					!result.incomplete
+				) {
 					state.retry.delete(documentId);
 				} else {
 					this.scheduleRetry(state, documentId);
@@ -446,12 +464,12 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 	private async compactDocument(
 		namespace: string,
 		documentId: string,
-	): Promise<"compacted" | "skipped" | "incomplete" | "conflict"> {
+	): Promise<CompactResult> {
 		const rawHeader = await this.store.get([
 			this.documentsCollection,
 			documentId,
 		]);
-		if (!isRecord(rawHeader)) return "skipped";
+		if (!isRecord(rawHeader)) return { status: "skipped", incomplete: false };
 
 		const rawVersion = rawHeader.compaction_version;
 		if (
@@ -482,7 +500,8 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 		try {
 			if (currentSnapshotId !== null) {
 				const snapshot = await this.readSnapshot(documentId, currentSnapshotId);
-				if (snapshot === null) return "incomplete";
+				if (snapshot === null)
+					return { status: "incomplete", incomplete: true };
 				Y.applyUpdate(doc, snapshot);
 			}
 
@@ -540,7 +559,7 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 						group.complete = true;
 					}
 				}
-				if (this.stopped) return "skipped";
+				if (this.stopped) return { status: "skipped", incomplete: false };
 			}
 
 			const now = Date.now() * 1_000;
@@ -560,7 +579,8 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 			await this.deleteRows(this.updatesCollection, abandoned);
 
 			if (completeGroups.length === 0) {
-				return activeIncomplete.length > 0 ? "incomplete" : "skipped";
+				const incomplete = activeIncomplete.length > 0;
+				return { status: incomplete ? "incomplete" : "skipped", incomplete };
 			}
 
 			const maxComplete = Math.max(...completeGroups.map((group) => group.max));
@@ -573,11 +593,18 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 					? maxComplete
 					: Math.min(maxComplete, minIncomplete - 1);
 			if (watermark !== null && nextWatermark <= watermark) {
-				return activeIncomplete.length > 0 ? "incomplete" : "skipped";
+				const incomplete = activeIncomplete.length > 0;
+				return { status: incomplete ? "incomplete" : "skipped", incomplete };
 			}
 
 			const bytes = Y.encodeStateAsUpdate(doc);
-			const snapshotId = await this.writeSnapshot(documentId, bytes);
+			const snapshotId = await this.writeSnapshot(documentId, bytes, version);
+			if (snapshotId === null) {
+				return {
+					status: "skipped",
+					incomplete: activeIncomplete.length > 0,
+				};
+			}
 			try {
 				await this.store.batch([
 					{
@@ -600,7 +627,12 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 					},
 				]);
 			} catch (error) {
-				if (isPreconditionFailed(error)) return "conflict";
+				if (isPreconditionFailed(error)) {
+					return {
+						status: "conflict",
+						incomplete: activeIncomplete.length > 0,
+					};
+				}
 				throw error;
 			}
 
@@ -620,7 +652,10 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 				updates: completeGroups.length,
 				bytes: bytes.length,
 			});
-			return "compacted";
+			return {
+				status: "compacted",
+				incomplete: activeIncomplete.length > 0,
+			};
 		} finally {
 			doc.destroy();
 		}
@@ -666,23 +701,26 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 	private async writeSnapshot(
 		documentId: string,
 		bytes: Uint8Array,
-	): Promise<string> {
+		version: number,
+	): Promise<string | null> {
 		const snapshotId = generateUUIDv7();
 		const parts = chunkPayload(bytes, this.chunkSize);
 		for (let index = 0; index < parts.length; index += 1) {
 			await this.store.set([this.snapshotsCollection, generateUUIDv7()], {
 				document_id: documentId,
 				snapshot_id: snapshotId,
+				compaction_version: version,
 				part: index,
 				parts: parts.length,
 				data: parts[index] as Uint8Array,
 			});
-			if (this.stopped) return snapshotId;
+			if (this.stopped && parts.length > 1) return null;
 		}
 		if (parts.length > 1) {
 			await this.store.set([this.snapshotsCollection, generateUUIDv7()], {
 				document_id: documentId,
 				snapshot_id: snapshotId,
+				compaction_version: version,
 				part: parts.length,
 				parts: parts.length,
 			});
@@ -726,17 +764,28 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 					typeof value.compacted_through === "number"
 						? value.compacted_through
 						: null;
+				const version =
+					typeof value.compaction_version === "number"
+						? value.compaction_version
+						: null;
 				try {
-					if (currentSnapshotId !== null && watermark !== null) {
+					if (
+						currentSnapshotId !== null &&
+						watermark !== null &&
+						version !== null
+					) {
 						await this.deleteCoveredUpdates(
 							documentId,
 							watermark,
 							updateCutoff,
+							version,
+							currentSnapshotId,
 						);
 						await this.deleteOldSnapshots(
 							documentId,
 							currentSnapshotId,
 							snapshotCutoff,
+							version,
 						);
 					}
 				} catch (error) {
@@ -770,10 +819,12 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 		documentId: string,
 		watermark: number,
 		cutoff: number,
+		version: number,
+		currentSnapshotId: string,
 	): Promise<void> {
 		const limit = Math.min(watermark, cutoff - 1);
 		if (limit < 0) return;
-		const deleted: Array<{ id: string; createdAt: number }> = [];
+		const deleted: Array<{ id: string }> = [];
 		for await (const page of this.pages(
 			this.updatesCollection,
 			{ document_id: documentId, created_at: { lte: limit } },
@@ -783,28 +834,36 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 				if (!isRecord(value)) continue;
 				if (value.document_id !== documentId) continue;
 				const id = value.id;
-				const createdAt = value.created_at;
-				if (typeof id === "string" && typeof createdAt === "number") {
-					deleted.push({ id, createdAt });
-				}
+				if (typeof id === "string") deleted.push({ id });
 			}
 			if (deleted.length >= DELETE_BATCH_SIZE) {
-				await this.deleteRows(
+				const ok = await this.guardedDeleteRows(
 					this.updatesCollection,
 					deleted.splice(0, deleted.length),
+					documentId,
+					version,
+					currentSnapshotId,
 				);
+				if (!ok) return;
 			}
 			if (this.stopped) return;
 		}
-		await this.deleteRows(this.updatesCollection, deleted);
+		await this.guardedDeleteRows(
+			this.updatesCollection,
+			deleted,
+			documentId,
+			version,
+			currentSnapshotId,
+		);
 	}
 
 	private async deleteOldSnapshots(
 		documentId: string,
 		currentSnapshotId: string,
 		cutoff: number,
+		version: number,
 	): Promise<void> {
-		const groups = new Map<string, { max: number; rows: string[] }>();
+		const groups = new Map<string, SnapshotCleanupGroup>();
 		for await (const page of this.pages(
 			this.snapshotsCollection,
 			{ document_id: documentId },
@@ -820,24 +879,103 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 				if (typeof id !== "string") continue;
 				const createdAt =
 					typeof value.created_at === "number" ? value.created_at : 0;
+				const part = value.part;
+				const parts = value.parts;
+				const rowVersion = value.compaction_version;
 				let group = groups.get(snapshotId);
 				if (group === undefined) {
-					group = { max: createdAt, rows: [] };
+					group = {
+						max: createdAt,
+						rows: [],
+						complete: false,
+						writerVersion: typeof rowVersion === "number" ? rowVersion : null,
+						mixedVersion: typeof rowVersion !== "number",
+						parts: typeof parts === "number" ? parts : null,
+						mixedParts: typeof parts !== "number",
+					};
 					groups.set(snapshotId, group);
 				}
 				group.max = Math.max(group.max, createdAt);
 				group.rows.push(id);
+
+				if (typeof rowVersion === "number") {
+					if (group.writerVersion === null) group.writerVersion = rowVersion;
+					else if (group.writerVersion !== rowVersion) {
+						group.mixedVersion = true;
+					}
+				} else {
+					group.mixedVersion = true;
+				}
+
+				if (typeof parts === "number" && typeof part === "number") {
+					if (group.parts === null) group.parts = parts;
+					else if (group.parts !== parts) group.mixedParts = true;
+					if (parts === 1 && part === 0) group.complete = true;
+					if (part === parts) group.complete = true;
+				} else {
+					group.mixedParts = true;
+				}
 			}
 			if (this.stopped) return;
 		}
+
 		const ids: string[] = [];
 		for (const group of groups.values()) {
-			if (group.max < cutoff) ids.push(...group.rows);
+			if (
+				!group.complete ||
+				group.mixedVersion ||
+				group.mixedParts ||
+				group.writerVersion === null
+			) {
+				continue;
+			}
+			if (group.writerVersion >= version) continue;
+			if (group.max >= cutoff) continue;
+			ids.push(...group.rows);
 		}
-		await this.deleteRows(
+		await this.guardedDeleteRows(
 			this.snapshotsCollection,
 			ids.map((id) => ({ id })),
+			documentId,
+			version,
+			currentSnapshotId,
 		);
+	}
+
+	private async guardedDeleteRows(
+		collection: string,
+		rows: Array<{ id: string }>,
+		documentId: string,
+		version: number,
+		currentSnapshotId: string,
+	): Promise<boolean> {
+		for (let index = 0; index < rows.length; index += DELETE_BATCH_SIZE) {
+			const slice = rows.slice(index, index + DELETE_BATCH_SIZE);
+			if (slice.length === 0) continue;
+			const operations: BatchOperation[] = [
+				{
+					op: "set",
+					path: [this.documentsCollection, documentId, "current_snapshot_id"],
+					value: currentSnapshotId,
+					if: {
+						compaction_version: { eq: version },
+						current_snapshot_id: { eq: currentSnapshotId },
+					},
+				},
+				...slice.map((row) => ({
+					op: "remove" as const,
+					path: [collection, row.id],
+				})),
+			];
+			try {
+				await this.store.batch(operations);
+			} catch (error) {
+				if (isPreconditionFailed(error)) return false;
+				throw error;
+			}
+			if (this.stopped) return false;
+		}
+		return true;
 	}
 
 	private async deleteRows(

@@ -1,17 +1,21 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 
 import * as Y from "yjs";
-
-import { startYjsCompactor } from "./compactor.js";
-import { YjsCompactor } from "./compactor_impl.js";
 import {
 	ChunkAssembler,
 	chunkPayload,
 	YJS_DOCUMENTS_COLLECTION,
 	YJS_SNAPSHOTS_COLLECTION,
 	YJS_UPDATES_COLLECTION,
-} from "./storage.js";
-import { asClient, FakeClient, type FakeRow, waitFor } from "./test-helpers.js";
+} from "../storage.js";
+import {
+	asClient,
+	FakeClient,
+	type FakeRow,
+	waitFor,
+} from "../test-helpers.js";
+import { startYjsCompactor } from "./index.js";
+import { YjsCompactor } from "./worker.js";
 
 const DOCUMENTS = YJS_DOCUMENTS_COLLECTION;
 const SNAPSHOTS = YJS_SNAPSHOTS_COLLECTION;
@@ -94,6 +98,36 @@ function seedCommit(
 	);
 }
 
+function seedSnapshotGroup(
+	client: FakeClient,
+	documentId: string,
+	snapshotId: string,
+	version: number,
+	bytes: Uint8Array,
+	chunkSize = 8,
+): void {
+	const parts = chunkPayload(bytes, chunkSize);
+	for (let index = 0; index < parts.length; index += 1) {
+		client.store.seed(SNAPSHOTS, `${snapshotId}-${index}`, {
+			document_id: documentId,
+			snapshot_id: snapshotId,
+			compaction_version: version,
+			part: index,
+			parts: parts.length,
+			data: parts[index] as Uint8Array,
+		});
+	}
+	if (parts.length > 1) {
+		client.store.seed(SNAPSHOTS, `${snapshotId}-commit`, {
+			document_id: documentId,
+			snapshot_id: snapshotId,
+			compaction_version: version,
+			part: parts.length,
+			parts: parts.length,
+		});
+	}
+}
+
 function incrementalUpdates(texts: string[]): Uint8Array[] {
 	const source = new Y.Doc();
 	const updates: Uint8Array[] = [];
@@ -105,6 +139,14 @@ function incrementalUpdates(texts: string[]): Uint8Array[] {
 	}
 	source.destroy();
 	return updates;
+}
+
+function stateUpdate(text: string): Uint8Array {
+	const doc = new Y.Doc();
+	doc.getText("content").insert(0, text);
+	const update = Y.encodeStateAsUpdate(doc);
+	doc.destroy();
+	return update;
 }
 
 function readHeader(client: FakeClient, documentId = DOC_ID): FakeRow {
@@ -277,6 +319,51 @@ describe("YjsCompactor", () => {
 		expect(snapshotGroups(client).size).toBe(1);
 	});
 
+	test("keeps retrying while an incomplete group remains", async () => {
+		const client = new FakeClient();
+		const updates = incrementalUpdates(["a", "b".repeat(30)]);
+		seedHeader(client);
+		seedUpdate(client, DOC_ID, "a", updates[0] as Uint8Array);
+		const parts = chunkPayload(updates[1] as Uint8Array, 8);
+		for (let index = 0; index < parts.length; index += 1) {
+			seedPart(
+				client,
+				DOC_ID,
+				"b",
+				index,
+				parts.length,
+				parts[index] as Uint8Array,
+			);
+		}
+		const worker = makeWorker(client, {
+			updateRetentionMs: 120_000,
+			snapshotRetentionMs: 0,
+		});
+
+		await worker.runPass();
+
+		let header = readHeader(client);
+		expect(header.compaction_version).toBe(1);
+		const watermark = header.compacted_through as number;
+		const bRows = updateRows(client).filter((row) => row.update_id === "b");
+		const cursor = Math.max(...bRows.map((row) => row.created_at as number));
+		expect(cursor).toBeGreaterThan(watermark);
+		seedCommit(client, DOC_ID, "b", parts.length, parts.length, watermark + 1);
+
+		setSystemTime(new Date(Date.now() + 2_000));
+		try {
+			await worker.runPass();
+		} finally {
+			setSystemTime();
+		}
+
+		header = readHeader(client);
+		expect(header.compaction_version).toBe(2);
+		expect(
+			snapshotText(client, DOC_ID, header.current_snapshot_id as string),
+		).toBe(`a${"b".repeat(30)}`);
+	});
+
 	test("retries after a compaction version conflict", async () => {
 		const client = new FakeClient();
 		seedHeader(client);
@@ -299,13 +386,131 @@ describe("YjsCompactor", () => {
 		expect(header.current_snapshot_id ?? null).toBeNull();
 		expect(snapshotGroups(client).size).toBe(1);
 
-		const second = incrementalUpdates(["b"]);
-		seedUpdate(client, DOC_ID, "b", second[0] as Uint8Array, 10);
-		await worker.runPass();
+		setSystemTime(new Date(Date.now() + 2_000));
+		try {
+			await worker.runPass();
+		} finally {
+			setSystemTime();
+		}
 
 		header = readHeader(client);
 		expect(header.compaction_version).toBe(2);
-		expect(typeof header.current_snapshot_id).toBe("string");
+		expect(
+			snapshotText(client, DOC_ID, header.current_snapshot_id as string),
+		).toBe("a");
+		expect(snapshotGroups(client).size).toBe(1);
+	});
+
+	test("compacts an update that arrives after a conflict", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const updates = incrementalUpdates(["a", "b"]);
+		seedUpdate(client, DOC_ID, "a", updates[0] as Uint8Array, 1);
+
+		let raced = false;
+		client.store.beforeBatch = () => {
+			if (raced) return;
+			raced = true;
+			client.store.patch(DOCUMENTS, DOC_ID, { compaction_version: 1 });
+		};
+		const worker = makeWorker(client);
+
+		await worker.runPass();
+		expect(readHeader(client).current_snapshot_id ?? null).toBeNull();
+
+		seedUpdate(client, DOC_ID, "b", updates[1] as Uint8Array, 10);
+		await worker.runPass();
+
+		const header = readHeader(client);
+		expect(header.compaction_version).toBe(2);
+		expect(
+			snapshotText(client, DOC_ID, header.current_snapshot_id as string),
+		).toBe("ab");
+		expect(snapshotGroups(client).size).toBe(1);
+	});
+
+	test("protects a pending snapshot generation at the current version", async () => {
+		const client = new FakeClient();
+		const current = "snap-current";
+		const pending = "snap-pending";
+		seedHeader(client, DOC_ID, {
+			compaction_version: 1,
+			current_snapshot_id: current,
+			compacted_through: 1,
+		});
+		seedSnapshotGroup(client, DOC_ID, current, 1, stateUpdate("current"));
+		seedSnapshotGroup(client, DOC_ID, pending, 1, stateUpdate("pending"));
+		const worker = makeWorker(client, { snapshotRetentionMs: 0 });
+
+		await worker.runPass();
+
+		expect(snapshotGroups(client).size).toBe(2);
+
+		client.store.patch(DOCUMENTS, DOC_ID, { compaction_version: 2 });
+		await worker.runPass();
+
+		const groups = snapshotGroups(client);
+		expect(groups.size).toBe(1);
+		expect(groups.has(current)).toBe(true);
+	});
+
+	test("aborts snapshot cleanup when the header changes", async () => {
+		const client = new FakeClient();
+		const current = "snap-current";
+		const old = "snap-old";
+		seedHeader(client, DOC_ID, {
+			compaction_version: 1,
+			current_snapshot_id: current,
+			compacted_through: 1,
+		});
+		seedSnapshotGroup(client, DOC_ID, current, 1, stateUpdate("current"));
+		seedSnapshotGroup(client, DOC_ID, old, 0, stateUpdate("old"));
+
+		let raced = false;
+		client.store.beforeBatch = () => {
+			if (raced) return;
+			raced = true;
+			client.store.patch(DOCUMENTS, DOC_ID, { compaction_version: 2 });
+		};
+		const worker = makeWorker(client, { snapshotRetentionMs: 0 });
+
+		await worker.runPass();
+
+		expect(raced).toBe(true);
+		expect(snapshotGroups(client).size).toBe(2);
+		expect(readHeader(client).compaction_version).toBe(2);
+	});
+
+	test("skips commit and cleanup when stopped during a multi-part write", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		seedUpdate(
+			client,
+			DOC_ID,
+			"a",
+			incrementalUpdates(["x".repeat(100)])[0] as Uint8Array,
+		);
+		client.store.pauseNextSet = true;
+		const handle = startYjsCompactor(asClient(client), {
+			intervalMs: 60_000,
+			updateRetentionMs: 0,
+			snapshotRetentionMs: 0,
+			cleanupIntervalMs: 0,
+			chunkSize: 8,
+		});
+		try {
+			await waitFor(() => client.store.pausedSetCount === 1);
+			const stopping = handle.stop();
+			client.store.releaseSets();
+			await stopping;
+		} finally {
+			await handle.stop();
+		}
+
+		const header = readHeader(client);
+		expect(header.compaction_version).toBe(0);
+		expect(header.current_snapshot_id ?? null).toBeNull();
+		expect(updateRows(client).length).toBe(1);
 		expect(snapshotGroups(client).size).toBe(1);
 	});
 

@@ -1,6 +1,6 @@
 # Yjs Compactor
 
-**Source files**: `sdk/typescript/src/yjs/compactor.ts`, `sdk/typescript/src/yjs/compactor_impl.ts`
+**Source files**: `sdk/typescript/src/yjs/compactor/index.ts`, `sdk/typescript/src/yjs/compactor/worker.ts`
 
 The compactor is a long-running worker that folds `yjs_updates` rows into the
 chunked snapshot stored in `yjs_snapshots` and commits the snapshot pointer on
@@ -24,6 +24,10 @@ each namespace, so give it a client dedicated to the worker.
 `yjs_documents` gains a required `compaction_version` integer (start at `0`).
 It is the compare-and-swap guard for the header commit. The provider ignores it.
 
+`yjs_snapshots` rows also carry the writer's `compaction_version`. It tags the
+generation, so cleanup can distinguish a snapshot a writer may still publish
+from an older generation. The provider ignores it.
+
 ## Discovery
 
 Per namespace, the worker keeps an in-memory update cursor.
@@ -40,10 +44,12 @@ Retention bounds that scan. New rows always have a greater `created_at` and are
 picked up next pass.
 
 Documents that cannot compact yet (incomplete chunk groups, transient errors,
-version conflicts) go into a bounded retry set with exponential backoff. Newly
-discovered docs are processed even if a retry entry exists; overflow beyond
-`maxDocumentsPerPass` is deferred to the retry set so no discovered document is
-lost after the cursor advances.
+version conflicts) go into a bounded retry set with exponential backoff. A
+document with active incomplete groups stays in the retry set even after a
+snapshot is committed; it is cleared only when no incomplete group remains.
+Newly discovered docs are processed even if a retry entry exists; overflow
+beyond `maxDocumentsPerPass` is deferred to the retry set so no discovered
+document is lost after the cursor advances.
 
 ## Per-document pass
 
@@ -87,9 +93,14 @@ A bounded header sweep runs every `cleanupIntervalMs`:
 
 - Delete update rows with `created_at <= compacted_through` and older than
   `updateRetentionMs`.
-- Delete snapshot generations other than `current_snapshot_id` once their
-  newest row is older than `snapshotRetentionMs`.
-- Batch removals at 400 ops per batch.
+- Delete a snapshot generation only when it is not current, is complete (has a
+  commit row), is older than `snapshotRetentionMs`, and every row's
+  `compaction_version` is strictly older than the header's version.
+- Leave incomplete generations and generations tagged with the current header
+  version untouched; a writer may still publish them.
+- Batch removals at 400 ops per batch. Each batch starts with a guarded no-op
+  header write comparing both `compaction_version` and `current_snapshot_id`;
+  if either changed, the batch is rejected and no rows are removed.
 
 The per-document pass cleans what it just covered. The sweep covers crash gaps
 and documents that no longer receive updates.
@@ -113,7 +124,7 @@ and documents that no longer receive updates.
 
 ## Tests
 
-- `sdk/typescript/src/yjs/compactor.test.ts`: snapshot creation and header
+- `sdk/typescript/src/yjs/compactor/worker.test.ts`: snapshot creation and header
   commit, no-op docs, incomplete chunk clamping, version conflict retry,
   namespace isolation, cursor resumption, start/stop.
 - `tests/e2e/src/test-yjs.ts`: real-server compaction, update cleanup, fresh

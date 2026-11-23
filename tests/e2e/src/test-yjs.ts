@@ -313,6 +313,7 @@ export async function run(port: number): Promise<void> {
 			await clientA.store.set(["yjs_snapshots", clientA.utils.id()], {
 				document_id: secondDocumentId,
 				snapshot_id: snapshotId,
+				compaction_version: 0,
 				part: index,
 				parts: snapshotParts.length,
 				data: snapshotParts[index] as Uint8Array,
@@ -322,6 +323,7 @@ export async function run(port: number): Promise<void> {
 			await clientA.store.set(["yjs_snapshots", clientA.utils.id()], {
 				document_id: secondDocumentId,
 				snapshot_id: snapshotId,
+				compaction_version: 0,
 				part: snapshotParts.length,
 				parts: snapshotParts.length,
 			});

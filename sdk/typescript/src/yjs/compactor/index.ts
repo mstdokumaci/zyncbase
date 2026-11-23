@@ -1,13 +1,13 @@
-import type { ZyncBaseClient } from "../client.js";
-import type { SchemaLike } from "../types.js";
-import { YjsCompactor, type YjsCompactorOptions } from "./compactor_impl.js";
+import type { ZyncBaseClient } from "../../client.js";
+import type { SchemaLike } from "../../types.js";
+import { YjsCompactor, type YjsCompactorOptions } from "./worker.js";
 
 export type {
 	YjsCompactedEvent,
 	YjsCompactorErrorContext,
 	YjsCompactorOptions,
 	YjsCompactorPhase,
-} from "./compactor_impl.js";
+} from "./worker.js";
 
 export interface YjsCompactorHandle {
 	/** Whether the worker loop is active. */

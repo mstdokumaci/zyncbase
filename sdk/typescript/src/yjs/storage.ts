@@ -25,7 +25,13 @@ export const yjsStoreSchema = {
 		},
 	},
 	yjs_snapshots: {
-		required: ["document_id", "snapshot_id", "part", "parts"],
+		required: [
+			"document_id",
+			"snapshot_id",
+			"compaction_version",
+			"part",
+			"parts",
+		],
 		unique: [["snapshot_id", "part"]],
 		fields: {
 			document_id: {
@@ -35,6 +41,7 @@ export const yjsStoreSchema = {
 				indexed: true,
 			},
 			snapshot_id: { type: "string", minLength: 1, maxLength: 64 },
+			compaction_version: { type: "integer", minimum: 0 },
 			part: { type: "integer", minimum: 0 },
 			parts: { type: "integer", minimum: 1 },
 			data: { type: "bytes" },
