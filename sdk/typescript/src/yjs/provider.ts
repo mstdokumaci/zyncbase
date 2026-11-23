@@ -376,7 +376,7 @@ export class ZyncBaseYjsProvider<
 			) {
 				return;
 			}
-			throw failure;
+			if (!wasBlocked) throw failure;
 		}
 		if (wasBlocked) this.writeBlocked = false;
 		return this.drain();

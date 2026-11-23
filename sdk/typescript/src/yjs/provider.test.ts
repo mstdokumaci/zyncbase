@@ -758,6 +758,41 @@ describe("ZyncBaseYjsProvider local writes", () => {
 		provider.destroy();
 	});
 
+	test("allows an explicit retry from an error listener after a terminal failure", async () => {
+		const client = new FakeClient();
+		seedHeader(client);
+		const doc = new Y.Doc();
+		const provider = makeProvider(client, doc, {
+			writeDebounceMs: 0,
+			retryDelayMs: 5,
+		});
+		await provider.connect();
+
+		let retryStarted = false;
+		let resolveRetry!: (promise: Promise<void>) => void;
+		const retryCalled = new Promise<Promise<void>>((resolve) => {
+			resolveRetry = resolve;
+		});
+		provider.on("error", () => {
+			if (retryStarted) return;
+			retryStarted = true;
+			resolveRetry(provider.flush());
+		});
+
+		client.store.pauseNextSet = true;
+		client.store.failPausedSet = "PERMISSION_DENIED";
+		doc.getText("content").insert(0, "retry from error");
+		await waitFor(() => client.store.pausedSetCount === 1);
+		client.store.releaseSets();
+
+		const retry = await retryCalled;
+		await retry;
+
+		expect(client.store.setAttempts).toBe(2);
+		expect(updateGroups(client).size).toBe(1);
+		provider.destroy();
+	});
+
 	test("retries the whole payload when a middle chunk fails", async () => {
 		const client = new FakeClient();
 		seedHeader(client);
