@@ -655,11 +655,17 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 				return { status: incomplete ? "incomplete" : "skipped", incomplete };
 			}
 
-			const maxComplete = Math.max(...completeGroups.map((group) => group.max));
-			const minIncomplete =
-				activeIncomplete.length === 0
-					? null
-					: Math.min(...activeIncomplete.map((group) => group.min));
+			let maxComplete = Number.NEGATIVE_INFINITY;
+			for (const group of completeGroups) {
+				maxComplete = Math.max(maxComplete, group.max);
+			}
+			let minIncomplete: number | null = null;
+			for (const group of activeIncomplete) {
+				minIncomplete =
+					minIncomplete === null
+						? group.min
+						: Math.min(minIncomplete, group.min);
+			}
 			const nextWatermark =
 				minIncomplete === null
 					? maxComplete
