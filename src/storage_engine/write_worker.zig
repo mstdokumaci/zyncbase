@@ -1150,7 +1150,10 @@ pub const WriteWorker = struct {
         last_batch_time: *i64,
     ) EnqueueResult {
         return switch (op) {
+            // Flush the older op kind so writes and resolutions execute in
+            // enqueue order. Consecutive resolutions still share one batch.
             .upsert, .update, .delete => blk: {
+                if (resolves.items.len > 0) flushResolutions(self, resolves);
                 batch.append(self.allocator, op) catch |err| {
                     std.log.err("Failed to append to batch: {}", .{err});
                     if (op.ack()) |ack| self.reportOutcome(ack, errors.classifyError(err));
@@ -1161,6 +1164,7 @@ pub const WriteWorker = struct {
                 break :blk .appended;
             },
             .resolve_session => blk: {
+                if (batch.items.len > 0) flushBatch(self, batch, last_batch_time);
                 resolves.append(self.allocator, op) catch |err| {
                     std.log.err("Failed to append session resolution to batch: {}", .{err});
                     op.deinit(self.allocator);

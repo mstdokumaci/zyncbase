@@ -4,6 +4,7 @@ const schema_system = @import("../schema/system.zig");
 const schema_helpers = @import("../schema/test_helpers.zig");
 const storage_mod = @import("../storage_engine.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
+const typed_doc_id = @import("../typed/doc_id.zig");
 const write_worker = @import("write_worker.zig");
 
 const testing = std.testing;
@@ -193,4 +194,36 @@ test "WriteWorker: unsupported ops roll back batches" {
 
     try ctx.engine.write_worker.conn.exec("BEGIN TRANSACTION", .{}, .{});
     try ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{});
+}
+
+test "WriteWorker: resolution queued after a write waits for that write" {
+    const allocator = std.heap.smp_allocator;
+    const users_fields = [_]sth.Field{};
+    const users = schema_helpers.makeTable("users", &users_fields);
+    var fields_arr = [_]sth.Field{schema_helpers.makeField("val", .text)};
+    const table = schema_helpers.makeTable("items", &fields_arr);
+
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.initWithPerformance(
+        allocator,
+        "resolution-after-write",
+        &[_]sth.Table{ users, table },
+        .{ .batch_timeout = 1000 },
+        .{ .in_memory = true, .reader_pool_size = 1 },
+    );
+    defer ctx.deinit();
+
+    // The user write and the session resolution share one identity. If the
+    // resolution runs first, the write fails the unique external id index.
+    const users_index = ctx.tableIndex("users");
+    const user_id: typed_doc_id.DocId = 42;
+    try sth.enqueueUpsert(&ctx.engine, users_index, user_id, 1, typed_doc_id.zero, &.{}, null, null);
+
+    var id_buf: [32]u8 = undefined;
+    const external_user_id = typed_doc_id.hexSlice(user_id, &id_buf);
+    try ctx.engine.enqueueSessionResolution(0, 1, 0, "resolution-order", external_user_id, false);
+    try ctx.engine.flushPendingWrites();
+
+    try testing.expect(ctx.engine.documentExists(users_index, user_id));
+    try testing.expectEqual(user_id, ctx.engine.cachedUserId(schema_system.global_namespace_id, external_user_id).?);
 }
