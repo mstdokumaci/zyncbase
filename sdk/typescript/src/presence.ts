@@ -137,11 +137,11 @@ export class PresenceImpl implements Presence {
 			this.pendingSetData = null;
 			this.lastSetTime = now;
 			this.sendSet(
-				pending ? { ...pending, ...data } : data,
+				pending ? mergePresenceData(pending, data) : data,
 				this.pendingSetWaiters.splice(0),
 			);
 		} else {
-			this.pendingSetData = { ...(this.pendingSetData ?? {}), ...data };
+			this.pendingSetData = mergePresenceData(this.pendingSetData ?? {}, data);
 			if (this.throttleTimer === null) {
 				this.throttleTimer = setTimeout(() => {
 					this.throttleTimer = null;

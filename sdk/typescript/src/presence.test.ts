@@ -117,6 +117,28 @@ describe("PresenceImpl", () => {
 		}
 	});
 
+	test("set() coalescing preserves independent nested leaves", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		jest.useFakeTimers();
+		try {
+			presence.set({ status: "active" });
+			presence.set({ cursor: { x: 1 } });
+			presence.set({ cursor: { y: 2 } });
+			jest.advanceTimersByTime(16);
+
+			expect(conn.dispatched.map((message) => message.type)).toEqual([
+				"PresenceSet",
+				"PresenceSet",
+			]);
+			expect(conn.dispatched.at(-1)?.data).toEqual([0, 1, 1, 2]);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
 	test("queued sets for different targets are not merged", async () => {
 		const conn = createMockConnection();
 		let targetNs = "room-a";
