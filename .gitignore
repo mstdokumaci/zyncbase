@@ -12,4 +12,5 @@ data/
 sdk/typescript/dist
 examples/cordon-off/dist/
 examples/quorum/dist/
+examples/verso/dist/
 examples/cordon-off/.wrangler/

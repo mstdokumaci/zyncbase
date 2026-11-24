@@ -12,8 +12,9 @@
 			"examples/cordon-off/**",
 			"examples/quorum/**",
 			"!!examples/cordon-off/land.json",
-			"!!examples/quorum/dist",
-			"!!vendor"
+			"!!vendor",
+			"examples/verso/**",
+			"!!examples/verso/dist"
 		],
 		"ignoreUnknown": true
 	},

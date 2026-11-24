@@ -71,6 +71,47 @@ describe("PresenceAwarenessBridge local state", () => {
 		doc.destroy();
 	});
 
+	test("carries a real relative position without reshaping it", () => {
+		const doc = new Y.Doc();
+		doc.getText("body").insert(0, "hello");
+		const { bridge, presence } = makeHarness(doc);
+		bridge.start();
+
+		const at = Y.createRelativePositionFromTypeIndex(doc.getText("body"), 3);
+		bridge.awareness.setLocalStateField("cursor", { anchor: at, head: at });
+		const cursor = lastSet(presence).cursor as {
+			anchor: Record<string, unknown>;
+		};
+		expect(cursor.anchor).toEqual(Y.relativePositionToJSON(at));
+		expect(cursor.anchor.tname).toBe("body");
+
+		// A caret on an empty node has a root type ID and nothing else; dropping
+		// it makes ProseMirror-based peers throw "Unexpected case".
+		const typeOnly = Y.createRelativePositionFromJSON({
+			type: { client: doc.clientID, clock: 0 },
+			assoc: 0,
+		});
+		bridge.awareness.setLocalStateField("cursor", {
+			anchor: typeOnly,
+			head: typeOnly,
+		});
+		const id = lastSet(presence).cursor as {
+			anchor: {
+				type?: { client: number; clock: number };
+				tname?: string | null;
+				item?: { client: number | null; clock: number | null };
+			};
+		};
+		expect(id.anchor.type).toEqual({ client: doc.clientID, clock: 0 });
+		// The absent leaves are cleared explicitly, so the previous position
+		// cannot survive the merge.
+		expect(id.anchor.tname).toBeNull();
+		expect(id.anchor.item).toEqual({ client: null, clock: null });
+
+		bridge.destroy();
+		doc.destroy();
+	});
+
 	test("clearing an object field expands it into leaf nulls", () => {
 		const doc = new Y.Doc();
 		const { bridge, presence } = makeHarness(doc);

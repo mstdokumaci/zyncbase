@@ -223,7 +223,11 @@ const provider = new ZyncBaseYjsProvider(client, documentId, doc, {
 });
 
 provider.awareness?.setLocalStateField("user", { name: "Ada", color: "#3366ff" });
-provider.awareness?.setLocalStateField("cursor", { anchor: 3, head: 3 });
+const at = Y.createRelativePositionFromTypeIndex(
+	doc.getXmlFragment("default"),
+	3,
+);
+provider.awareness?.setLocalStateField("cursor", { anchor: at, head: at });
 ```
 
 ```json
@@ -232,7 +236,26 @@ provider.awareness?.setLocalStateField("cursor", { anchor: 3, head: 3 });
 		"yjsClientId": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
 		"cursor": {
 			"type": "object",
-			"fields": { "anchor": { "type": "integer" }, "head": { "type": "integer" } }
+			"fields": {
+				"anchor": {
+					"type": "object",
+					"fields": {
+						"type": { "type": "object", "fields": { "client": { "type": "integer" }, "clock": { "type": "integer" } } },
+						"tname": { "type": "string" },
+						"item": { "type": "object", "fields": { "client": { "type": "integer" }, "clock": { "type": "integer" } } },
+						"assoc": { "type": "integer" }
+					}
+				},
+				"head": {
+					"type": "object",
+					"fields": {
+						"type": { "type": "object", "fields": { "client": { "type": "integer" }, "clock": { "type": "integer" } } },
+						"tname": { "type": "string" },
+						"item": { "type": "object", "fields": { "client": { "type": "integer" }, "clock": { "type": "integer" } } },
+						"assoc": { "type": "integer" }
+					}
+				}
+			}
 		},
 		"user": {
 			"type": "object",
@@ -247,14 +270,26 @@ provider.awareness?.setLocalStateField("cursor", { anchor: 3, head: 3 });
 
 - The provider adds the `yjsClientId` field automatically; every other local
   state key is copied into `presence.user` unless you supply `toPresence` /
-  `fromPresence`.
+  `fromPresence`. Tiptap's caret extension also writes `lastSelection`; declare
+  it or filter it out with `toPresence`.
 - Presence is per user, so two tabs of the same user share one awareness state
   (last writer wins).
 - Presence scope is per connection: one awareness-enabled document per client.
   Use another client for another document.
 - Awareness state must be JSON-representable and map to declared presence
   fields. For cursors, store the plain object from
-  `Y.createRelativePositionFromTypeIndex`, not `Y.encodeRelativePosition`.
+  `Y.createRelativePositionFromTypeIndex`, not the `Uint8Array` from
+  `Y.encodeRelativePosition`: `type` and `item` are `{client, clock}` IDs, and
+  the schema above mirrors that shape.
+- **The cursor format belongs to the editor binding.** Publish positions the
+  binding produced, never a character offset. A relative position with none of
+  `type`, `tname`, or `item` cannot be resolved, and ProseMirror-backed peers
+  (Tiptap included) throw `Unexpected case` when their cursor plugin tries. A
+  caret on an empty node often has `type` only.
+- Presence merges object leaves. When the selection has no `item`, send explicit
+  `null`s for `item.client`, `item.clock`, and `tname`: omission keeps the
+  previous position and the caret renders stale. Clear the whole cursor the same
+  way when the selection is released.
 - `provider.awareness` is `null` when the option is off. The provider
   destroys the awareness instance it creates; a supplied `instance` is yours.
 

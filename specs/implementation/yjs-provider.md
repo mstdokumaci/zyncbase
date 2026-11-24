@@ -150,7 +150,8 @@ record; awareness state is ephemeral and never touches SQLite.
 const provider = new ZyncBaseYjsProvider(client, documentId, doc, {
   awareness: { namespace: "doc:123" },
 });
-provider.awareness?.setLocalStateField("cursor", { anchor: 3, head: 3 });
+const at = Y.createRelativePositionFromTypeIndex(doc.getXmlFragment("default"), 3);
+provider.awareness?.setLocalStateField("cursor", { anchor: at, head: at });
 ```
 
 `awareness.namespace` is required and must equal `client.presenceNamespace`.
@@ -168,6 +169,17 @@ mapping; `toPresence` returns the complete desired presence state, not a partial
 patch. Removed keys are sent as leaf `null`s; the client id is cleared when
 the local state becomes `null`. The SDK README carries a complete copy-paste
 schema example.
+
+**Cursor state belongs to the binding.** The bridge transports awareness values
+as JSON and never interprets them: only the editor binding that produced a
+cursor can resolve it. Publish positions the binding produced, never a character
+offset. A relative position carrying none of `type`, `tname`, or `item` cannot be
+resolved, and ProseMirror-backed bindings (Tiptap included) throw
+`Unexpected case` from their cursor plugin when they read one; a caret on an
+empty node is the common source of such a position. Because presence merges
+object leaves, every cursor write carries the complete position and clears the
+absent leaves (`type.*`, `item.*`, `tname`) with `null`, or a previous position
+survives the merge and renders stale.
 
 **Synchronization.**
 
@@ -193,7 +205,8 @@ awareness state and the last writer wins. Awareness state must be
 JSON-representable and map to declared presence fields; arrays and bytes are not
 presence field types. Store the plain object from
 `Y.createRelativePositionFromTypeIndex`, not the `Uint8Array` from
-`Y.encodeRelativePosition`.
+`Y.encodeRelativePosition`: `type` and `item` are `{client, clock}` IDs, and the
+presence schema has to mirror that shape or the bridge drops the reference.
 
 ## Sizing
 

@@ -13,12 +13,18 @@
 		"baseUrl": "..",
 		"paths": {
 			"@zyncbase/client": ["sdk/typescript/src/index.ts"],
-			"@zyncbase/client/react": ["sdk/typescript/src/react/index.ts"]
+			"@zyncbase/client/react": ["sdk/typescript/src/react/index.ts"],
+			"@zyncbase/client/yjs": ["sdk/typescript/src/yjs/index.ts"],
+			"@zyncbase/client/yjs/compactor": [
+				"sdk/typescript/src/yjs/compactor/index.ts"
+			]
 		}
 	},
 	"include": [
 		"cordon-off/**/*.ts",
 		"quorum/**/*.ts",
-		"quorum/**/*.tsx"
+		"quorum/**/*.tsx",
+		"verso/**/*.ts",
+		"verso/**/*.tsx"
 	]
 }
