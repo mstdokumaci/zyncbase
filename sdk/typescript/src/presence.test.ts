@@ -117,6 +117,28 @@ describe("PresenceImpl", () => {
 		}
 	});
 
+	test("set() coalescing preserves independent nested leaves", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		jest.useFakeTimers();
+		try {
+			presence.set({ status: "active" });
+			presence.set({ cursor: { x: 1 } });
+			presence.set({ cursor: { y: 2 } });
+			jest.advanceTimersByTime(16);
+
+			expect(conn.dispatched.map((message) => message.type)).toEqual([
+				"PresenceSet",
+				"PresenceSet",
+			]);
+			expect(conn.dispatched.at(-1)?.data).toEqual([0, 1, 1, 2]);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
 	test("queued sets for different targets are not merged", async () => {
 		const conn = createMockConnection();
 		let targetNs = "room-a";
@@ -359,6 +381,59 @@ describe("PresenceImpl", () => {
 		const userId = conn.schema.decodeUserId(packDocId("user_2"));
 		const entry = presence.get(userId);
 		expect(entry?.data).toEqual({ cursor: { x: 50, y: 75 } });
+	});
+
+	test("PresenceBroadcast merges nested partial updates", async () => {
+		const conn = createMockConnection();
+		await setupSchema(conn.schema);
+		const presence = new PresenceImpl(conn);
+
+		conn.dispatch = (msg: Record<string, unknown>) => {
+			if (msg.type === "PresenceSubscribe") {
+				return Promise.resolve({
+					type: "ok",
+					id: 0,
+					subId: 100,
+					users: [],
+				} as OkResponse);
+			}
+			return Promise.resolve({ type: "ok", id: 0 } as OkResponse);
+		};
+
+		presence.subscribe(() => {});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const userId = conn.schema.decodeUserId(packDocId("user_5"));
+		const packedUserId = packDocId("user_5");
+		conn.fireBroadcast({
+			type: "PresenceBroadcast",
+			subId: 100,
+			users: [
+				{
+					userId: packedUserId,
+					event: "join",
+					data: conn.schema.decodePresenceUserValue([0, 10, 1, 0, 2, "active"]),
+					joinedAt: 1,
+				},
+			],
+		} as PresenceBroadcast);
+
+		conn.fireBroadcast({
+			type: "PresenceBroadcast",
+			subId: 100,
+			users: [
+				{
+					userId: packedUserId,
+					event: "update",
+					data: conn.schema.decodePresenceUserValue([1, 1]),
+				},
+			],
+		} as PresenceBroadcast);
+
+		expect(presence.get(userId)?.data).toEqual({
+			cursor: { x: 10, y: 1 },
+			status: "active",
+		});
 	});
 
 	test("PresenceBroadcast removal preserves lookups and older snapshots", async () => {

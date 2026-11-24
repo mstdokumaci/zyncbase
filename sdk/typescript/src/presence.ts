@@ -17,6 +17,35 @@ interface SetWaiter {
 	resolve: () => void;
 	reject: (reason?: unknown) => void;
 }
+
+function isMergeableObject(value: unknown): value is Record<string, unknown> {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const prototype = Object.getPrototypeOf(value);
+	return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * Presence patches carry leaf-level changes. Nested objects merge so a patch
+ * such as `{ cursor: { y: 1 } }` keeps `cursor.x`; arrays and scalars replace.
+ */
+function mergePresenceData(
+	base: Record<string, unknown>,
+	patch: Record<string, unknown>,
+): Record<string, unknown> {
+	const result: Record<string, unknown> = { ...base };
+	for (const key in patch) {
+		if (!Object.hasOwn(patch, key)) continue;
+		const current = result[key];
+		const value = patch[key];
+		result[key] =
+			isMergeableObject(current) && isMergeableObject(value)
+				? mergePresenceData(current, value)
+				: value;
+	}
+	return result;
+}
 export interface PresenceConnection {
 	dispatch(msg: Record<string, unknown>): Promise<OkResponse>;
 	onPresenceBroadcast(
@@ -44,7 +73,7 @@ export class PresenceImpl implements Presence {
 	private sharedCallbacks = new Set<
 		(shared: Record<string, unknown> | null) => void
 	>();
-	private lastSetTime = 0;
+	private lastSetTime = Number.NEGATIVE_INFINITY;
 	private pendingSetData: Record<string, unknown> | null = null;
 	private pendingSetWaiters: SetWaiter[] = [];
 	private throttleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -108,11 +137,11 @@ export class PresenceImpl implements Presence {
 			this.pendingSetData = null;
 			this.lastSetTime = now;
 			this.sendSet(
-				pending ? { ...pending, ...data } : data,
+				pending ? mergePresenceData(pending, data) : data,
 				this.pendingSetWaiters.splice(0),
 			);
 		} else {
-			this.pendingSetData = { ...(this.pendingSetData ?? {}), ...data };
+			this.pendingSetData = mergePresenceData(this.pendingSetData ?? {}, data);
 			if (this.throttleTimer === null) {
 				this.throttleTimer = setTimeout(() => {
 					this.throttleTimer = null;
@@ -601,7 +630,7 @@ export class PresenceImpl implements Presence {
 			this.userEntries[index] = {
 				userId,
 				joinedAt: existing.joinedAt,
-				data: { ...existing.data, ...(entry.data ?? {}) },
+				data: mergePresenceData(existing.data, entry.data ?? {}),
 			};
 			return;
 		}
@@ -617,7 +646,7 @@ export class PresenceImpl implements Presence {
 		if (msg.subId !== this.sharedSubId) return;
 
 		for (const patch of msg.data) {
-			this.sharedCache = { ...(this.sharedCache ?? {}), ...patch };
+			this.sharedCache = mergePresenceData(this.sharedCache ?? {}, patch);
 		}
 
 		this.fireSharedCallbacks();
@@ -699,6 +728,6 @@ export class PresenceImpl implements Presence {
 			for (const waiter of this.pendingSetWaiters) waiter.reject(reason);
 		}
 		this.pendingSetWaiters = [];
-		this.lastSetTime = 0;
+		this.lastSetTime = Number.NEGATIVE_INFINITY;
 	}
 }
