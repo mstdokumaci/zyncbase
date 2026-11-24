@@ -48,8 +48,9 @@ const PRESENCE_TICK_DELAY_MS = envInt(
 	25,
 	0,
 );
-const PRESENCE_FULL_PAYLOAD =
-	process.env.ZYNCBASE_COMBO_PRESENCE_FULL_PAYLOAD !== "0";
+// Presence tick 0 establishes the full record; later ticks send only the leaf
+// that changed. `state.lastPresenceData` keeps the full payload so reconnect
+// can re-apply the complete record.
 const CONVERGENCE_TIMEOUT_MS = 90_000;
 const CONNECT_TIMEOUT_MS = 45_000;
 const PRESENCE_NAMESPACE_PREFIX = "presence-combo-room";
@@ -1253,9 +1254,7 @@ async function executePresenceUserWrites(
 			state.lastPresenceData = fullData;
 			state.presenceRevision++;
 			state.client.presence.set(
-				PRESENCE_FULL_PAYLOAD || tick === 0
-					? fullData
-					: { cursor: fullData.cursor },
+				tick === 0 ? fullData : { cursor: { y: tick } },
 			);
 		}
 		if (tick < 2) await delay(PRESENCE_TICK_DELAY_MS);
@@ -1573,7 +1572,7 @@ function reportMetrics(results: ProcessMetrics[], elapsedMs: number) {
 	const userCallbacks = results.flatMap((r) => r.userCallbacks);
 	const sharedCallbacks = results.flatMap((r) => r.sharedCallbacks);
 	console.log(
-		`Combo stress passed: ${TOTAL_CLIENTS} clients across 4 processes (${ROOM_COUNT} rooms, 2 tables) in ${Math.round(elapsedMs)}ms; ` +
+		`Combo stress passed: ${TOTAL_CLIENTS} clients across 4 processes (${ROOM_COUNT} rooms, 2 tables, presence-write=delta) in ${Math.round(elapsedMs)}ms; ` +
 			`phase max ms connect=${max("connectMs")}, ` +
 			`store-create=${max("storeCreateMs")}, store-update=${max("storeUpdateMs")}, ` +
 			`presence-user=${max("presenceUserMs")}, presence-shared=${max("presenceSharedMs")}, ` +
