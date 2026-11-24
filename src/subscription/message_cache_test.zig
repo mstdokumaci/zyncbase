@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const message_cache = @import("message_cache.zig");
+
 const MessageCache = message_cache.MessageCache;
 
 test "MessageCache: empty, put, and last-key hit" {

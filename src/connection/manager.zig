@@ -3,6 +3,7 @@ const std = @import("std");
 const uws_timer = @import("../uws_timer.zig");
 const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
+const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
 const ServerMetrics = @import("../observability/metrics.zig").ServerMetrics;
@@ -12,7 +13,6 @@ const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const c = @import("../uwebsockets_wrapper.zig").c;
 const send_queue_type = @import("send_queue.zig").send_queue;
-const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
 const Connection = @import("state.zig").Connection;
 
 const Allocator = std.mem.Allocator;
@@ -340,9 +340,10 @@ pub const ConnectionManager = struct {
             // Skip empty groups
             if (group.entries.items.len == 0) continue;
 
-            const conn = self.acquireConnection(conn_id) catch {
+            const conn = self.acquireConnection(conn_id) catch |err| {
                 // Connection gone — its deliveries are dropped; owners are
                 // released by the defer above.
+                std.log.debug("drainSendQueue: connection {} unavailable: {}", .{ conn_id, err });
                 continue;
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);

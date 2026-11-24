@@ -102,7 +102,6 @@ fn integer(payload: msgpack.Payload) !u64 {
     };
 }
 
-
 fn countDelta(
     allocator: std.mem.Allocator,
     data: []const u8,

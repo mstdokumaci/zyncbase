@@ -1,9 +1,8 @@
-const std = @import("std");
-
 const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
+
 const MatchOp = SubscriptionEngine.MatchOp;
 
-const SLOTS = 128;
+const slots = 128;
 
 const Entry = struct {
     sub_id: u64 = 0,
@@ -20,7 +19,7 @@ const Entry = struct {
 /// collision only evicts an entry and forces a later re-encode. It never owns
 /// the message bytes, which live in the change arena.
 pub const MessageCache = struct {
-    entries: [SLOTS]Entry = [_]Entry{.{}} ** SLOTS,
+    entries: [slots]Entry = [_]Entry{.{}} ** slots,
     last_sub_id: ?u64 = null,
     last_op: MatchOp = .set_op,
     last_msg: []const u8 = &.{},
@@ -54,5 +53,5 @@ pub const MessageCache = struct {
 };
 
 fn slotIndex(sub_id: u64, op: MatchOp) usize {
-    return @intCast(((sub_id *% 2) +% @intFromEnum(op)) & (SLOTS - 1));
+    return @intCast(((sub_id *% 2) +% @intFromEnum(op)) & (slots - 1));
 }
