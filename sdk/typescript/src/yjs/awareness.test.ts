@@ -93,6 +93,43 @@ describe("PresenceAwarenessBridge local state", () => {
 		doc.destroy();
 	});
 
+	test("clears nested leaves omitted from a changed object", () => {
+		const doc = new Y.Doc();
+		const { bridge, presence } = makeHarness(doc);
+		bridge.start();
+		bridge.awareness.setLocalState({ cursor: { x: 1, y: 2 } });
+
+		bridge.awareness.setLocalState({ cursor: { x: 3 } });
+		expect(lastSet(presence)).toEqual({
+			cursor: { x: 3, y: null },
+			yjsClientId: doc.clientID,
+		});
+
+		bridge.destroy();
+		doc.destroy();
+	});
+
+	test("retries a tombstone after the publish fails", async () => {
+		const doc = new Y.Doc();
+		const { bridge, presence } = makeHarness(doc);
+		bridge.start();
+		bridge.awareness.setLocalState({ cursor: { x: 1, y: 2 } });
+
+		presence.failures = 1;
+		bridge.awareness.setLocalState({});
+		await flush();
+
+		bridge.awareness.setLocalState({ status: "active" });
+		expect(lastSet(presence)).toEqual({
+			cursor: { x: null, y: null },
+			status: "active",
+			yjsClientId: doc.clientID,
+		});
+
+		bridge.destroy();
+		doc.destroy();
+	});
+
 	test("clearing the local state removes the client id so peers drop the entry", () => {
 		const doc = new Y.Doc();
 		const { bridge, presence } = makeHarness(doc);
@@ -145,6 +182,29 @@ describe("PresenceAwarenessBridge remote state", () => {
 
 		presence.emit([]);
 		expect(bridge.awareness.getStates().has(4242)).toBe(false);
+
+		bridge.destroy();
+		doc.destroy();
+	});
+
+	test("restores a remote state removed by the awareness timeout", () => {
+		const doc = new Y.Doc();
+		const { bridge, presence } = makeHarness(doc);
+		bridge.start();
+		const entry = {
+			userId: "u2",
+			data: { yjsClientId: 99, cursor: { x: 1 } },
+			joinedAt: 1,
+		};
+		presence.emit([entry]);
+		expect(bridge.awareness.getStates().has(99)).toBe(true);
+
+		// The awareness timeout deletes the state but keeps its meta clock.
+		bridge.awareness.states.delete(99);
+		presence.emit([entry]);
+		expect(bridge.awareness.getStates().get(99)).toEqual({
+			cursor: { x: 1 },
+		});
 
 		bridge.destroy();
 		doc.destroy();

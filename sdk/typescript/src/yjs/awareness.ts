@@ -20,7 +20,7 @@ export interface ZyncBaseYjsAwarenessOptions<P = never> {
 	instance?: Awareness;
 	/** Presence user field carrying `doc.clientID`. Default: `yjsClientId`. */
 	clientIdField?: string;
-	/** Local awareness state → presence user patch. Default: identity. */
+	/** Local awareness state → complete presence user state. Default: identity. */
 	toPresence?: (
 		state: Record<string, unknown>,
 	) => Record<string, unknown> | null;
@@ -75,7 +75,9 @@ export class PresenceAwarenessBridge<P = never> {
 		data: Record<string, unknown>,
 	) => Promise<void>;
 	private readonly applied = new Map<number, string>();
-	private lastSent: Record<string, unknown> | null = null;
+	// Every top-level key this bridge has published since start/pause, with its
+	// latest shape. Removed keys stay so they can be nulled on later publishes.
+	private knownShape: Record<string, unknown> | null = null;
 	private unsubscribe: (() => Promise<void>) | null = null;
 	private subscribeGeneration = 0;
 	private subscribing = false;
@@ -142,7 +144,7 @@ export class PresenceAwarenessBridge<P = never> {
 		this.clearPresenceFields();
 		this.clearRemoteStates();
 		this.applied.clear();
-		this.lastSent = null;
+		this.knownShape = null;
 
 		const unsubscribe = this.unsubscribe;
 		this.unsubscribe = null;
@@ -159,7 +161,7 @@ export class PresenceAwarenessBridge<P = never> {
 		this.applied.clear();
 		// The server dropped the record with the connection; the next push must
 		// recreate every field.
-		this.lastSent = null;
+		this.knownShape = null;
 	}
 
 	/** Re-publishes the local state after a reconnect. */
@@ -232,34 +234,31 @@ export class PresenceAwarenessBridge<P = never> {
 	): Record<string, unknown> | null {
 		const mapped = local === null ? null : this.toPresence(local);
 		if (mapped === null) {
-			if (this.lastSent === null) return null;
-			const patch = nullPatch(this.lastSent);
-			this.lastSent = null;
+			if (this.knownShape === null) return null;
+			const patch = nullPatch(this.knownShape);
 			return Object.keys(patch).length > 0 ? patch : null;
 		}
 
-		const normalized = normalizeAgainst(mapped, this.lastSent) as Record<
-			string,
-			unknown
-		>;
 		const next: Record<string, unknown> = {
-			...normalized,
+			...(normalizeAgainst(mapped, this.knownShape) as Record<string, unknown>),
 			[this.clientIdField]: this.awareness.clientID,
 		};
-		const patch: Record<string, unknown> = { ...next };
-		if (this.lastSent !== null) {
-			for (const key of Object.keys(this.lastSent)) {
-				if (!(key in next)) patch[key] = nullify(this.lastSent[key]);
-			}
+		// shortcut: removed keys stay in the shape until pause/stop, so a
+		// cleared field is re-nulled on later publishes; bounded by the app's
+		// top-level awareness keys.
+		const known: Record<string, unknown> = { ...(this.knownShape ?? {}) };
+		for (const [key, value] of Object.entries(next)) {
+			known[key] = cloneValue(value);
 		}
-		this.lastSent = cloneValue(next) as Record<string, unknown>;
-		return patch;
+		this.knownShape = known;
+		return Object.keys(next).length > 0 ? next : null;
 	}
+
 	private clearPresenceFields(): void {
 		if (!this.namespaceMatches()) return;
-		if (this.lastSent === null) return;
-		const patch = nullPatch(this.lastSent);
-		this.lastSent = null;
+		if (this.knownShape === null) return;
+		const patch = nullPatch(this.knownShape);
+		this.knownShape = null;
 		if (Object.keys(patch).length === 0) return;
 		this.presenceSet(patch).catch(() => {});
 	}
@@ -315,7 +314,11 @@ export class PresenceAwarenessBridge<P = never> {
 	): void {
 		const key = stableStringify(state);
 		const previous = this.applied.get(clientId);
-		if (previous === key) {
+		if (
+			previous === key &&
+			this.awareness.states.has(clientId) &&
+			this.awareness.meta.has(clientId)
+		) {
 			// Remote presence only pushes when someone changed, so this keeps the
 			// awareness timeout fed without emitting spurious update events.
 			const meta = this.awareness.meta.get(clientId);
@@ -434,6 +437,11 @@ function normalizeAgainst(
 	for (const [key, nested] of Object.entries(value)) {
 		const normalized = normalizeAgainst(nested, prior?.[key]);
 		if (normalized !== OMIT) out[key] = normalized;
+	}
+	if (prior !== undefined) {
+		for (const key of Object.keys(prior)) {
+			if (!(key in value)) out[key] = nullify(prior[key]);
+		}
 	}
 	return out;
 }

@@ -572,6 +572,7 @@ export class ZyncBaseYjsProvider<
 					this.active = false;
 					this.setStatus("disconnected");
 					this.detachClientListeners();
+					this.awarenessBridge?.stop();
 					void this.clearSubscription();
 					return;
 				}

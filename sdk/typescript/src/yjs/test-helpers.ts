@@ -497,10 +497,16 @@ type Listener = (...args: unknown[]) => void;
 /** Minimal stand-in for the SDK presence API used by awareness tests. */
 export class FakePresence {
 	readonly setCalls: Array<Record<string, unknown>> = [];
+	/** Number of upcoming `set` calls that reject. */
+	failures = 0;
 	private readonly callbacks = new Set<(users: never[]) => void>();
 
 	async set(data: Record<string, unknown>): Promise<void> {
 		this.setCalls.push(data);
+		if (this.failures > 0) {
+			this.failures -= 1;
+			throw new Error("presence set failed");
+		}
 	}
 
 	async subscribe(

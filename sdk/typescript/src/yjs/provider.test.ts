@@ -1028,4 +1028,25 @@ describe("ZyncBaseYjsProvider awareness", () => {
 		).toThrow(/does not match/);
 		doc.destroy();
 	});
+
+	test("stops awareness when a resync finds the document deleted", async () => {
+		const client = new FakeClient();
+		client.presenceNamespace = "doc-1";
+		seedHeader(client);
+		const doc = new Y.Doc();
+		const provider = new ZyncBaseYjsProvider(asClient(client), DOC_ID, doc, {
+			connect: false,
+			awareness: { namespace: "doc-1" },
+		});
+		await provider.connect();
+		expect(client.presence.subscribers).toBe(1);
+
+		client.store.delete(DOCUMENTS, DOC_ID);
+		client.emit("synced");
+		await waitFor(() => provider.status === "disconnected");
+		expect(client.presence.subscribers).toBe(0);
+
+		provider.destroy();
+		doc.destroy();
+	});
 });

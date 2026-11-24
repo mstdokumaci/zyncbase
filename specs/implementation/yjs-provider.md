@@ -164,7 +164,8 @@ and, by default, copies every other local state key into `presence.user`. The
 presence schema must therefore declare an integer `yjsClientId` field plus every
 awareness key the app publishes (for example `cursor` and `user` object fields
 with their own sub-fields). `toPresence` and `fromPresence` override the
-mapping. Removed keys are sent as leaf `null`s; the client id is cleared when
+mapping; `toPresence` returns the complete desired presence state, not a partial
+patch. Removed keys are sent as leaf `null`s; the client id is cleared when
 the local state becomes `null`. The SDK README carries a complete copy-paste
 schema example.
 
