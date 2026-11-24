@@ -269,28 +269,37 @@ export async function startVersoServer(
 		}
 	});
 
-	await new Promise<void>((resolveListen, reject) => {
-		server.once("error", reject);
-		server.listen(port, host, resolveListen);
-	});
-
 	let stopping = false;
+	const shutdown = async () => {
+		if (stopping) return;
+		stopping = true;
+		await compactor.stop().catch(() => {});
+		client.disconnect();
+		await new Promise<void>((resolveClose) =>
+			server.close(() => resolveClose()),
+		);
+		database.kill("SIGINT");
+		await database.exited.catch(() => {});
+		await rm(runtime, { recursive: true, force: true }).catch(() => {});
+	};
+
+	try {
+		await new Promise<void>((resolveListen, reject) => {
+			server.once("error", reject);
+			server.listen(port, host, resolveListen);
+		});
+	} catch (error) {
+		// The compactor, client, and database are already running; a failed bind
+		// must not leave them behind.
+		await shutdown();
+		throw error;
+	}
+
 	return {
 		port,
 		databasePort,
 		client,
-		stop: async () => {
-			if (stopping) return;
-			stopping = true;
-			await compactor.stop().catch(() => {});
-			client.disconnect();
-			await new Promise<void>((resolveClose) =>
-				server.close(() => resolveClose()),
-			);
-			database.kill("SIGINT");
-			await database.exited.catch(() => {});
-			await rm(runtime, { recursive: true, force: true }).catch(() => {});
-		},
+		stop: shutdown,
 	};
 }
 

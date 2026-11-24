@@ -7,17 +7,27 @@ export interface SubPageOptions {
 }
 
 const watchers = new Map<string, Set<HTMLElement>>();
+let latestPages: Map<string, PageRow> = new Map();
+
+function applyTitle(element: HTMLElement, pageId: string): void {
+	const page = latestPages.get(pageId);
+	const icon = element.querySelector(".sub-page__icon");
+	const title = element.querySelector(".sub-page__title");
+	if (icon) icon.textContent = pageIcon(page);
+	if (title) {
+		title.textContent = pageId
+			? page
+				? pageTitle(page)
+				: "Missing page"
+			: "Untitled";
+	}
+}
 
 /** Called by the editor whenever the page tree changes. */
 export function publishPageTitles(pages: Map<string, PageRow>): void {
+	latestPages = pages;
 	for (const [pageId, elements] of watchers) {
-		const page = pages.get(pageId);
-		for (const element of elements) {
-			const icon = element.querySelector(".sub-page__icon");
-			const title = element.querySelector(".sub-page__title");
-			if (icon) icon.textContent = pageIcon(page);
-			if (title) title.textContent = page ? pageTitle(page) : "Missing page";
-		}
+		for (const element of elements) applyTitle(element, pageId);
 	}
 }
 
@@ -75,40 +85,26 @@ export const SubPage = Node.create<SubPageOptions>({
 			dom.dataset.subPage = pageId;
 			const icon = document.createElement("span");
 			icon.className = "sub-page__icon";
-			icon.textContent = "🗒️";
 			const title = document.createElement("span");
 			title.className = "sub-page__title";
-			title.textContent = "Untitled";
 			dom.append(icon, title);
 			dom.addEventListener("click", () => {
 				if (pageId) this.options.onNavigate(pageId);
 			});
 
-			let registered = watchers.get(pageId);
-			if (!registered) {
-				registered = new Set();
-				watchers.set(pageId, registered);
-			}
-			registered.add(dom);
+			const elements = watchers.get(pageId) ?? new Set<HTMLElement>();
+			watchers.set(pageId, elements);
+			elements.add(dom);
+			applyTitle(dom, pageId);
 
 			return {
 				dom,
-				update: (updated) => {
-					if (updated.type.name !== "subPage") return false;
-					const next = String(updated.attrs.pageId ?? "");
-					if (next === dom.dataset.subPage) return true;
-					registered?.delete(dom);
-					dom.dataset.subPage = next;
-					let nextWatchers = watchers.get(next);
-					if (!nextWatchers) {
-						nextWatchers = new Set();
-						watchers.set(next, nextWatchers);
-					}
-					nextWatchers.add(dom);
-					return true;
-				},
+				// Attributes never change in this app. Recreating the view is
+				// simpler and safer than retargeting its registrations.
+				update: () => false,
 				destroy: () => {
-					registered?.delete(dom);
+					elements.delete(dom);
+					if (elements.size === 0) watchers.delete(pageId);
 				},
 			};
 		};

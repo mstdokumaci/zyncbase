@@ -193,15 +193,13 @@ export const SlashCommand = Extension.create<SlashOptions>({
 				hint: "Link another page",
 				glyph: "📄",
 				run: async (target, range) => {
+					// Delete before the await: a remote edit can shift the captured
+					// range while the page is being created.
+					target.chain().focus().deleteRange(range).run();
 					try {
 						const pageId = await createSubPage();
 						if (!pageId) return;
-						target
-							.chain()
-							.focus()
-							.deleteRange(range)
-							.setSubPage({ pageId })
-							.run();
+						target.chain().focus().setSubPage({ pageId }).run();
 					} catch (error) {
 						onError(error);
 					}
@@ -228,13 +226,23 @@ export const SlashCommand = Extension.create<SlashOptions>({
 					onUpdate: (props) => controller.update(props),
 					onExit: () => controller.close(),
 					onKeyDown: ({ event }: SuggestionKeyDownProps) => {
-						if (!controller.getSnapshot().open) return false;
+						const state = controller.getSnapshot();
+						if (!state.open) return false;
+						if (event.key === "Escape") {
+							controller.close();
+							return true;
+						}
+						if (
+							(event.key === "Enter" || event.key === "Tab") &&
+							state.items.length === 0
+						) {
+							return false;
+						}
 						const actions: Record<string, () => void> = {
 							ArrowDown: () => controller.move(1),
 							ArrowUp: () => controller.move(-1),
 							Enter: () => controller.select(),
 							Tab: () => controller.select(),
-							Escape: () => controller.close(),
 						};
 						const action = actions[event.key];
 						if (!action) return false;

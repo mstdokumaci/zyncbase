@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
 import { useQuery } from "./bindings";
 import { DocEditor } from "./editor/DocEditor";
 import { assembleChanges } from "./history-data";
 import type { ChangeRow, Identity, PageRow } from "./shared";
+
+const HISTORY_LIMIT = 200;
+/** Five seconds in microseconds: a gap means the page is older than this log. */
+const PAGE_GAP_US = 5_000_000;
 
 function when(at: number): string {
 	return new Date(at / 1000).toLocaleTimeString([], {
@@ -33,7 +37,7 @@ export function HistoryPanel({
 	const changes = useQuery("page_changes", {
 		where: { document_id: page.id },
 		orderBy: [{ created_at: "desc" }],
-		limit: 200,
+		limit: HISTORY_LIMIT,
 	});
 	const entries = useMemo(
 		() =>
@@ -41,7 +45,15 @@ export function HistoryPanel({
 		[changes.data],
 	);
 	const [index, setIndex] = useState(0);
-	useEffect(() => setIndex(Math.max(entries.length - 1, 0)), [entries.length]);
+	// Follow new changes only while the user is at the newest one; someone
+	// scrubbing through the past keeps their position.
+	const following = useRef(true);
+	useEffect(() => {
+		setIndex((current) => {
+			const last = Math.max(entries.length - 1, 0);
+			return following.current ? last : Math.min(current, last);
+		});
+	}, [entries.length]);
 
 	const preview = useMemo(() => {
 		const doc = new Y.Doc();
@@ -55,7 +67,8 @@ export function HistoryPanel({
 	const pageStart = page.created_at ?? 0;
 	const earliest = entries[0]?.at ?? 0;
 	const incomplete =
-		pageStart > 0 && earliest > 0 && earliest - pageStart > 5_000_000;
+		changes.data.length >= HISTORY_LIMIT ||
+		(pageStart > 0 && earliest > 0 && earliest - pageStart > PAGE_GAP_US);
 	const current = entries[index];
 
 	return (
@@ -82,13 +95,17 @@ export function HistoryPanel({
 					min={0}
 					max={entries.length - 1}
 					value={index}
-					onChange={(event) => setIndex(Number(event.target.value))}
+					onChange={(event) => {
+						const next = Number(event.target.value);
+						following.current = next >= entries.length - 1;
+						setIndex(next);
+					}}
 				/>
 			) : null}
 			{incomplete ? (
 				<p className="history__note">
-					Older changes were compacted away; this preview starts from the oldest
-					retained change.
+					This preview starts from the oldest loaded change. Earlier history is
+					either compacted away or beyond the newest {HISTORY_LIMIT} changes.
 				</p>
 			) : null}
 			<div className="history__preview">

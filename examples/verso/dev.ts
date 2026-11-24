@@ -141,9 +141,16 @@ async function startEdge(options: {
 	};
 }
 
-async function waitForHealth(port: number, timeoutMs = 30_000): Promise<void> {
+async function waitForHealth(
+	port: number,
+	app: Bun.Subprocess,
+	timeoutMs = 30_000,
+): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
+		if (app.exitCode !== null) {
+			throw new Error(`Verso app server exited with code ${app.exitCode}`);
+		}
 		try {
 			const response = await fetch(`http://127.0.0.1:${port}/health`);
 			if (response.ok) return;
@@ -194,7 +201,7 @@ if (import.meta.main) {
 	process.on("SIGTERM", () => void stop(0));
 
 	try {
-		await waitForHealth(appPort);
+		await waitForHealth(appPort, app);
 		edge = await startEdge({
 			port: devPort,
 			appPort,

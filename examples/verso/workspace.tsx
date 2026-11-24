@@ -11,6 +11,7 @@ import {
 	createPage,
 	deletePage,
 	movePage,
+	movePosition,
 	type PageNode,
 	positionAtEnd,
 	positionBetween,
@@ -28,7 +29,12 @@ import {
 
 function hashPage(): string | null {
 	const match = /^#\/(.+)$/.exec(location.hash);
-	return match?.[1] ? decodeURIComponent(match[1]) : null;
+	if (!match?.[1]) return null;
+	try {
+		return decodeURIComponent(match[1]);
+	} catch {
+		return null;
+	}
 }
 
 export function Workspace({
@@ -102,12 +108,8 @@ function WorkspaceView({
 		async (page: PageRow, direction: -1 | 1) => {
 			const siblings = siblingsOf(rows, page.parent_id);
 			const index = siblings.findIndex((row) => row.id === page.id);
-			if (index < 0) return;
-			if (direction < 0 ? index === 0 : index === siblings.length - 1) return;
-			const position =
-				direction < 0
-					? positionBetween(siblings[index - 2], siblings[index - 1])
-					: positionBetween(siblings[index + 2], siblings[index + 1]);
+			const position = movePosition(siblings, index, direction);
+			if (position === null) return;
 			await movePage(client, page.id, position, page.parent_id);
 		},
 		[client, rows],

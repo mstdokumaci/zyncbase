@@ -40,6 +40,14 @@ async function session(port: number, email: string) {
 	return (await response.json()) as { token: string; email: string };
 }
 
+function claims(token: string): { sub?: string; workspace?: string } {
+	const payload = token.split(".")[1] ?? "";
+	return JSON.parse(Buffer.from(payload, "base64url").toString()) as {
+		sub?: string;
+		workspace?: string;
+	};
+}
+
 function clientFor(port: number, token: string): AppClient {
 	return createClient({
 		url: `ws://127.0.0.1:${port}/ws`,
@@ -131,7 +139,8 @@ try {
 
 	// Claimed identity is stable per email and distinct across emails.
 	const again = await session(server.port, "  ADA@verso.test ");
-	assert.equal(again.token.split(".")[1], ada.token.split(".")[1]);
+	assert.equal(claims(again.token).sub, claims(ada.token).sub);
+	assert.equal(claims(again.token).workspace, claims(ada.token).workspace);
 
 	// Presence accepts the relative-position shape Tiptap publishes: root IDs
 	// are `{client, clock}` objects.

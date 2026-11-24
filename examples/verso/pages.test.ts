@@ -5,7 +5,13 @@ import {
 	pickRelativePosition,
 } from "./editor/cursor-presence";
 import { assembleChanges } from "./history-data";
-import { buildTree, positionAtEnd, positionBetween, siblingsOf } from "./pages";
+import {
+	buildTree,
+	movePosition,
+	positionAtEnd,
+	positionBetween,
+	siblingsOf,
+} from "./pages";
 import type { PageRow } from "./shared";
 
 function page(
@@ -59,6 +65,40 @@ describe("page tree", () => {
 			"root-a",
 			"root-b",
 		]);
+	});
+
+	test("ties break by id in both orders", () => {
+		const tied = [page("b", 1000), page("a", 1000), page("c", 500)];
+		expect(buildTree(tied).map((node) => node.page.id)).toEqual([
+			"c",
+			"a",
+			"b",
+		]);
+		expect(siblingsOf(tied, undefined).map((row) => row.id)).toEqual([
+			"c",
+			"a",
+			"b",
+		]);
+	});
+});
+
+describe("movePosition", () => {
+	const siblings = [page("a", 1000), page("b", 2000), page("c", 3000)];
+
+	test("moves one slot in either direction", () => {
+		expect(movePosition(siblings, 2, -1)).toBe(1500);
+		expect(movePosition(siblings, 0, 1)).toBe(2500);
+	});
+
+	test("moving into the first or last slot sorts beyond it", () => {
+		expect(movePosition(siblings, 1, -1)).toBe(0);
+		expect(movePosition(siblings, 1, 1)).toBe(4000);
+	});
+
+	test("the edges have nowhere to go", () => {
+		expect(movePosition(siblings, 0, -1)).toBeNull();
+		expect(movePosition(siblings, 2, 1)).toBeNull();
+		expect(movePosition(siblings, -1, 1)).toBeNull();
 	});
 });
 

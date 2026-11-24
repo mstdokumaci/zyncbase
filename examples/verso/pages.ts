@@ -42,7 +42,22 @@ export function siblingsOf(
 				row.parent_id && known.has(row.parent_id) ? row.parent_id : undefined;
 			return parent === target;
 		})
-		.sort((a, b) => a.position - b.position);
+		.sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+}
+
+/** The position a page needs to move one slot, or null at the edge. */
+export function movePosition(
+	siblings: readonly PageRow[],
+	index: number,
+	direction: -1 | 1,
+): number | null {
+	if (index < 0) return null;
+	if (direction < 0) {
+		if (index === 0) return null;
+		return positionBetween(siblings[index - 2], siblings[index - 1]);
+	}
+	if (index >= siblings.length - 1) return null;
+	return positionBetween(siblings[index + 1], siblings[index + 2]);
 }
 
 /** A position that sorts after every sibling. */

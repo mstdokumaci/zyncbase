@@ -71,10 +71,13 @@ field, this copy has to gain it too.
 
 `page_changes` is an append-only log, so history is a replay: assemble the
 chunks in order, apply them to an empty `Y.Doc`, and render that document
-read-only. No extra tables. The compactor folds changes into snapshots and
-deletes updates after `updateRetentionMs` (set to 7 days here), so history goes
-back exactly as far as retention allows; the panel says so when the log starts
-after the page did.
+read-only. No extra tables. The panel loads at most the 200 newest changes, so
+the replay starts at the oldest loaded change, not at page creation; updates
+that depend on earlier, now-absent content render without it. The compactor
+deletes updates after `updateRetentionMs` (set to 7 days here), so both the
+window and compaction can truncate the past. The panel shows its notice when it
+hit the 200-change limit, or when the oldest loaded change is more than five
+seconds (5,000,000 microseconds of `created_at`) after the page's creation.
 
 ## Identity is claimed, not verified
 

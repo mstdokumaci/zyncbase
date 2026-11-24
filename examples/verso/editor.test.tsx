@@ -10,7 +10,7 @@ const { default: Collaboration } = await import(
 );
 const { default: TaskList } = await import("@tiptap/extension-task-list");
 const { default: TaskItem } = await import("@tiptap/extension-task-item");
-const { SubPage } = await import("./editor/subpage");
+const { publishPageTitles, SubPage } = await import("./editor/subpage");
 const { MarkButtons } = await import("./editor/BubbleToolbar");
 const { render, fireEvent, cleanup } = await import("@testing-library/react");
 const { createElement } = await import("react");
@@ -73,13 +73,44 @@ describe("editor wiring", () => {
 		doc.destroy();
 	});
 
+	test("sub-page titles follow the latest page map", () => {
+		const doc = new Y.Doc();
+		publishPageTitles(new Map());
+		const editor = editorFor(doc);
+		editor.commands.setSubPage({ pageId: "p1" });
+		const title = () =>
+			editor.view.dom.querySelector(".sub-page__title")?.textContent;
+		expect(title()).toBe("Missing page");
+
+		const row = (id: string, text: string) => ({
+			id,
+			title: text,
+			position: 1000,
+			compaction_version: 0,
+		});
+		publishPageTitles(new Map([["p1", row("p1", "Real title")]]));
+		expect(title()).toBe("Real title");
+
+		publishPageTitles(new Map([["p1", row("p1", "Renamed")]]));
+		expect(title()).toBe("Renamed");
+
+		editor.destroy();
+		// A destroyed view must not be touched by later publishes.
+		expect(() => publishPageTitles(new Map())).not.toThrow();
+		doc.destroy();
+	});
+
 	// The reported crash: a caret published on an empty non-text node is a root
 	// type ID with no item. Dropping the type made every peer throw
 	// "Unexpected case" on the next transaction.
 	test("a cursor restored from presence does not break a transaction", () => {
 		const doc = new Y.Doc();
+		// Awareness takes its client id from the doc, so the "remote" peer needs
+		// its own document to be a different client.
+		const remoteDoc = new Y.Doc();
 		const awareness = new awarenessLib.Awareness(doc);
-		const remote = new awarenessLib.Awareness(doc);
+		const remote = new awarenessLib.Awareness(remoteDoc);
+		expect(remote.clientID).not.toBe(awareness.clientID);
 		remote.on(
 			"update",
 			({
@@ -136,6 +167,7 @@ describe("editor wiring", () => {
 		awareness.destroy();
 		remote.destroy();
 		doc.destroy();
+		remoteDoc.destroy();
 	});
 
 	test("the selection toolbar toggles marks that reach the doc", () => {
