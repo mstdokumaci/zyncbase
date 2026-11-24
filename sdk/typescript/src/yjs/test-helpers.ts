@@ -494,9 +494,44 @@ export class FakeStore {
 
 type Listener = (...args: unknown[]) => void;
 
+/** Minimal stand-in for the SDK presence API used by awareness tests. */
+export class FakePresence {
+	readonly setCalls: Array<Record<string, unknown>> = [];
+	private readonly callbacks = new Set<(users: never[]) => void>();
+
+	async set(data: Record<string, unknown>): Promise<void> {
+		this.setCalls.push(data);
+	}
+
+	async subscribe(
+		callback: (users: never[]) => void,
+	): Promise<() => Promise<void>> {
+		this.callbacks.add(callback);
+		return async () => {
+			this.callbacks.delete(callback);
+		};
+	}
+
+	emit(
+		users: Array<{
+			userId: string;
+			data: Record<string, unknown>;
+			joinedAt: number;
+		}>,
+	): void {
+		for (const callback of [...this.callbacks]) callback(users as never[]);
+	}
+
+	get subscribers(): number {
+		return this.callbacks.size;
+	}
+}
+
 /** Minimal stand-in for `ZyncBaseClient` used by provider tests. */
 export class FakeClient {
 	readonly store = new FakeStore();
+	readonly presence = new FakePresence();
+	presenceNamespace = "public";
 	status: ConnectionStatus = "connected";
 	connectCalls = 0;
 

@@ -207,6 +207,57 @@ await provider.connect();
   writes and keeps the failed payload queued. Fix the cause and call
   `flush()` to retry; transient failures retry automatically with backoff.
 
+### Awareness
+
+Awareness is opt-in. Set a per-document presence namespace on the client, declare
+the fields the awareness state uses, then enable the bridge on the provider:
+
+```ts
+const client = createClient({
+	url: "ws://localhost:3000",
+	presenceNamespace: "doc:" + documentId,
+});
+
+const provider = new ZyncBaseYjsProvider(client, documentId, doc, {
+	awareness: { namespace: "doc:" + documentId },
+});
+
+provider.awareness?.setLocalStateField("user", { name: "Ada", color: "#3366ff" });
+provider.awareness?.setLocalStateField("cursor", { anchor: 3, head: 3 });
+```
+
+```json
+"presence": {
+	"user": {
+		"yjsClientId": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+		"cursor": {
+			"type": "object",
+			"fields": { "anchor": { "type": "integer" }, "head": { "type": "integer" } }
+		},
+		"user": {
+			"type": "object",
+			"fields": {
+				"name": { "type": "string", "maxLength": 64 },
+				"color": { "type": "string", "maxLength": 32 }
+			}
+		}
+	}
+}
+```
+
+- The provider adds the `yjsClientId` field automatically; every other local
+  state key is copied into `presence.user` unless you supply `toPresence` /
+  `fromPresence`.
+- Presence is per user, so two tabs of the same user share one awareness state
+  (last writer wins).
+- Presence scope is per connection: one awareness-enabled document per client.
+  Use another client for another document.
+- Awareness state must be JSON-representable and map to declared presence
+  fields. For cursors, store the plain object from
+  `Y.createRelativePositionFromTypeIndex`, not `Y.encodeRelativePosition`.
+- `provider.awareness` is `null` when the option is off. The provider
+  destroys the awareness instance it creates; a supplied `instance` is yours.
+
 ### First-class integration
 
 The header row is the document entity:

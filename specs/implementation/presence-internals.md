@@ -55,6 +55,7 @@ Presence is an in-memory, typed, two-tier system. User presence is keyed by reso
 - Presence field ids and dictionary shape come from schema sync; do not duplicate the integer encoding catalog here.
 - Presence writes use schema field ids and enforce types and value constraints before queueing.
 - User and shared channels are separate push streams.
+- A `null` payload value clears the field. The record stores a typed nil slot, snapshots and broadcasts carry the nil value, and readers treat it as absent. A `null` on an object field is not a field index; object fields are cleared leaf by leaf.
 
 ## Authorization
 

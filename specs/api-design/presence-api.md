@@ -87,6 +87,8 @@ await client.presence.set({ status: 'idle' })
 
 Returns a promise that resolves when the server accepts the update after authorization and schema validation. The accepted update is processed asynchronously; await the promise when the caller needs to observe acceptance.
 
+Fields are cleared by sending `null`: `presence.set({ cursor: { x: null, y: null } })` removes both cursor leaves from the record. A cleared field is delivered to subscribers as `null`; treat it as absent. Object fields must be cleared leaf by leaf (`cursor: null` is not a field id).
+
 Calling `presence.set({})` creates an empty user presence record and broadcasts a join. This lets applications use presence for connection membership without storing user fields. The record is removed on disconnect or with `presence.remove()`.
 
 > [!NOTE]

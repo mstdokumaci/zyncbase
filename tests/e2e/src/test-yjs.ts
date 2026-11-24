@@ -12,9 +12,12 @@ import { startYjsCompactor } from "@zyncbase/client/yjs/compactor";
 import * as Y from "yjs";
 
 import { FakeClient } from "../../../sdk/typescript/src/yjs/test-helpers.js";
+import { createTestJwt } from "./harness";
 
 type Row = Record<string, unknown>;
 type ProviderClient = ConstructorParameters<typeof ZyncBaseYjsProvider>[0];
+
+const AWARENESS_NAMESPACE = "yjs-awareness-room";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 10_000) {
 	const deadline = Date.now() + timeoutMs;
@@ -162,14 +165,56 @@ async function runPackageChecks(): Promise<void> {
 	}
 }
 
-export async function run(port: number): Promise<void> {
+async function runAwarenessChecks(
+	providerA: ZyncBaseYjsProvider,
+	providerB: ZyncBaseYjsProvider,
+	clientId: number,
+): Promise<void> {
+	const cursorOf = (
+		provider: ZyncBaseYjsProvider,
+	): { x?: number; y?: number } | undefined => {
+		const state = provider.awareness?.getStates().get(clientId) as
+			| { cursor?: { x?: number; y?: number } }
+			| undefined;
+		return state?.cursor;
+	};
+
+	providerA.awareness?.setLocalStateField("cursor", { x: 1, y: 2 });
+	await waitFor(() => cursorOf(providerB)?.x === 1);
+	expect(cursorOf(providerB)).toEqual({ x: 1, y: 2 });
+
+	providerA.awareness?.setLocalStateField("cursor", { x: 3, y: 4 });
+	await waitFor(() => cursorOf(providerB)?.x === 3);
+
+	providerA.awareness?.setLocalState(null);
+	await waitFor(() => !providerB.awareness?.getStates().has(clientId));
+
+	providerA.awareness?.setLocalState({ cursor: { x: 5, y: 6 } });
+	await waitFor(() => cursorOf(providerB)?.x === 5);
+}
+
+export async function run(port: number, jwtSecret: string): Promise<void> {
 	await runPackageChecks();
 
 	const url = `ws://127.0.0.1:${port}`;
-	const clientA = createClient({ url, auth: { anonymous: true } });
-	const clientB = createClient({ url, auth: { anonymous: true } });
-	const clientC = createClient({ url, auth: { anonymous: true } });
-	const clientD = createClient({ url, auth: { anonymous: true } });
+	const clientA = createClient({
+		url,
+		auth: { token: createTestJwt(jwtSecret, "yjs-a") },
+		presenceNamespace: AWARENESS_NAMESPACE,
+	});
+	const clientB = createClient({
+		url,
+		auth: { token: createTestJwt(jwtSecret, "yjs-b") },
+		presenceNamespace: AWARENESS_NAMESPACE,
+	});
+	const clientC = createClient({
+		url,
+		auth: { token: createTestJwt(jwtSecret, "yjs-c") },
+	});
+	const clientD = createClient({
+		url,
+		auth: { token: createTestJwt(jwtSecret, "yjs-d") },
+	});
 	const docA = new Y.Doc();
 	const docB = new Y.Doc();
 	const docC = new Y.Doc();
@@ -204,14 +249,18 @@ export async function run(port: number): Promise<void> {
 			connect: false,
 			chunkSize: 128,
 			pageSize: 2,
+			awareness: { namespace: AWARENESS_NAMESPACE },
 		});
 		providerB = new ZyncBaseYjsProvider(clientB, documentId, docB, {
 			connect: false,
 			chunkSize: 128,
 			pageSize: 2,
+			awareness: { namespace: AWARENESS_NAMESPACE },
 		});
 		await providerA.connect();
 		await providerB.connect();
+
+		await runAwarenessChecks(providerA, providerB, docA.clientID);
 
 		const text = "hello ".repeat(400);
 		docA.getText("content").insert(0, text);

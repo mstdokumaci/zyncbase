@@ -109,6 +109,11 @@ export class ZyncBaseClient<
 		return this.conn.schemaVersion;
 	}
 
+	/** The presence namespace configured for this connection. */
+	get presenceNamespace(): string {
+		return this.conn.getPresenceNamespace();
+	}
+
 	/**
 	 * Connect to the server. The promise resolves at `synced`, once replay has
 	 * restored subscriptions and registrations. It rejects when recovery can no

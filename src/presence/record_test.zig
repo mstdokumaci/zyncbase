@@ -182,3 +182,28 @@ test "PresenceRecord - mergeFromPayload enforces constraints" {
         try testing.expectError(error.EnumViolation, record.mergeFromPayload(allocator, fields, invalid_patch));
     }
 }
+
+test "PresenceRecord - nil value clears an existing field" {
+    const allocator = std.testing.allocator;
+    const fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, fields);
+
+    var record = try PresenceRecord.init(allocator, fields.len);
+    defer record.deinit(allocator);
+
+    var set_patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 10.0 } },
+    });
+    defer set_patch.free(allocator);
+    try record.mergeFromPayload(allocator, fields, set_patch);
+    try testing.expectEqual(.scalar, std.meta.activeTag(record.values[0].?));
+
+    var clear_patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .nil },
+    });
+    defer clear_patch.free(allocator);
+    try record.mergeFromPayload(allocator, fields, clear_patch);
+
+    try testing.expect(record.values[0] != null);
+    try testing.expectEqual(.nil, std.meta.activeTag(record.values[0].?));
+}
