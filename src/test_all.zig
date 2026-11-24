@@ -64,6 +64,7 @@ test {
     _ = @import("storage_engine/write_worker_perf_test.zig");
     _ = @import("storage_engine/read_worker_perf_test.zig");
     _ = @import("subscription/engine_test.zig");
+    _ = @import("subscription/message_cache_test.zig");
     _ = @import("subscription/predicate_trie_test.zig");
     _ = @import("subscription/engine_thread_safety_test.zig");
     _ = @import("subscription/change_queue_test.zig");

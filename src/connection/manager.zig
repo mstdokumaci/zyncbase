@@ -3,6 +3,7 @@ const std = @import("std");
 const uws_timer = @import("../uws_timer.zig");
 const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
+const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
 const ServerMetrics = @import("../observability/metrics.zig").ServerMetrics;
@@ -11,7 +12,6 @@ const Notifier = @import("../threading/notifier.zig").Notifier;
 const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const c = @import("../uwebsockets_wrapper.zig").c;
-const SendQueueEntry = @import("send_queue.zig").Entry;
 const send_queue_type = @import("send_queue.zig").send_queue;
 const Connection = @import("state.zig").Connection;
 
@@ -25,11 +25,37 @@ pub const max_pending_group_bytes: usize = 4 * 1024 * 1024;
 
 /// Per-connection drain accumulator for one drain pass.
 const Group = struct {
-    entries: std.ArrayListUnmanaged(SendQueueEntry) = .empty,
+    entries: std.ArrayListUnmanaged([]const u8) = .empty,
     bytes: usize = 0,
     dropped: usize = 0,
     over: bool = false,
 };
+
+fn appendToGroup(
+    alloc: Allocator,
+    groups: *std.AutoHashMapUnmanaged(u64, Group),
+    conn_id: u64,
+    data: []const u8,
+) void {
+    const g = groups.getOrPut(alloc, conn_id) catch {
+        std.log.warn("drainSendQueue: group alloc failed for conn {}, dropping {} byte entry", .{ conn_id, data.len });
+        return;
+    };
+    if (!g.found_existing) g.value_ptr.* = .{};
+    if (g.value_ptr.over) {
+        // Cap already crossed: drop further deliveries instead of accumulating
+        // so this pass stays bounded no matter how far behind the client is.
+        g.value_ptr.dropped += 1;
+        return;
+    }
+    g.value_ptr.entries.append(alloc, data) catch {
+        std.log.warn("drainSendQueue: group append failed for conn {}, dropping {} byte entry", .{ conn_id, data.len });
+        return;
+    };
+    g.value_ptr.bytes += data.len;
+    const lone_oversized = g.value_ptr.entries.items.len == 1 and data.len > max_pending_group_bytes;
+    if (!lone_oversized and g.value_ptr.bytes > max_pending_group_bytes) g.value_ptr.over = true;
+}
 
 /// ConnectionManager handles the lifecycle of client sessions and acts as a relay
 /// between the raw network events and the application logic (MessageHandler).
@@ -280,31 +306,29 @@ pub const ConnectionManager = struct {
         _ = self.drain_arena.reset(.retain_capacity);
         const alloc = self.drain_arena.allocator();
 
-        // Phase 1: pop all entries, group by conn_id, capped per connection
+        // Phase 1: pop all entries, group deliveries by conn_id, capped per connection.
         var groups = std.AutoHashMapUnmanaged(u64, Group).empty;
+        // One owner ref per popped queue entry. A batched entry contributes many
+        // deliveries but is released exactly once, after all sends complete.
+        var owners: std.ArrayListUnmanaged(ArenaHandle) = .empty;
+        defer {
+            for (owners.items) |owner| owner.release();
+            owners.deinit(alloc);
+        }
 
         while (send_queue.pop()) |entry| {
-            const g = groups.getOrPut(alloc, entry.conn_id) catch {
-                std.log.warn("drainSendQueue: group alloc failed for conn {}, dropping {} byte entry", .{ entry.conn_id, entry.data.len });
+            owners.append(alloc, entry.arena) catch {
+                std.log.warn("drainSendQueue: owner append failed for conn {}, dropping {} byte entry", .{ entry.conn_id, entry.data.len });
                 entry.deinit();
                 continue;
             };
-            if (!g.found_existing) g.value_ptr.* = .{};
-            if (g.value_ptr.over) {
-                // Cap already crossed: release instead of accumulating so this
-                // pass stays bounded no matter how far behind the client is.
-                g.value_ptr.dropped += 1;
-                entry.deinit();
-                continue;
+            if (entry.items) |items| {
+                for (items) |delivery| {
+                    appendToGroup(alloc, &groups, delivery.conn_id, delivery.data);
+                }
+            } else {
+                appendToGroup(alloc, &groups, entry.conn_id, entry.data);
             }
-            g.value_ptr.entries.append(alloc, entry) catch {
-                std.log.warn("drainSendQueue: group append failed for conn {}, dropping {} byte entry", .{ entry.conn_id, entry.data.len });
-                entry.deinit();
-                continue;
-            };
-            g.value_ptr.bytes += entry.data.len;
-            const lone_oversized = g.value_ptr.entries.items.len == 1 and entry.data.len > max_pending_group_bytes;
-            if (!lone_oversized and g.value_ptr.bytes > max_pending_group_bytes) g.value_ptr.over = true;
         }
 
         // Phase 2: per connection, concatenate the group into one frame and send.
@@ -316,9 +340,10 @@ pub const ConnectionManager = struct {
             // Skip empty groups
             if (group.entries.items.len == 0) continue;
 
-            const conn = self.acquireConnection(conn_id) catch {
-                // Connection gone — release all entries' arenas
-                for (group.entries.items) |e| e.deinit();
+            const conn = self.acquireConnection(conn_id) catch |err| {
+                // Connection gone — its deliveries are dropped; owners are
+                // released by the defer above.
+                std.log.debug("drainSendQueue: connection {} unavailable: {}", .{ conn_id, err });
                 continue;
             };
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
@@ -327,7 +352,6 @@ pub const ConnectionManager = struct {
                 // The client is not draining fast enough. Drop the backlog
                 // rather than writing it to a peer we are about to close: the
                 // close is terminal and reconnect resubscribes from scratch.
-                for (group.entries.items) |e| e.deinit();
                 std.log.warn("Connection {}: send backlog exceeded {} bytes ({} entries held, {} dropped), closing", .{
                     conn_id,
                     max_pending_group_bytes,
@@ -515,30 +539,27 @@ fn sendDisconnectAndEnd(ws: *WebSocket, allocator: Allocator, code: []const u8, 
 /// allocated (graceful degradation). Deinits every entry after sending —
 /// uWS copies the payload into its send buffer synchronously, so the concat
 /// buffer (drain arena) may be reset on the next drain pass.
-fn sendConcatenatedOrClose(conn: *Connection, entries: []const SendQueueEntry, alloc: Allocator, message_handler: *MessageHandler, metrics: ?*ServerMetrics) void {
+fn sendConcatenatedOrClose(conn: *Connection, entries: []const []const u8, alloc: Allocator, message_handler: *MessageHandler, metrics: ?*ServerMetrics) void {
     if (entries.len == 1) {
-        ConnectionManager.sendOrClose(conn, entries[0].data, message_handler, metrics, 1);
-        entries[0].deinit();
+        ConnectionManager.sendOrClose(conn, entries[0], message_handler, metrics, 1);
         return;
     }
 
     var total: usize = 0;
-    for (entries) |e| total += e.data.len;
+    for (entries) |e| total += e.len;
 
     const buf = alloc.alloc(u8, total) catch {
         for (entries) |e| {
-            ConnectionManager.sendOrClose(conn, e.data, message_handler, metrics, 1);
-            e.deinit();
+            ConnectionManager.sendOrClose(conn, e, message_handler, metrics, 1);
         }
         return;
     };
 
     var offset: usize = 0;
     for (entries) |e| {
-        @memcpy(buf[offset .. offset + e.data.len], e.data);
-        offset += e.data.len;
+        @memcpy(buf[offset .. offset + e.len], e);
+        offset += e.len;
     }
 
     ConnectionManager.sendOrClose(conn, buf, message_handler, metrics, @intCast(entries.len));
-    for (entries) |e| e.deinit();
 }

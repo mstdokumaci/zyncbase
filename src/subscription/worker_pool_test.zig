@@ -122,8 +122,11 @@ test "SubscriptionWorkerPool: matching change is processed and pushed to send_qu
     // Verify notifier was called
     try testing.expect(ctx.notifier_called.load(.monotonic) > 0);
 
-    // Drain and release the send_queue entry (subscription entries are arena-held).
+    // Drain and release the batched send_queue entry.
     if (ctx.send_queue.pop()) |entry| {
+        const items = entry.items orelse return error.TestExpectedValue;
+        try testing.expectEqual(@as(usize, 1), items.len);
+        try testing.expectEqual(conn_id, items[0].conn_id);
         entry.deinit();
     }
 }

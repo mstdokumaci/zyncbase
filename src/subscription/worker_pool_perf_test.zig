@@ -146,7 +146,13 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         var unique_messages: std.AutoHashMapUnmanaged(usize, void) = .empty;
         defer unique_messages.deinit(allocator);
         while (ctx.send_queue.pop()) |entry| {
-            try unique_messages.put(allocator, @intFromPtr(entry.data.ptr), {});
+            if (entry.items) |items| {
+                for (items) |delivery| {
+                    try unique_messages.put(allocator, @intFromPtr(delivery.data.ptr), {});
+                }
+            } else {
+                try unique_messages.put(allocator, @intFromPtr(entry.data.ptr), {});
+            }
             entry.deinit();
         }
         try testing.expectEqual(@as(u32, subs_per_group), unique_messages.count());

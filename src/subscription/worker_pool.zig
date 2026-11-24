@@ -5,6 +5,7 @@ const schema_system = @import("../schema/system.zig");
 const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
 const wire_encode = @import("../wire/encode.zig");
+const Delivery = @import("../connection/send_queue.zig").Delivery;
 const send_queue_type = @import("../connection/send_queue.zig").send_queue;
 const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
@@ -16,6 +17,7 @@ const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
 const RecordChange = @import("engine.zig").RecordChange;
 const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
+const MessageCache = @import("message_cache.zig").MessageCache;
 
 const Allocator = std.mem.Allocator;
 const Payload = msgpack.Payload;
@@ -200,25 +202,24 @@ pub const SubscriptionWorker = struct {
         remove_suffix: ?[]const u8,
         handle: ArenaHandle,
     ) void {
-        const MessageKey = struct {
-            subscription_id: u64,
-            op: MatchOp,
-        };
-
         const alloc = handle.allocator();
         var out = std.Io.Writer.Allocating.init(alloc);
         defer out.deinit();
-        var messages: std.AutoHashMapUnmanaged(MessageKey, []const u8) = .empty;
-        defer messages.deinit(alloc);
-        var pushed_any = false;
+        var messages: MessageCache = .{};
+
+        const items = alloc.alloc(Delivery, matches.len) catch |err| {
+            std.log.err("SubscriptionWorker failed to allocate delivery batch: {}", .{err});
+            handle.release();
+            return;
+        };
+        var count: usize = 0;
 
         for (matches) |match| {
             const suffix = switch (match.op) {
                 MatchOp.set_op => set_suffix orelse continue,
                 MatchOp.remove => remove_suffix orelse continue,
             };
-            const key = MessageKey{ .subscription_id = match.subscription_id, .op = match.op };
-            const owned_msg = messages.get(key) orelse message: {
+            const owned_msg = messages.get(match.subscription_id, match.op) orelse message: {
                 out.clearRetainingCapacity();
                 const writer = &out.writer;
 
@@ -239,29 +240,41 @@ pub const SubscriptionWorker = struct {
                     std.log.err("SubscriptionWorker failed to dupe encoded delta: {}", .{err});
                     continue;
                 };
-                messages.put(alloc, key, msg) catch |err| {
-                    std.log.warn("SubscriptionWorker failed to cache encoded delta: {}", .{err});
-                };
+                messages.put(match.subscription_id, match.op, msg);
                 break :message msg;
             };
 
-            // Reserve a ref for this entry BEFORE pushing so the consumer can never
-            // observe the refcount dropping to zero before the entry is visible.
-            handle.retain();
-            self.send_queue.push(.{ .conn_id = match.connection_id, .data = owned_msg, .arena = handle }) catch |err| {
-                std.log.err("SubscriptionWorker failed to push to SendQueue: {}", .{err});
-                handle.release();
-                continue;
+            items[count] = .{
+                .conn_id = match.connection_id,
+                .data = owned_msg,
             };
-            pushed_any = true;
+            count += 1;
         }
 
-        if (pushed_any) {
-            self.notifier.notify();
+        if (count == 0) {
+            handle.release();
+            return;
         }
 
-        // Drop the producer hold. If the consumer has already drained every entry,
-        // this releases the arena now; otherwise the consumer's final pop does.
+        // One queue entry and one arena reference for the whole change. The
+        // queue owns a second ref while the batch is visible; the consumer
+        // releases that ref once after all deliveries are sent.
+        handle.retain();
+        self.send_queue.push(.{
+            .conn_id = 0,
+            .data = &.{},
+            .items = items[0..count],
+            .arena = handle,
+        }) catch |err| {
+            std.log.err("SubscriptionWorker failed to push to SendQueue: {}", .{err});
+            handle.release();
+            handle.release();
+            return;
+        };
+        self.notifier.notify();
+
+        // Drop the producer hold. If the consumer has already drained the batch,
+        // this releases the arena now; otherwise the consumer's final release does.
         handle.release();
     }
 };

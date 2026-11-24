@@ -102,6 +102,24 @@ fn integer(payload: msgpack.Payload) !u64 {
     };
 }
 
+fn countDelta(
+    allocator: std.mem.Allocator,
+    data: []const u8,
+    fixture: *const Fixture,
+    deltas: *std.AutoHashMapUnmanaged(u64, u32),
+) !void {
+    var reader: std.Io.Reader = .fixed(data);
+    const message = try msgpack.decode(allocator, &reader);
+    defer message.free(allocator);
+    const delta = switch (message) {
+        .arr => |items| items,
+        else => return error.TestUnexpectedResult,
+    };
+    const record_id = try integer(delta[4].arr[fixture.val_index]);
+    const gop = try deltas.getOrPut(allocator, record_id);
+    gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.* + 1 else 1;
+}
+
 /// Pops the queue and checks that every write's deltas precede its outcome.
 /// Returns the number of outcomes seen.
 fn expectDeltasBeforeOutcomes(allocator: std.mem.Allocator, fixture: *Fixture, subscribed: bool) !usize {
@@ -110,15 +128,21 @@ fn expectDeltasBeforeOutcomes(allocator: std.mem.Allocator, fixture: *Fixture, s
     var outcomes: usize = 0;
     while (fixture.send_queue.pop()) |entry| {
         defer entry.deinit();
+        if (entry.items) |items| {
+            for (items) |delivery| {
+                try testing.expectEqual(conn_id, delivery.conn_id);
+                try countDelta(allocator, delivery.data, fixture, &deltas);
+            }
+            continue;
+        }
         try testing.expectEqual(conn_id, entry.conn_id);
         var reader: std.Io.Reader = .fixed(entry.data);
         const message = try msgpack.decode(allocator, &reader);
         defer message.free(allocator);
         switch (message) {
             // [StoreDelta, subId, op, table, record]
-            .arr => |delta| {
-                const gop = try deltas.getOrPut(allocator, try integer(delta[4].arr[fixture.val_index]));
-                gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.* + 1 else 1;
+            .arr => {
+                try countDelta(allocator, entry.data, fixture, &deltas);
             },
             .map => {
                 const message_type = (try message.mapGet("type")) orelse return error.TestUnexpectedResult;
