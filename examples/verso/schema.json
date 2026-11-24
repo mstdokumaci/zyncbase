@@ -1,0 +1,214 @@
+{
+	"version": "0.1.1",
+	"store": {
+		"pages": {
+			"required": ["compaction_version", "title", "position"],
+			"unique": [["slug"]],
+			"fields": {
+				"slug": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 120
+				},
+				"compaction_version": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"current_snapshot_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 64
+				},
+				"compacted_through": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"title": {
+					"type": "string",
+					"maxLength": 120
+				},
+				"icon": {
+					"type": "string",
+					"maxLength": 8
+				},
+				"parent_id": {
+					"type": "string",
+					"references": "pages",
+					"onDelete": "cascade",
+					"indexed": true
+				},
+				"position": {
+					"type": "number"
+				},
+				"seeded": {
+					"type": "boolean"
+				}
+			}
+		},
+		"page_snapshots": {
+			"required": [
+				"document_id",
+				"snapshot_id",
+				"compaction_version",
+				"part",
+				"parts"
+			],
+			"unique": [["snapshot_id", "part"]],
+			"fields": {
+				"document_id": {
+					"type": "string",
+					"references": "pages",
+					"onDelete": "cascade",
+					"indexed": true
+				},
+				"snapshot_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 64
+				},
+				"compaction_version": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"part": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"parts": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"committed": {
+					"type": "boolean"
+				},
+				"data": {
+					"type": "bytes"
+				}
+			}
+		},
+		"page_changes": {
+			"required": ["document_id", "update_id", "part", "parts"],
+			"unique": [["update_id", "part"]],
+			"fields": {
+				"document_id": {
+					"type": "string",
+					"references": "pages",
+					"onDelete": "cascade",
+					"indexed": true
+				},
+				"update_id": {
+					"type": "string",
+					"minLength": 1,
+					"maxLength": 64
+				},
+				"part": {
+					"type": "integer",
+					"minimum": 0
+				},
+				"parts": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"committed": {
+					"type": "boolean"
+				},
+				"data": {
+					"type": "bytes"
+				}
+			}
+		}
+	},
+	"presence": {
+		"user": {
+			"yjsClientId": {
+				"type": "integer",
+				"minimum": 0,
+				"maximum": 4294967295
+			},
+			"cursor": {
+				"type": "object",
+				"fields": {
+					"anchor": {
+						"type": "object",
+						"fields": {
+							"type": {
+								"type": "object",
+								"fields": {
+									"client": {
+										"type": "integer"
+									},
+									"clock": {
+										"type": "integer"
+									}
+								}
+							},
+							"tname": {
+								"type": "string"
+							},
+							"item": {
+								"type": "object",
+								"fields": {
+									"client": {
+										"type": "integer"
+									},
+									"clock": {
+										"type": "integer"
+									}
+								}
+							},
+							"assoc": {
+								"type": "integer"
+							}
+						}
+					},
+					"head": {
+						"type": "object",
+						"fields": {
+							"type": {
+								"type": "object",
+								"fields": {
+									"client": {
+										"type": "integer"
+									},
+									"clock": {
+										"type": "integer"
+									}
+								}
+							},
+							"tname": {
+								"type": "string"
+							},
+							"item": {
+								"type": "object",
+								"fields": {
+									"client": {
+										"type": "integer"
+									},
+									"clock": {
+										"type": "integer"
+									}
+								}
+							},
+							"assoc": {
+								"type": "integer"
+							}
+						}
+					}
+				}
+			},
+			"user": {
+				"type": "object",
+				"fields": {
+					"name": {
+						"type": "string",
+						"maxLength": 64
+					},
+					"color": {
+						"type": "string",
+						"maxLength": 32
+					}
+				}
+			}
+		}
+	}
+}
