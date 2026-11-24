@@ -28,7 +28,7 @@ export interface VersoServerOptions {
 	port?: number;
 	databasePort?: number;
 	host?: string;
-	origin?: string;
+	origins?: readonly string[];
 	dataDir?: string;
 	serverBin?: string;
 	quiet?: boolean;
@@ -84,6 +84,14 @@ export function subjectForEmail(email: string): string {
 
 export function normalizeEmail(value: string): string {
 	return value.trim().toLowerCase();
+}
+
+/** Comma-separated origins; the first one is also the URL base. */
+export function parseOrigins(value: string | undefined): string[] {
+	return (value ?? "")
+		.split(",")
+		.map((entry) => entry.trim())
+		.filter((entry) => entry.length > 0);
 }
 
 async function waitForDatabase(port: number, deadline: number): Promise<void> {
@@ -143,7 +151,9 @@ export async function startVersoServer(
 	const port = options.port ?? DEFAULT_PORT;
 	const databasePort = options.databasePort ?? DEFAULT_DATABASE_PORT;
 	const host = options.host ?? "127.0.0.1";
-	const origin = options.origin ?? DEFAULT_ORIGIN;
+	const configured = options.origins ?? parseOrigins(process.env.VERSO_ORIGINS);
+	const origins = configured.length > 0 ? [...configured] : [DEFAULT_ORIGIN];
+	const origin = origins[0] ?? DEFAULT_ORIGIN;
 	const dataDir = resolve(options.dataDir ?? join(ROOT, "data/verso"));
 	const serverBin =
 		options.serverBin ??
@@ -183,7 +193,7 @@ export async function startVersoServer(
 				},
 			},
 			security: {
-				allowedOrigins: [origin],
+				allowedOrigins: origins,
 				allowLocalhost: true,
 				maxConnections: 256,
 				maxMessagesPerSecond: 2000,
@@ -230,7 +240,7 @@ export async function startVersoServer(
 			const path = new URL(req.url ?? "/", origin).pathname;
 			res.setHeader("X-Content-Type-Options", "nosniff");
 			res.setHeader("Referrer-Policy", "no-referrer");
-			if (req.headers.origin && req.headers.origin !== origin) {
+			if (req.headers.origin && !origins.includes(req.headers.origin)) {
 				return reply(res, 403, { error: "Origin is not allowed" });
 			}
 			if (path === "/health") {
@@ -307,7 +317,6 @@ if (import.meta.main) {
 	const handle = await startVersoServer({
 		port: Number(process.env.VERSO_PORT ?? DEFAULT_PORT),
 		databasePort: Number(process.env.VERSO_DB_PORT ?? DEFAULT_DATABASE_PORT),
-		origin: process.env.VERSO_ORIGIN ?? DEFAULT_ORIGIN,
 		dataDir: process.env.VERSO_DATA_DIR,
 	});
 	console.log(

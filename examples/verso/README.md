@@ -11,6 +11,23 @@ bun run demo:verso:dev --reset
 bun run test:verso
 ```
 
+To open the demo from another machine on your network:
+
+```sh
+LAN_IP=$(ipconfig getifaddr en0)   # your LAN address; `ip -4 addr` on Linux
+VERSO_HOST=0.0.0.0 \
+VERSO_ORIGINS="http://localhost:8080,http://$LAN_IP:8080" \
+  bun run demo:verso:dev
+```
+
+`VERSO_HOST` is the interface the edge binds; it defaults to `127.0.0.1`, so
+nothing is exposed unless you ask. `VERSO_ORIGINS` is an exact-match,
+comma-separated allowlist; it feeds both the app server's `Origin` check and
+ZyncBase's `allowedOrigins`. Only the edge listens on the network: the app
+server and ZyncBase stay on loopback and are reached through its `/auth/ticket`
+and `/ws` proxies. macOS asks for incoming-connection permission the first time.
+Identity is claimed, so anyone who can reach the URL can edit every page.
+
 The demo uses one workspace (`verso:main`) and one claimed identity per browser
 tab: open a second window, enter a different email, and you are a second person
 with your own caret. Same email in two tabs is the same person, and the two

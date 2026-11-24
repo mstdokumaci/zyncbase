@@ -63,6 +63,7 @@ function proxyHttp(
 
 async function startEdge(options: {
 	port: number;
+	host: string;
 	appPort: number;
 	databasePort: number;
 	assets: string;
@@ -129,7 +130,7 @@ async function startEdge(options: {
 
 	await new Promise<void>((resolveListen, reject) => {
 		server.once("error", reject);
-		server.listen(options.port, "127.0.0.1", resolveListen);
+		server.listen(options.port, options.host, resolveListen);
 	});
 
 	return {
@@ -164,7 +165,11 @@ if (import.meta.main) {
 	const devPort = Number(process.env.VERSO_DEV_PORT ?? 8080);
 	const appPort = Number(process.env.VERSO_PORT ?? 8081);
 	const databasePort = Number(process.env.VERSO_DB_PORT ?? 3001);
-	const origin = `http://localhost:${devPort}`;
+	const host = process.env.VERSO_HOST ?? "127.0.0.1";
+	const origins = (process.env.VERSO_ORIGINS ?? `http://localhost:${devPort}`)
+		.split(",")
+		.map((value) => value.trim())
+		.filter((value) => value.length > 0);
 	const dataDir = resolve(
 		process.env.VERSO_DATA_DIR ?? join(ROOT, "data/verso"),
 	);
@@ -178,7 +183,7 @@ if (import.meta.main) {
 			...process.env,
 			VERSO_PORT: String(appPort),
 			VERSO_DB_PORT: String(databasePort),
-			VERSO_ORIGIN: origin,
+			VERSO_ORIGINS: origins.join(","),
 			VERSO_DATA_DIR: dataDir,
 		},
 		cwd: ROOT,
@@ -204,11 +209,12 @@ if (import.meta.main) {
 		await waitForHealth(appPort, app);
 		edge = await startEdge({
 			port: devPort,
+			host,
 			appPort,
 			databasePort,
 			assets,
 		});
-		console.log(`Verso on ${origin}`);
+		console.log(`Verso on ${origins.join(", ")}`);
 	} catch (error) {
 		console.error("Verso failed to start:", error);
 		await stop(1);

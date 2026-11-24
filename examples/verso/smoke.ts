@@ -92,15 +92,33 @@ async function createPage(
 }
 
 const dataDir = await mkdtemp(join(tmpdir(), "verso-smoke-"));
+const appPort = await freePort();
+const localOrigin = `http://localhost:${appPort}`;
+const secondOrigin = `http://second-origin.test:${appPort}`;
 const server = await startVersoServer({
-	port: await freePort(),
+	port: appPort,
 	databasePort: await freePort(),
+	origins: [localOrigin, secondOrigin],
 	dataDir,
 	quiet: true,
 	compactorIntervalMs: 500,
 });
 
 try {
+	// Only the configured origins may mint a session.
+	const forged = await fetch(`http://127.0.0.1:${server.port}/session`, {
+		method: "POST",
+		headers: { "content-type": "application/json", origin: "http://evil.test" },
+		body: JSON.stringify({ email: "ada@verso.test" }),
+	});
+	assert.equal(forged.status, 403);
+	const allowed = await fetch(`http://127.0.0.1:${server.port}/session`, {
+		method: "POST",
+		headers: { "content-type": "application/json", origin: secondOrigin },
+		body: JSON.stringify({ email: "ada@verso.test" }),
+	});
+	assert.equal(allowed.status, 200);
+
 	const ada = await session(server.port, "ada@verso.test");
 	const grace = await session(server.port, "grace@verso.test");
 	const a = clientFor(server.databasePort, ada.token);
