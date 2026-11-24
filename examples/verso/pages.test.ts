@@ -7,7 +7,7 @@ import {
 import { assembleChanges } from "./history-data";
 import {
 	buildTree,
-	movePosition,
+	moveChanges,
 	positionAtEnd,
 	positionBetween,
 	siblingsOf,
@@ -82,23 +82,54 @@ describe("page tree", () => {
 	});
 });
 
-describe("movePosition", () => {
+describe("moveChanges", () => {
 	const siblings = [page("a", 1000), page("b", 2000), page("c", 3000)];
 
-	test("moves one slot in either direction", () => {
-		expect(movePosition(siblings, 2, -1)).toBe(1500);
-		expect(movePosition(siblings, 0, 1)).toBe(2500);
+	const apply = (
+		rows: readonly ReturnType<typeof page>[],
+		changes: readonly { id: string; position: number }[],
+	) =>
+		rows
+			.map((row) => {
+				const change = changes.find((entry) => entry.id === row.id);
+				return change ? { ...row, position: change.position } : row;
+			})
+			.sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))
+			.map((row) => row.id);
+
+	test("moves one slot in either direction with a single write", () => {
+		const up = moveChanges(siblings, 2, -1);
+		expect(up).toEqual([{ id: "c", position: 1500 }]);
+		expect(apply(siblings, up ?? [])).toEqual(["a", "c", "b"]);
+
+		const down = moveChanges(siblings, 0, 1);
+		expect(down).toEqual([{ id: "a", position: 2500 }]);
+		expect(apply(siblings, down ?? [])).toEqual(["b", "a", "c"]);
 	});
 
-	test("moving into the first or last slot sorts beyond it", () => {
-		expect(movePosition(siblings, 1, -1)).toBe(0);
-		expect(movePosition(siblings, 1, 1)).toBe(4000);
+	test("tied siblings are renumbered in the requested order", () => {
+		const tied = [page("a", 1000), page("b", 1000), page("c", 1000)];
+
+		const down = moveChanges(tied, 0, 1);
+		expect(down?.map((change) => change.id)).toEqual(["b", "a", "c"]);
+		expect(apply(tied, down ?? [])).toEqual(["b", "a", "c"]);
+		expect(new Set(down?.map((change) => change.position)).size).toBe(3);
+
+		const up = moveChanges(tied, 2, -1);
+		expect(apply(tied, up ?? [])).toEqual(["a", "c", "b"]);
+	});
+
+	test("a tie at one neighbour renumbers too", () => {
+		const rows = [page("a", 1000), page("b", 2000), page("c", 2000)];
+		const down = moveChanges(rows, 0, 1);
+		expect(down).toHaveLength(3);
+		expect(apply(rows, down ?? [])).toEqual(["b", "a", "c"]);
 	});
 
 	test("the edges have nowhere to go", () => {
-		expect(movePosition(siblings, 0, -1)).toBeNull();
-		expect(movePosition(siblings, 2, 1)).toBeNull();
-		expect(movePosition(siblings, -1, 1)).toBeNull();
+		expect(moveChanges(siblings, 0, -1)).toBeNull();
+		expect(moveChanges(siblings, 2, 1)).toBeNull();
+		expect(moveChanges(siblings, -1, 1)).toBeNull();
 	});
 });
 

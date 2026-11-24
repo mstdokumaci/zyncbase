@@ -10,11 +10,12 @@ import {
 	buildTree,
 	createPage,
 	deletePage,
+	moveChanges,
 	movePage,
-	movePosition,
 	type PageNode,
 	positionAtEnd,
 	positionBetween,
+	reorderPages,
 	siblingsOf,
 } from "./pages";
 import type { VersoSession } from "./session";
@@ -108,9 +109,9 @@ function WorkspaceView({
 		async (page: PageRow, direction: -1 | 1) => {
 			const siblings = siblingsOf(rows, page.parent_id);
 			const index = siblings.findIndex((row) => row.id === page.id);
-			const position = movePosition(siblings, index, direction);
-			if (position === null) return;
-			await movePage(client, page.id, position, page.parent_id);
+			const changes = moveChanges(siblings, index, direction);
+			if (!changes) return;
+			await reorderPages(client, changes);
 		},
 		[client, rows],
 	);

@@ -5,6 +5,11 @@ export interface PageNode {
 	children: PageNode[];
 }
 
+/** Sidebar order: position first, id as the stable tie-break. */
+function compareSiblings(a: PageRow, b: PageRow): number {
+	return a.position - b.position || a.id.localeCompare(b.id);
+}
+
 /** Builds the sidebar tree. Rows without a present parent are roots. */
 export function buildTree(rows: readonly PageRow[]): PageNode[] {
 	const nodes = new Map<string, PageNode>();
@@ -19,10 +24,7 @@ export function buildTree(rows: readonly PageRow[]): PageNode[] {
 		else roots.push(node);
 	}
 	const sort = (list: PageNode[]) => {
-		list.sort(
-			(a, b) =>
-				a.page.position - b.page.position || a.page.id.localeCompare(b.page.id),
-		);
+		list.sort((a, b) => compareSiblings(a.page, b.page));
 		for (const node of list) sort(node.children);
 	};
 	sort(roots);
@@ -42,22 +44,60 @@ export function siblingsOf(
 				row.parent_id && known.has(row.parent_id) ? row.parent_id : undefined;
 			return parent === target;
 		})
-		.sort((a, b) => a.position - b.position || a.id.localeCompare(b.id));
+		.sort(compareSiblings);
 }
 
-/** The position a page needs to move one slot, or null at the edge. */
-export function movePosition(
+export interface PositionChange {
+	id: string;
+	position: number;
+}
+
+const POSITION_STEP = 1000;
+
+/**
+ * The writes that move one page a slot. A midpoint is enough when the
+ * neighbours are separated; when their positions tie, the midpoint cannot
+ * order the row, so every sibling is renumbered in the requested order.
+ */
+export function moveChanges(
 	siblings: readonly PageRow[],
 	index: number,
 	direction: -1 | 1,
-): number | null {
-	if (index < 0) return null;
-	if (direction < 0) {
-		if (index === 0) return null;
-		return positionBetween(siblings[index - 2], siblings[index - 1]);
+): PositionChange[] | null {
+	const moved = siblings[index];
+	if (!moved) return null;
+	const insertAt = index + direction;
+	if (insertAt < 0 || insertAt >= siblings.length) return null;
+
+	const rest = siblings.filter((_, current) => current !== index);
+	const position = positionBetween(rest[insertAt - 1], rest[insertAt]);
+	const reordered = [
+		...rest.slice(0, insertAt),
+		{ ...moved, position },
+		...rest.slice(insertAt),
+	];
+	const sorted = [...reordered].sort(compareSiblings);
+	if (sorted[insertAt]?.id === moved.id) {
+		return [{ id: moved.id, position }];
 	}
-	if (index >= siblings.length - 1) return null;
-	return positionBetween(siblings[index + 1], siblings[index + 2]);
+	return reordered.map((row, slot) => ({
+		id: row.id,
+		position: (slot + 1) * POSITION_STEP,
+	}));
+}
+
+/** Applies a reorder atomically; a renumber must never land half-done. */
+export function reorderPages(
+	client: AppClient,
+	changes: readonly PositionChange[],
+): Promise<void> {
+	return client.store.batch(
+		changes.map((change) => ({
+			op: "set" as const,
+			path: ["pages", change.id, "position"],
+			value: change.position,
+		})),
+	);
 }
 
 /** A position that sorts after every sibling. */
