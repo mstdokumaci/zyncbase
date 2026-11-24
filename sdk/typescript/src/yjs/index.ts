@@ -1,3 +1,4 @@
+export type { ZyncBaseYjsAwarenessOptions } from "./awareness.js";
 export type {
 	YjsProviderStatus,
 	ZyncBaseYjsProviderEvents,

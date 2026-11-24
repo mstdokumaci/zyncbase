@@ -1,6 +1,6 @@
 # Yjs Provider
 
-**Source files**: `sdk/typescript/src/yjs/{provider,storage,index}.ts`
+**Source files**: `sdk/typescript/src/yjs/{provider,storage,awareness,index}.ts`
 
 The Yjs provider persists a `Y.Doc` in ZyncBase. Yjs updates are stored as
 append-only rows, and a separate compactor folds them into chunked snapshots.
@@ -140,6 +140,61 @@ with bytes still queued. The bytes remain buffered and the reconnect path
 resumes draining. The post-drain reschedule requires a connected client and no
 active write block, so an offline drain cannot spin.
 
+## Awareness
+
+Awareness is opt-in through the provider's `awareness` option. It maps a
+`Y.Doc`-scoped `Awareness` instance onto the connection's `presence.user`
+record; awareness state is ephemeral and never touches SQLite.
+
+```ts
+const provider = new ZyncBaseYjsProvider(client, documentId, doc, {
+  awareness: { namespace: "doc:123" },
+});
+provider.awareness?.setLocalStateField("cursor", { anchor: 3, head: 3 });
+```
+
+`awareness.namespace` is required and must equal `client.presenceNamespace`.
+Presence scope is per connection, so one client bridges one document; another
+document needs another client (with another presence namespace). The provider
+creates the `Awareness` instance unless `instance` is supplied, and destroys
+only the instance it owns.
+
+**Field mapping.** The provider writes `yjsClientId` (the awareness client id)
+and, by default, copies every other local state key into `presence.user`. The
+presence schema must therefore declare an integer `yjsClientId` field plus every
+awareness key the app publishes (for example `cursor` and `user` object fields
+with their own sub-fields). `toPresence` and `fromPresence` override the
+mapping; `toPresence` returns the complete desired presence state, not a partial
+patch. Removed keys are sent as leaf `null`s; the client id is cleared when
+the local state becomes `null`. The SDK README carries a complete copy-paste
+schema example.
+
+**Synchronization.**
+
+- A local awareness update (`origin === "local"`) sends the full mapped
+  top-level fields. Presence broadcasts are sparse and the SDK merges them
+  shallowly, so nested objects are always sent whole.
+- A presence subscription snapshot is the remote source of truth. Each entry
+  with a valid client id is applied as an awareness state with a fabricated
+  clock (the receiver's clock + 1); entries missing from the snapshot and
+  entries without a client id are removed. Unchanged states only refresh the
+  awareness `lastUpdated` timestamp so the 30 s timeout does not drop them.
+- The awareness heartbeat (local renewal every 15 s) is the presence heartbeat;
+  no additional timer exists.
+- `stop()` clears the fields this bridge published, removes remote states and
+  unsubscribes. Transport loss pauses the bridge; reconnect republishes the
+  local state and reconciles the fresh snapshot.
+- Presence failures are reported through the client's `error` event and do not
+  fail document sync.
+- Only one awareness-enabled provider may be active per client.
+
+**Limits.** Presence is keyed by user: two tabs of the same user collapse to one
+awareness state and the last writer wins. Awareness state must be
+JSON-representable and map to declared presence fields; arrays and bytes are not
+presence field types. Store the plain object from
+`Y.createRelativePositionFromTypeIndex`, not the `Uint8Array` from
+`Y.encodeRelativePosition`.
+
 ## Sizing
 
 | Option | Default | Server limit |
@@ -170,9 +225,14 @@ large chunks risk `MESSAGE_TOO_LARGE` and reduce headroom for row overhead.
 - `sdk/typescript/src/yjs/provider.test.ts`: lifecycle, snapshot and history
   paging, snapshot plus retained updates, a chunked update straddling the
   compaction watermark, multi-part commit gating, write retry/chunking, header
-  re-read race, reconnect snapshot reload, connection isolation.
+  re-read race, reconnect snapshot reload, connection isolation, and the
+  opt-in awareness lifecycle.
+- `sdk/typescript/src/yjs/awareness.test.ts`: local mapping and leaf clearing,
+  remote state application and removal, timeout refresh, namespace guard, and
+  one-bridge-per-client.
 - `tests/e2e/src/test-yjs.ts`: real-server cross-client sync, forced chunking,
   seeded snapshot recovery, slug lookup, system fields, and cascade delete.
   It also imports the emitted package and checks shared `ZyncBaseError`
   identity, retryable/oversized-error recognition across entry points, and
-  `yjs` remaining external.
+  `yjs` remaining external. Awareness sync, update, clear, and rejoin run
+  against the real server.

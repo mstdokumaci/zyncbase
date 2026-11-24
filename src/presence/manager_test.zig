@@ -37,6 +37,38 @@ test "PresenceManager - setUser creates record and queues pending update" {
     try testing.expectEqual(@as(i64, 1), manager.pending_user_updates.items[0].namespace_id);
 }
 
+test "PresenceManager - nil patch clears a user field in the snapshot" {
+    const allocator = std.testing.allocator;
+    const user_fields = try makeTestUserFields(allocator);
+    defer freeTestFields(allocator, user_fields);
+    const shared_fields = try makeTestSharedFields(allocator);
+    defer freeTestFields(allocator, shared_fields);
+
+    var manager: PresenceManager = undefined;
+    manager.init(testing.io, allocator, user_fields, shared_fields);
+    defer manager.deinit();
+
+    const user_id = zeroDocId;
+    var set_patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .{ .float = 100.0 } },
+    });
+    defer set_patch.free(allocator);
+    try manager.setUser(1, user_id, 1, set_patch);
+
+    var clear_patch = try makePresencePatch(allocator, &.{
+        .{ .idx = 0, .value = .nil },
+    });
+    defer clear_patch.free(allocator);
+    try manager.setUser(1, user_id, 1, clear_patch);
+
+    var snapshot = try manager.onSubscribeUser(1, 100, 1);
+    defer snapshot.deinit(allocator);
+    try testing.expectEqual(@as(usize, 1), snapshot.users.items.len);
+    const value = snapshot.users.items[0].data.values[0];
+    try testing.expect(value != null);
+    try testing.expectEqual(.nil, std.meta.activeTag(value.?));
+}
+
 test "PresenceManager - setShared creates record and queues pending update" {
     const allocator = std.heap.smp_allocator;
     const user_fields = try makeTestUserFields(allocator);

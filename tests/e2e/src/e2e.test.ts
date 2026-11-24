@@ -258,10 +258,11 @@ describe("ZyncBase E2E", () => {
 					dataDir: ctx.dataPath("yjs"),
 					configName: "zyncbase-config-yjs.json",
 					authPath: ctx.schemaPath("auth-allow-all.json"),
+					jwtSecret: PRESENCE_E2E_JWT_SECRET,
 					maxMessagesPerSecond: 10_000,
 				},
 				async ({ port }) => {
-					await runYjs(port);
+					await runYjs(port, PRESENCE_E2E_JWT_SECRET);
 				},
 			);
 		});

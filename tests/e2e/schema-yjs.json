@@ -68,5 +68,17 @@
 				"title": { "type": "string", "maxLength": 200 }
 			}
 		}
+	},
+	"presence": {
+		"user": {
+			"yjsClientId": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+			"cursor": {
+				"type": "object",
+				"fields": {
+					"x": { "type": "number" },
+					"y": { "type": "number" }
+				}
+			}
+		}
 	}
 }

@@ -980,3 +980,73 @@ describe("ZyncBaseYjsProvider reconnect", () => {
 		provider.destroy();
 	});
 });
+
+describe("ZyncBaseYjsProvider awareness", () => {
+	test("is disabled by default", () => {
+		const client = new FakeClient();
+		const doc = new Y.Doc();
+		const provider = makeProvider(client, doc);
+
+		expect(provider.awareness).toBeNull();
+		expect(client.presence.setCalls).toHaveLength(0);
+
+		provider.destroy();
+		doc.destroy();
+	});
+
+	test("publishes the local awareness state when enabled", async () => {
+		const client = new FakeClient();
+		client.presenceNamespace = "doc-1";
+		seedHeader(client);
+		const doc = new Y.Doc();
+		const provider = new ZyncBaseYjsProvider(asClient(client), DOC_ID, doc, {
+			connect: false,
+			awareness: { namespace: "doc-1" },
+		});
+		expect(provider.awareness).not.toBeNull();
+		provider.awareness?.setLocalStateField("cursor", { x: 1, y: 2 });
+
+		await provider.connect();
+		expect(client.presence.setCalls.at(-1)).toMatchObject({
+			cursor: { x: 1, y: 2 },
+			yjsClientId: doc.clientID,
+		});
+
+		provider.destroy();
+		doc.destroy();
+	});
+
+	test("rejects a presence namespace that does not match", () => {
+		const client = new FakeClient();
+		const doc = new Y.Doc();
+		expect(
+			() =>
+				new ZyncBaseYjsProvider(asClient(client), DOC_ID, doc, {
+					connect: false,
+					awareness: { namespace: "doc-1" },
+				}),
+		).toThrow(/does not match/);
+		doc.destroy();
+	});
+
+	test("stops awareness when a resync finds the document deleted", async () => {
+		const client = new FakeClient();
+		client.presenceNamespace = "doc-1";
+		seedHeader(client);
+		const doc = new Y.Doc();
+		const provider = new ZyncBaseYjsProvider(asClient(client), DOC_ID, doc, {
+			connect: false,
+			awareness: { namespace: "doc-1" },
+		});
+		await provider.connect();
+		expect(client.presence.subscribers).toBe(1);
+
+		client.store.delete(DOCUMENTS, DOC_ID);
+		client.emit("synced");
+		await waitFor(() => provider.status === "disconnected");
+		expect(client.presence.subscribers).toBe(0);
+
+		provider.destroy();
+		doc.destroy();
+	});
+});

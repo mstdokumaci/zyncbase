@@ -1,5 +1,6 @@
 // biome-ignore-all lint/complexity/noExcessiveCognitiveComplexity: the provider is a linear sync/write state machine with explicit guards.
 
+import type { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
 
 import type { ZyncBaseClient } from "../client.js";
@@ -14,6 +15,10 @@ import type {
 	SubscriptionHandle,
 } from "../types.js";
 import { generateUUIDv7 } from "../uuid.js";
+import {
+	PresenceAwarenessBridge,
+	type ZyncBaseYjsAwarenessOptions,
+} from "./awareness.js";
 import {
 	ChunkAssembler,
 	chunkPayload,
@@ -59,7 +64,10 @@ class YjsUpdateCommitConflictError extends Error {
 	}
 }
 
-export interface ZyncBaseYjsProviderOptions<S extends object = SchemaLike> {
+export interface ZyncBaseYjsProviderOptions<
+	S extends object = SchemaLike,
+	P = never,
+> {
 	/** Collection names; defaults match `yjsStoreSchema`. */
 	collections?: {
 		documents?: CollectionsOf<S>;
@@ -78,6 +86,8 @@ export interface ZyncBaseYjsProviderOptions<S extends object = SchemaLike> {
 	retryDelayMs?: number;
 	/** Maximum retry delay in milliseconds. Default 30_000. */
 	maxRetryDelayMs?: number;
+	/** Sync a Yjs Awareness instance through the presence user tier. Default off. */
+	awareness?: false | ZyncBaseYjsAwarenessOptions<P>;
 }
 
 interface WritePlan {
@@ -148,8 +158,11 @@ export class ZyncBaseYjsProvider<
 > {
 	readonly documentId: string;
 	readonly doc: Y.Doc;
+	/** Presence-backed awareness, or null when the option is off. */
+	readonly awareness: Awareness | null;
 
 	private readonly client: ZyncBaseClient<S, A, P>;
+	private readonly awarenessBridge: PresenceAwarenessBridge<P> | null;
 	private readonly store: Store;
 	private readonly documentsCollection: string;
 	private readonly snapshotsCollection: string;
@@ -193,7 +206,7 @@ export class ZyncBaseYjsProvider<
 		client: ZyncBaseClient<S, A, P>,
 		documentId: string,
 		doc: Y.Doc,
-		options: ZyncBaseYjsProviderOptions<S> = {},
+		options: ZyncBaseYjsProviderOptions<S, P> = {},
 	) {
 		if (typeof documentId !== "string" || documentId.length === 0) {
 			throw new TypeError("documentId must be a non-empty string");
@@ -236,6 +249,23 @@ export class ZyncBaseYjsProvider<
 			throw new RangeError(
 				"maxRetryDelayMs must be an integer greater than or equal to retryDelayMs",
 			);
+		}
+
+		if (options.awareness !== undefined && options.awareness !== false) {
+			this.awarenessBridge = new PresenceAwarenessBridge<P>({
+				doc: this.doc,
+				client: this.client,
+				namespace: options.awareness.namespace,
+				instance: options.awareness.instance,
+				clientIdField: options.awareness.clientIdField,
+				toPresence: options.awareness.toPresence,
+				fromPresence: options.awareness.fromPresence,
+				onError: (error) => this.emitError(error),
+			});
+			this.awareness = this.awarenessBridge.awareness;
+		} else {
+			this.awarenessBridge = null;
+			this.awareness = null;
 		}
 
 		this.doc.on("update", this.handleDocUpdate);
@@ -326,6 +356,7 @@ export class ZyncBaseYjsProvider<
 		this.syncQueued = false;
 		this.clearTimers();
 		this.detachClientListeners();
+		this.awarenessBridge?.stop();
 		const subscription = this.subscription;
 		this.subscription = null;
 		if (subscription !== null) {
@@ -340,6 +371,7 @@ export class ZyncBaseYjsProvider<
 		if (this.destroyed) return;
 		this.disconnect();
 		this.destroyed = true;
+		this.awarenessBridge?.destroy();
 		this.doc.off("update", this.handleDocUpdate);
 		this.doc.off("destroy", this.handleDocDestroy);
 		this.pending = [];
@@ -421,11 +453,13 @@ export class ZyncBaseYjsProvider<
 	private handleClientStatus = (status: ConnectionStatus): void => {
 		if (!this.active || this.destroyed) return;
 		if (status === "disconnected") {
+			this.awarenessBridge?.pause();
 			this.setSynced(false);
 			this.setStatus("disconnected");
 			return;
 		}
 		if (status === "connected") {
+			this.awarenessBridge?.resume();
 			this.setStatus("connected");
 			return;
 		}
@@ -434,6 +468,7 @@ export class ZyncBaseYjsProvider<
 
 	private handleClientSynced = (): void => {
 		if (!this.active || this.connecting || this.destroyed) return;
+		this.awarenessBridge?.resume();
 		if (this.syncRetryTimer !== null) {
 			clearTimeout(this.syncRetryTimer);
 			this.syncRetryTimer = null;
@@ -443,6 +478,7 @@ export class ZyncBaseYjsProvider<
 
 	private handleClientDisconnected = (detail: DisconnectDetail): void => {
 		if (!this.active || this.destroyed) return;
+		this.awarenessBridge?.pause();
 		this.setSynced(false);
 		this.setStatus("disconnected");
 		this.emit("connection-close", detail);
@@ -459,6 +495,7 @@ export class ZyncBaseYjsProvider<
 				await this.client.connect();
 			}
 			if (generation !== this.generation) throw abortedError();
+			this.awarenessBridge?.start();
 
 			if (this.subscription === null) {
 				const subscription = await this.store.subscribe(
@@ -505,6 +542,7 @@ export class ZyncBaseYjsProvider<
 				this.setSynced(false);
 				this.setStatus("disconnected");
 				this.detachClientListeners();
+				this.awarenessBridge?.stop();
 				await this.clearSubscription();
 				this.emitError(error);
 			}
@@ -534,6 +572,7 @@ export class ZyncBaseYjsProvider<
 					this.active = false;
 					this.setStatus("disconnected");
 					this.detachClientListeners();
+					this.awarenessBridge?.stop();
 					void this.clearSubscription();
 					return;
 				}
