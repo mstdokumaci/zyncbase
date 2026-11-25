@@ -24,7 +24,11 @@
 		}
 	],
 	"store": [
-		{ "collection": "users", "read": true, "write": true },
+		{
+			"collection": "users",
+			"read": true,
+			"write": { "$doc.owner_id": { "eq": "$session.userId" } }
+		},
 		{ "collection": "pages", "read": true, "write": true },
 		{ "collection": "page_changes", "read": true, "write": true },
 		{ "collection": "page_snapshots", "read": true, "write": true }

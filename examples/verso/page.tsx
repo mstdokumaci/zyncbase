@@ -353,6 +353,15 @@ export function PageScreen({
 	);
 }
 
+/** Re-render on a slow clock so relative labels advance while the page is idle. */
+function useIdleClock(): void {
+	const [, setTick] = useState(0);
+	useEffect(() => {
+		const timer = setInterval(() => setTick((tick) => tick + 1), 30_000);
+		return () => clearInterval(timer);
+	}, []);
+}
+
 /** One "who and when" item; the name is omitted when the owner has no profile. */
 function MetaItem({
 	at,
@@ -363,6 +372,7 @@ function MetaItem({
 	verb: "Created" | "Edited";
 	user: UserRow | undefined;
 }) {
+	useIdleClock();
 	if (!at) return null;
 	const who = user?.name
 		? `${verb === "Created" ? `${user.name} created` : `Edited by ${user.name}`} `

@@ -114,6 +114,11 @@ minting (passwordless link, OAuth, whatever) and keep the rest: ZyncBase only
 cares that `$session.workspace` matches the namespace, so `authorization.json`
 does not change. Anyone who can reach this demo can also rewrite any page.
 
+Profile rows are the one exception: `users` writes are guarded by
+`$doc.owner_id == $session.userId`, so a client can only edit its own row. That
+is defence in depth rather than a boundary — claiming someone's email gives you
+their `users.id` and the guard passes. Pages stay open to everyone on purpose.
+
 ## Limits this example accepts
 
 - Offline covers the document body. Page titles, page creation, and deletes are

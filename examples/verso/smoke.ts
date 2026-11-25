@@ -154,6 +154,17 @@ try {
 	);
 	await profileSub.unlisten();
 
+	// The write rule is ownership-guarded: another person cannot rewrite the row.
+	const denied = await b.store.set(["users", adaId, "color"], "#000000").then(
+		() => null,
+		(error: { code?: string }) => error.code,
+	);
+	assert.equal(denied, "PERMISSION_DENIED");
+	const untouched = (await b.store.get(["users", adaId])) as {
+		color?: string;
+	} | null;
+	assert.equal(untouched?.color, "#c96a4b");
+
 	// The server seeds the welcome page before anyone connects.
 	await eventually("welcome page seeded", async () => {
 		const rows = await a.store.query("pages", {
