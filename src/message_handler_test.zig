@@ -3,6 +3,7 @@ const std = @import("std");
 const helpers = @import("app_test_helpers.zig");
 const msgpack_helpers = @import("msgpack_test_helpers.zig");
 const msgpack = @import("msgpack_utils.zig");
+const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const store_helpers = @import("store_test_helpers.zig");
@@ -1101,4 +1102,57 @@ test "MessageHandler: action register, call, and reply route through the service
     defer if (parsed_forward.code) |code| allocator.free(code);
     try testing.expectEqual(MessageType.@"error", parsed_forward.resp_type);
     try testing.expectEqualStrings("INVALID_MESSAGE_TYPE", parsed_forward.code.?);
+}
+
+test "StoreSubscribe: non-namespaced collection registers under the global namespace" {
+    const allocator = std.heap.smp_allocator;
+    const schema_json =
+        \\{
+        \\  "version": "1.0.0",
+        \\  "store": {
+        \\    "globals": { "namespaced": false, "fields": { "title": { "type": "string" } } },
+        \\    "tasks": { "fields": { "title": { "type": "string" } } }
+        \\  }
+        \\}
+    ;
+    var app: AppTestContext = undefined;
+    try app.initWithSchemaJSON(allocator, "subscribe-global-ns", schema_json);
+    defer app.deinit();
+
+    const sc = try app.setupMockConnection();
+    defer sc.deinit();
+
+    const session_namespace_id = app.storage_engine.cachedNamespaceId("public") orelse return error.TestExpectedValue;
+    try testing.expect(session_namespace_id != schema_system.global_namespace_id);
+
+    var globals_filter = msgpack.Payload.mapPayload(allocator);
+    defer globals_filter.free(allocator);
+    const globals = try app.tableMetadata("globals");
+    const globals_message = try store_helpers.createStoreSubscribeMessage(allocator, 91, 0, globals.index, globals_filter, 0);
+    defer allocator.free(globals_message);
+    if (try routeWithArenaOptional(&app.handler, allocator, sc.conn, globals_message)) |response| allocator.free(response);
+
+    try testing.expectEqual(@as(usize, 1), sc.conn.subscription_ids.items.len);
+    var globals_query = (try app.subscription_engine.getSubscriptionQuery(allocator, .{
+        .connection_id = sc.conn.id,
+        .id = sc.conn.subscription_ids.items[0],
+    })) orelse return error.TestExpectedValue;
+    defer globals_query.deinit(allocator);
+    try testing.expectEqual(schema_system.global_namespace_id, globals_query.namespace_id);
+
+    // A namespaced collection keeps the session namespace.
+    var tasks_filter = msgpack.Payload.mapPayload(allocator);
+    defer tasks_filter.free(allocator);
+    const tasks = try app.tableMetadata("tasks");
+    const tasks_message = try store_helpers.createStoreSubscribeMessage(allocator, 92, 0, tasks.index, tasks_filter, 0);
+    defer allocator.free(tasks_message);
+    if (try routeWithArenaOptional(&app.handler, allocator, sc.conn, tasks_message)) |response| allocator.free(response);
+
+    try testing.expectEqual(@as(usize, 2), sc.conn.subscription_ids.items.len);
+    var tasks_query = (try app.subscription_engine.getSubscriptionQuery(allocator, .{
+        .connection_id = sc.conn.id,
+        .id = sc.conn.subscription_ids.items[1],
+    })) orelse return error.TestExpectedValue;
+    defer tasks_query.deinit(allocator);
+    try testing.expectEqual(session_namespace_id, tasks_query.namespace_id);
 }

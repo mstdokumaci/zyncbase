@@ -237,6 +237,8 @@ if (hasMore) await loadMore()
 
 Initial and subsequent results are delivered through the callback.
 
+A collection declared `"namespaced": false` is stored, read and notified under the global namespace, so its subscriptions are shared: a subscriber in any namespace receives the same rows and the same deltas.
+
 **Full Syntax**: See [Query Language Reference](./query-language.md) for all operators (`eq`, `gte`, `contains`, `in`, etc.).
 
 ---

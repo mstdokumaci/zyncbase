@@ -1,0 +1,20 @@
+{
+	"version": "1.0.0",
+	"store": {
+		"globals": {
+			"namespaced": false,
+			"fields": {
+				"title": {
+					"type": "string"
+				}
+			}
+		},
+		"tasks": {
+			"fields": {
+				"title": {
+					"type": "string"
+				}
+			}
+		}
+	}
+}
