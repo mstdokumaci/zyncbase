@@ -491,7 +491,12 @@ export function createZyncBaseReact<
 
 		useEffect(() => {
 			const onStatus: ClientEvents["statusChange"] = (status) => {
-				setState((previous) => ({ ...previous, status }));
+				// `synced` implies connected; some failure paths report only a
+				// status change, so leaving connected clears it.
+				setState((previous) => ({
+					status,
+					synced: status === "connected" && previous.synced,
+				}));
 			};
 			const onSynced: ClientEvents["synced"] = () => {
 				setState((previous) =>

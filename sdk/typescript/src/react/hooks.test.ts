@@ -768,6 +768,21 @@ describe("useSyncStatus", () => {
 		expect(result.current).toEqual({ status: "connected", synced: true });
 	});
 
+	test("a status change away from connected clears synced", () => {
+		const { client } = makeClient({ status: "connected", synced: true });
+		const emitter = client as unknown as {
+			emit: (event: string, ...args: unknown[]) => void;
+		};
+		const { result } = renderHook(() => useSyncStatus(), {
+			wrapper: wrapperFor(client),
+		});
+		expect(result.current).toEqual({ status: "connected", synced: true });
+
+		// Handshake/ticket failures report only a status change.
+		act(() => emitter.emit("statusChange", "disconnected"));
+		expect(result.current).toEqual({ status: "disconnected", synced: false });
+	});
+
 	test("server render uses the disconnected default", async () => {
 		const { client } = makeClient();
 		const { renderToString } = await import("react-dom/server");
