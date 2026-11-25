@@ -3,7 +3,13 @@ import * as Y from "yjs";
 import { useQuery } from "./bindings";
 import { DocEditor } from "./editor/DocEditor";
 import { assembleChanges } from "./history-data";
-import type { ChangeRow, Identity, PageRow } from "./shared";
+import {
+	type ChangeRow,
+	type Identity,
+	type PageRow,
+	type People,
+	userOf,
+} from "./shared";
 
 const HISTORY_LIMIT = 200;
 /** Five seconds in microseconds: a gap means the page is older than this log. */
@@ -20,6 +26,7 @@ function when(at: number): string {
 export interface HistoryPanelProps {
 	page: PageRow;
 	pages: Map<string, PageRow>;
+	people: People;
 	identity: Identity;
 	onClose: () => void;
 	onNavigate: (pageId: string) => void;
@@ -29,6 +36,7 @@ export interface HistoryPanelProps {
 export function HistoryPanel({
 	page,
 	pages,
+	people,
 	identity,
 	onClose,
 	onNavigate,
@@ -70,6 +78,7 @@ export function HistoryPanel({
 		changes.data.length >= HISTORY_LIMIT ||
 		(pageStart > 0 && earliest > 0 && earliest - pageStart > PAGE_GAP_US);
 	const current = entries[index];
+	const author = current ? userOf(current.ownerId, people) : undefined;
 
 	return (
 		<aside className="history">
@@ -81,7 +90,7 @@ export function HistoryPanel({
 							? "No retained changes yet."
 							: `${index + 1} of ${entries.length} changes${
 									current ? ` · ${when(current.at)}` : ""
-								}`}
+								}${author?.name ? ` · ${author.name}` : ""}`}
 					</p>
 				</div>
 				<button type="button" className="ghost" onClick={onClose}>

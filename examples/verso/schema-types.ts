@@ -4,6 +4,10 @@
 export const schemaVersion = "0.1.1";
 
 export type ZyncBaseSchema = {
+	users: {
+		name?: string;
+		color?: string;
+	};
 	pages: {
 		slug?: string;
 		compaction_version: number;

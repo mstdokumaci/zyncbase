@@ -126,6 +126,45 @@ try {
 	await a.connect();
 	await b.connect();
 
+	// Profiles live on the global users row the resolver already created.
+	const adaId = a.presence.localUserId;
+	const graceId = b.presence.localUserId;
+	assert.ok(adaId && graceId);
+	await a.store.batch([
+		{ op: "set", path: ["users", adaId, "name"], value: "Ada" },
+		{ op: "set", path: ["users", adaId, "color"], value: "#c96a4b" },
+	]);
+	const profile = (await b.store.get(["users", adaId])) as {
+		name?: string;
+	} | null;
+	assert.equal(profile?.name, "Ada");
+
+	// The directory is live: a later profile write reaches the other client.
+	const names: string[] = [];
+	const profileSub = await b.store.listen(
+		["users", adaId],
+		(value: unknown) => {
+			const name = (value as { name?: string } | null)?.name;
+			if (typeof name === "string") names.push(name);
+		},
+	);
+	await a.store.set(["users", adaId, "name"], "Ada L.");
+	await eventually("profile update reaches the peer", () =>
+		names.includes("Ada L."),
+	);
+	await profileSub.unlisten();
+
+	// The write rule is ownership-guarded: another person cannot rewrite the row.
+	const denied = await b.store.set(["users", adaId, "color"], "#000000").then(
+		() => null,
+		(error: { code?: string }) => error.code,
+	);
+	assert.equal(denied, "PERMISSION_DENIED");
+	const untouched = (await b.store.get(["users", adaId])) as {
+		color?: string;
+	} | null;
+	assert.equal(untouched?.color, "#c96a4b");
+
 	// The server seeds the welcome page before anyone connects.
 	await eventually("welcome page seeded", async () => {
 		const rows = await a.store.query("pages", {
@@ -149,6 +188,10 @@ try {
 
 	// A page row, and a child page that cascades from its parent.
 	const parent = await createPage(a, "Parent");
+	const parentRow = (await a.store.get(["pages", parent])) as {
+		owner_id?: string;
+	} | null;
+	assert.equal(parentRow?.owner_id, adaId);
 	const child = await createPage(a, "Child", parent);
 	assert.equal(
 		(await b.store.query("pages", { where: { parent_id: parent } })).length,
@@ -282,6 +325,10 @@ try {
 	const replayed = new Y.Doc();
 	for (const entry of entries) Y.applyUpdate(replayed, entry.bytes);
 	assert.equal(replayed.getText("body").toString(), "hello from ada");
+	// Change rows record their writer, which is what names the author in history.
+	assert.ok(entries.length > 0);
+	assert.ok(entries.some((entry) => entry.ownerId === adaId));
+	assert.ok(entries.every((entry) => entry.ownerId !== undefined));
 
 	// The append-only log exists for the page, and compacts into a snapshot.
 	await eventually("page_changes rows", async () => {

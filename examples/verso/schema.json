@@ -1,6 +1,18 @@
 {
 	"version": "0.1.1",
 	"store": {
+		"users": {
+			"fields": {
+				"name": {
+					"type": "string",
+					"maxLength": 64
+				},
+				"color": {
+					"type": "string",
+					"maxLength": 32
+				}
+			}
+		},
 		"pages": {
 			"required": ["compaction_version", "title", "position"],
 			"unique": [["slug"]],

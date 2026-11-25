@@ -117,4 +117,18 @@ test("joining opens the seeded welcome page in the editor", async () => {
 	// Connected before mount: no offline banner, and the pill says live.
 	expect(document.querySelector(".notice")).toBeNull();
 	expect(document.querySelector(".link-pill")?.textContent).toBe("live");
+
+	// The seeded page was written by the service account, so it has no name;
+	// a page this person creates names them in the meta line.
+	expect(document.querySelector(".page__meta")?.textContent ?? "").toContain(
+		"Created",
+	);
+	fireEvent.click(screen.getByText("+ New"));
+	await waitFor(
+		() =>
+			expect(
+				document.querySelector(".page__meta")?.textContent ?? "",
+			).toContain("Ada Lovelace"),
+		{ timeout: 30_000 },
+	);
 });

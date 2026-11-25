@@ -1,7 +1,7 @@
 import { ZyncBaseYjsProvider } from "@zyncbase/client/yjs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Y from "yjs";
-import { useClient } from "./bindings";
+import { useClient, useQuery } from "./bindings";
 import {
 	CLEARED_CURSOR,
 	cursorFromPresence,
@@ -12,13 +12,18 @@ import { HistoryPanel } from "./history";
 import { createPage, positionAtEnd, renamePage, siblingsOf } from "./pages";
 import type { VersoSession } from "./session";
 import {
+	type ChangeRow,
 	collections,
 	ICONS,
 	initials,
 	type PageRow,
+	type People,
 	pageIcon,
 	pageNamespace,
 	pageTitle,
+	relativeTime,
+	type UserRow,
+	userOf,
 } from "./shared";
 
 interface OpenedPage {
@@ -67,6 +72,7 @@ export interface PageScreenProps {
 	page: PageRow | undefined;
 	pages: readonly PageRow[];
 	byId: Map<string, PageRow>;
+	people: People;
 	onNavigate: (pageId: string | null) => void;
 }
 
@@ -75,6 +81,7 @@ export function PageScreen({
 	page,
 	pages,
 	byId,
+	people,
 	onNavigate,
 }: PageScreenProps) {
 	const client = useClient();
@@ -88,6 +95,17 @@ export function PageScreen({
 	const titleFocused = useRef(false);
 	const pagesRef = useRef(pages);
 	pagesRef.current = pages;
+
+	// The change log records the writer's id, so the newest row names the last
+	// person who touched the body. Title and icon writes do not create rows.
+	const changes = useQuery("page_changes", {
+		where: { document_id: pageId },
+		orderBy: [{ created_at: "desc" }],
+		limit: 1,
+	});
+	const lastChange = (changes.data as ChangeRow[])[0];
+	const creator = userOf(page?.owner_id, people);
+	const editor = userOf(lastChange?.owner_id, people);
 
 	const onError = useCallback((error: unknown) => {
 		setOpenError(error instanceof Error ? error.message : String(error));
@@ -271,6 +289,19 @@ export function PageScreen({
 						}}
 					/>
 				</div>
+				<div className="page__meta">
+					<MetaItem at={page.created_at} verb="Created" user={creator} />
+					{lastChange?.created_at ? (
+						<>
+							<span className="page__meta__sep">·</span>
+							<MetaItem
+								at={lastChange.created_at}
+								verb="Edited"
+								user={editor}
+							/>
+						</>
+					) : null}
+				</div>
 				{iconOpen ? (
 					<div className="icon-picker">
 						{ICONS.map((icon) => (
@@ -311,6 +342,7 @@ export function PageScreen({
 				<HistoryPanel
 					page={page}
 					pages={byId}
+					people={people}
 					identity={session.identity}
 					onClose={() => setHistoryOpen(false)}
 					onNavigate={onNavigate}
@@ -318,6 +350,49 @@ export function PageScreen({
 				/>
 			) : null}
 		</div>
+	);
+}
+
+/** Re-render on a slow clock so relative labels advance while the page is idle. */
+function useIdleClock(): void {
+	const [, setTick] = useState(0);
+	useEffect(() => {
+		const timer = setInterval(() => setTick((tick) => tick + 1), 30_000);
+		return () => clearInterval(timer);
+	}, []);
+}
+
+/** One "who and when" item; the name is omitted when the owner has no profile. */
+function MetaItem({
+	at,
+	verb,
+	user,
+}: {
+	at: number | undefined;
+	verb: "Created" | "Edited";
+	user: UserRow | undefined;
+}) {
+	useIdleClock();
+	if (!at) return null;
+	const who = user?.name
+		? `${verb === "Created" ? `${user.name} created` : `Edited by ${user.name}`} `
+		: `${verb} `;
+	return (
+		<span className="page__meta__item">
+			{user?.name ? (
+				<span
+					className="avatar"
+					style={{ backgroundColor: user.color ?? "#999999" }}
+					title={user.name}
+				>
+					{initials(user.name)}
+				</span>
+			) : null}
+			{who}
+			<span title={new Date(at / 1000).toLocaleString()}>
+				{relativeTime(at)}
+			</span>
+		</span>
 	);
 }
 

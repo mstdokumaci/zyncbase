@@ -26,6 +26,7 @@ import {
 	type PageRow,
 	pageIcon,
 	pageTitle,
+	type UserRow,
 } from "./shared";
 
 function hashPage(): string | null {
@@ -65,8 +66,14 @@ function WorkspaceView({
 		limit: 500,
 	});
 	const rows = pagesQuery.data as PageRow[];
-	const tree = useMemo(() => buildTree(rows), [rows]);
 	const byId = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows]);
+	const usersQuery = useQuery("users", { limit: 500 });
+	const people = useMemo(
+		() =>
+			new Map((usersQuery.data as UserRow[]).map((user) => [user.id, user])),
+		[usersQuery.data],
+	);
+	const tree = useMemo(() => buildTree(rows), [rows]);
 	const [pageId, setPageId] = useState<string | null>(() => hashPage());
 	const [menuId, setMenuId] = useState<string | null>(null);
 	const sync = useSyncStatus();
@@ -238,6 +245,7 @@ function WorkspaceView({
 						page={page}
 						pages={rows}
 						byId={byId}
+						people={people}
 						onNavigate={navigate}
 					/>
 				) : (

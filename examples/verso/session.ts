@@ -67,6 +67,16 @@ export async function joinWorkspace(input: Identity): Promise<VersoSession> {
 		presenceNamespace: STORE_NAMESPACE,
 	}) as AppClient;
 	await client.connect();
+	// The identity resolver already created the users row; fill in what the UI shows.
+	const me = client.presence.localUserId;
+	if (me) {
+		await client.store
+			.batch([
+				{ op: "set", path: ["users", me, "name"], value: identity.name },
+				{ op: "set", path: ["users", me, "color"], value: identity.color },
+			])
+			.catch((error: unknown) => console.warn("Profile write failed", error));
+	}
 	sessionStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
 	return { client, identity };
 }

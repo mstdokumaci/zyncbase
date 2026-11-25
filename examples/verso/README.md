@@ -43,8 +43,11 @@ carets collapse into one — that is the presence semantics, not a bug.
    to-dos, quotes, code, dividers, and a link to another page.
 4. Use the `⋯` menu in the sidebar to nest, reorder, and delete pages.
 5. Press **History** and drag the slider: each step is the document as it
-   existed after one committed change.
-6. Go offline (DevTools → Network → Offline), keep typing, come back. The body
+   existed after one committed change, labelled with who wrote it.
+6. Leave and re-enter with a different name in one window: the other window's
+   creator/editor line under the title updates without a reload, because the
+   profile lives in a users row.
+7. Go offline (DevTools → Network → Offline), keep typing, come back. The body
    merges on reconnect.
 
 ## How it is put together
@@ -53,11 +56,18 @@ A page is one row. Its body is a Yjs document; its metadata is columns on the
 same row:
 
 ```
+users            id, external_id, name, color (global: one row per person)
 pages            id, title, icon, parent_id → pages (cascade), position,
                  compaction_version, current_snapshot_id, compacted_through
 page_changes     append-only Yjs updates, chunked, written by the provider
 page_snapshots   compacted Yjs state, written by the compactor
 ```
+
+Every row also carries system columns: `owner_id` (the writer's `users.id`,
+stamped on creation and never rewritten), `created_at`, and `updated_at`. The
+creator line under the title reads `owner_id`; the editor line reads the newest
+`page_changes.owner_id`. Both are looked up in `users`, so no name is copied
+onto a page.
 
 Three consequences worth looking at:
 
@@ -104,6 +114,11 @@ minting (passwordless link, OAuth, whatever) and keep the rest: ZyncBase only
 cares that `$session.workspace` matches the namespace, so `authorization.json`
 does not change. Anyone who can reach this demo can also rewrite any page.
 
+Profile rows are the one exception: `users` writes are guarded by
+`$doc.owner_id == $session.userId`, so a client can only edit its own row. That
+is defence in depth rather than a boundary — claiming someone's email gives you
+their `users.id` and the guard passes. Pages stay open to everyone on purpose.
+
 ## Limits this example accepts
 
 - Offline covers the document body. Page titles, page creation, and deletes are
@@ -117,6 +132,13 @@ does not change. Anyone who can reach this demo can also rewrite any page.
 - Delete is immediate and cascades. There is no trash.
 - Tiptap is pinned to one caret extension and the free starter kit; no paid
   Tiptap features are used.
+- The user directory holds a display name and color only; your email stays in
+  the tab you typed it into. It is the global `users` table, so a database
+  shared by several workspaces pools profiles across them.
+- "Edited by" comes from the change log, so it tracks body edits. Renaming a
+  page or changing its icon writes the row and does not create a change row.
+  The seeded welcome page was written by the service account, which has no
+  profile, so it shows a time with no name.
 
 ## Files
 
@@ -124,10 +146,10 @@ does not change. Anyone who can reach this demo can also rewrite any page.
 |---|---|
 | `server.ts` | ZyncBase process, compactor, `/session`, and the welcome seed |
 | `dev.ts` | Static assets plus `/session`, `/auth/ticket`, and `/ws` proxying |
-| `schema.json` | `pages` tree + `page_changes`/`page_snapshots` + presence fields |
+| `schema.json` | `users` profiles + `pages` tree + `page_changes`/`page_snapshots` + presence fields |
 | `authorization.json` | Workspace namespace and collection rules |
 | `workspace.tsx` | Sidebar tree, routing (`#/<pageId>`), empty states |
-| `page.tsx` | Provider lifecycle per page, title editing, avatars, icons |
+| `page.tsx` | Provider lifecycle per page, title editing, avatars, icons, creator/editor line |
 | `editor/` | Tiptap setup, slash menu, sub-page node, cursor ↔ presence mapping |
 | `history.tsx` | Replay panel and read-only preview |
 | `seed.ts` | Deterministic welcome document, written server-side |
