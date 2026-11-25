@@ -68,6 +68,7 @@ export type BoundAction<A, K extends string> = [A] extends [never]
 /** Connection surface returned by `useSyncStatus`. */
 export interface SyncStatus {
 	status: ConnectionStatus;
+	/** Restored and current; implies `status === "connected"`. */
 	synced: boolean;
 }
 

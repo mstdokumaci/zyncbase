@@ -77,7 +77,7 @@ function WorkspaceView({
 	const [pageId, setPageId] = useState<string | null>(() => hashPage());
 	const [menuId, setMenuId] = useState<string | null>(null);
 	const sync = useSyncStatus();
-	const online = sync.status === "connected" && sync.synced;
+	const online = sync.synced;
 
 	useEffect(() => {
 		const onHash = () => setPageId(hashPage());

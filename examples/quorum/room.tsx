@@ -264,7 +264,7 @@ function PhaseStepper({ phase }: { phase: RoomRow["phase"] }) {
 }
 
 function SyncBadge({ status, synced }: { status: string; synced: boolean }) {
-	const live = status === "connected" && synced;
+	const live = synced;
 	return (
 		<span className={live ? "sync-badge live" : "sync-badge reconnecting"}>
 			<i />
