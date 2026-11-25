@@ -64,6 +64,8 @@ pub var pending_signal: std.atomic.Value(bool) = std.atomic.Value(bool).init(fal
 // Set by the first termination signal; the next one skips the graceful path.
 pub var signal_seen: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
+const ShutdownState = enum { running, in_progress, performed };
+
 /// ZyncBaseServer integrates all components to create a complete real-time database server
 pub const ZyncBaseServer = struct {
     io: std.Io,
@@ -100,8 +102,7 @@ pub const ZyncBaseServer = struct {
     jwks: ?*Jwks = null,
     jwt_validator: ?JwtValidator = null,
     shutdown_mutex: std.Io.Mutex = .init,
-    shutdown_performed: bool = false,
-    shutdown_in_progress: bool = false,
+    shutdown_state: ShutdownState = .running,
     workers_stopped: bool = false,
     shutdown_timeout_timer: ?*uws_c.struct_us_timer_t = null,
 
@@ -271,8 +272,7 @@ pub const ZyncBaseServer = struct {
 
         std.log.debug("Setting up ZyncBaseServer state", .{});
 
-        self.shutdown_performed = false;
-        self.shutdown_in_progress = false;
+        self.shutdown_state = .running;
         self.shutdown_mutex = .init;
         self.shutdown_requested = std.atomic.Value(bool).init(false);
         self.workers_stopped = false;
@@ -685,8 +685,8 @@ pub const ZyncBaseServer = struct {
     pub fn startGracefulShutdown(self: *ZyncBaseServer) !void {
         self.shutdown_mutex.lockUncancelable(self.io);
         defer self.shutdown_mutex.unlock(self.io);
-        if (self.shutdown_in_progress or self.shutdown_performed) return;
-        self.shutdown_in_progress = true;
+        if (self.shutdown_state != .running) return;
+        self.shutdown_state = .in_progress;
 
         // Set shutdown flag
         self.shutdown_requested.store(true, .release);
@@ -722,9 +722,8 @@ pub const ZyncBaseServer = struct {
     pub fn finishGracefulShutdown(self: *ZyncBaseServer) !void {
         self.shutdown_mutex.lockUncancelable(self.io);
         defer self.shutdown_mutex.unlock(self.io);
-        if (!self.shutdown_in_progress or self.shutdown_performed) return;
-        self.shutdown_in_progress = false;
-        self.shutdown_performed = true;
+        if (self.shutdown_state != .in_progress) return;
+        self.shutdown_state = .performed;
         // Close application timers on the event-loop thread before exiting it.
         self.stopShutdownTimeoutTimer();
         self.connection_manager.stopTokenSweepTimer();
@@ -915,12 +914,12 @@ pub const ZyncBaseServer = struct {
 
         // Handle graceful shutdown state machine
         if (self.shutdown_requested.load(.acquire)) {
-            if (!self.shutdown_in_progress and !self.shutdown_performed) {
+            if (self.shutdown_state == .running) {
                 self.startGracefulShutdown() catch |err| {
                     std.log.err("Failed to start graceful shutdown: {}", .{err});
                 };
             }
-            if (self.shutdown_in_progress) {
+            if (self.shutdown_state == .in_progress) {
                 const count = self.connection_manager.active_connection_count.load(.acquire);
                 if (count == 0) {
                     self.finishGracefulShutdown() catch |err| {
@@ -928,7 +927,7 @@ pub const ZyncBaseServer = struct {
                     };
                 }
             }
-            if (self.shutdown_performed or self.shutdown_in_progress) {
+            if (self.shutdown_state != .running) {
                 return;
             }
         }
@@ -1038,7 +1037,7 @@ fn loopReadyDispatcher(ctx: ?*anyopaque, loop: ?*uws_c.struct_us_loop_t) void {
 fn lastConnectionClosed(ctx: ?*anyopaque) void {
     if (ctx == null) return;
     const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-    if (server.shutdown_in_progress) {
+    if (server.shutdown_state == .in_progress) {
         if (server.websocket_server.loop.load(.acquire)) |loop| {
             uws_c.us_wakeup_loop(loop);
         }
