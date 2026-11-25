@@ -191,7 +191,12 @@ export class ZyncBaseClient<
 		const generation = this.restoreGeneration;
 		this._restore()
 			.then(() => {
-				if (generation !== this.restoreGeneration) return;
+				if (
+					generation !== this.restoreGeneration ||
+					this.conn.status !== "connected"
+				) {
+					return;
+				}
 				this.restoreAttempt = 0;
 				this.restoreComplete = true;
 				this.emitLocal("synced");
