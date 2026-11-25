@@ -126,10 +126,6 @@ const Harness = struct {
         try std.testing.expectEqualStrings(expected, actual);
     }
 
-    fn appliedVersion(self: *Harness) ![]const u8 {
-        return self.text("SELECT version FROM _zync_schema");
-    }
-
     fn expectApplied(self: *Harness, version: []const u8) !void {
         try self.expectText(version, "SELECT version FROM _zync_schema");
     }
