@@ -22,6 +22,7 @@ import { run as runCrash } from "./test-crash";
 import { run as runErrors } from "./test-errors";
 import { run as runFilterConformance } from "./test-filter-conformance";
 import { run as runFilters } from "./test-filters";
+import { run as runGlobalSubscription } from "./test-global-subscription";
 import { run as runMigrations } from "./test-migrations";
 import { run as runObservability } from "./test-observability";
 import { run as runPersistence } from "./test-persistence";
@@ -154,6 +155,23 @@ describe("ZyncBase E2E", () => {
 				async ({ port }) => {
 					await runFilters(port);
 					await runSorting(port);
+				},
+			);
+		});
+	});
+
+	test("subscribing to a non-namespaced collection sees changes from other namespaces", async () => {
+		await runE2ETest("Global collection subscription", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-global.json"),
+					dataDir: ctx.dataPath("global-subscription"),
+					configName: "zyncbase-config-global.json",
+					authPath: ctx.schemaPath("auth-allow-all.json"),
+				},
+				async ({ port }) => {
+					await runGlobalSubscription(port);
 				},
 			);
 		});

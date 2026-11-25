@@ -5,6 +5,7 @@ const authorization_evaluate = @import("authorization/evaluate.zig");
 const authorization_types = @import("authorization/types.zig");
 const connection_mod = @import("connection/state.zig");
 const msgpack = @import("msgpack_utils.zig");
+const schema_system = @import("schema/system.zig");
 const schema_types = @import("schema/types.zig");
 const subscription_mod = @import("subscription/engine.zig");
 const wire_decode = @import("wire/decode.zig");
@@ -560,7 +561,16 @@ pub const MessageHandler = struct {
 
         // Register subscription synchronously before async read so notifications are not missed.
         // subscribe() clones the filter internally; read_req retains ownership.
-        _ = try self.subscription_engine.subscribe(ctx.store_namespace_id, table_index, read_req.filter, conn.id, sub_id);
+        // Global (namespaced: false) tables store and notify under the global namespace;
+        // keying by the session namespace here would never match a delta.
+        const table = self.schema.tableByIndex(table_index) orelse return error.UnknownTable;
+        _ = try self.subscription_engine.subscribe(
+            if (table.namespaced) ctx.store_namespace_id else schema_system.global_namespace_id,
+            table_index,
+            read_req.filter,
+            conn.id,
+            sub_id,
+        );
         errdefer self.subscription_engine.unsubscribe(conn.id, sub_id);
         try conn.addSubscription(sub_id);
         errdefer conn.removeSubscription(sub_id);
