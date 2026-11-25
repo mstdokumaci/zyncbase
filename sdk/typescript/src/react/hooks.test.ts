@@ -736,6 +736,9 @@ describe("useSyncStatus", () => {
 		expect(result.current.synced).toBe(false);
 
 		act(() => emitter.emit("reconnected"));
+		expect(result.current.synced).toBe(false);
+
+		act(() => emitter.emit("synced"));
 		expect(result.current.synced).toBe(true);
 
 		act(() => emitter.emit("disconnected", { code: "gone" }));
@@ -747,6 +750,21 @@ describe("useSyncStatus", () => {
 		const { result } = renderHook(() => useSyncStatus(), {
 			wrapper: wrapperFor(client),
 		});
+		expect(result.current).toEqual({ status: "connected", synced: true });
+	});
+
+	test("adopts the current status when the provider switches clients", () => {
+		const first = makeClient();
+		const second = makeClient({ status: "connected", synced: true });
+		let active = first.client;
+		const { result, rerender } = renderHook(() => useSyncStatus(), {
+			wrapper: ({ children }: { children?: ReactNode }) =>
+				createElement(ZyncBaseProvider, { client: active }, children),
+		});
+		expect(result.current).toEqual({ status: "disconnected", synced: false });
+
+		active = second.client;
+		rerender();
 		expect(result.current).toEqual({ status: "connected", synced: true });
 	});
 

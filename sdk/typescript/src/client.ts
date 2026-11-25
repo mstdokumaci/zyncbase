@@ -50,6 +50,8 @@ export class ZyncBaseClient<
 	private hasConnectedOnce = false;
 	/** Whether replay finished for the current connection. */
 	private restoreComplete = false;
+	/** Increments on each connection so obsolete restores cannot complete. */
+	private restoreGeneration = 0;
 	private presenceSwitchGeneration = 0;
 	private presenceSwitchInFlight: {
 		namespace: string;
@@ -90,6 +92,7 @@ export class ZyncBaseClient<
 
 		// On connect/reconnect: restore everything, then emit `synced`.
 		this.conn.on("connected", () => {
+			this.restoreGeneration++;
 			this.restoreComplete = false;
 			if (this.hasConnectedOnce) {
 				queueMicrotask(() => this.emitLocal("reconnected"));
@@ -185,8 +188,10 @@ export class ZyncBaseClient<
 	 * one is surfaced to the error callbacks instead of retrying forever.
 	 */
 	private scheduleRestore(): void {
+		const generation = this.restoreGeneration;
 		this._restore()
 			.then(() => {
+				if (generation !== this.restoreGeneration) return;
 				this.restoreAttempt = 0;
 				this.restoreComplete = true;
 				this.emitLocal("synced");

@@ -142,14 +142,14 @@ publish({ status: "typing" });
 
 ### `useSyncStatus()`
 
-Connection surface over `client.status`, `statusChange`, `connected`, `reconnected`, `synced`.
+Connection surface over `client.status`, `statusChange`, `synced`, and the disconnect transitions.
 
 ```typescript
 const { status, synced } = useSyncStatus();
 // status: "connecting" | "connected" | "reconnecting" | "disconnected"
 ```
 
-- `synced: boolean` — `true` only after a `synced`/`reconnected` event and until the next disconnect; the "my reads are current" banner state.
+- `synced: boolean` — `true` only after a `synced` event and until the next disconnect or reconnect transition; the "my reads are current" banner state. `reconnected` does not set it: replay may still be in flight.
 - Server-side snapshot: `{ status: "disconnected", synced: false }`.
 - Rich detail (`DisconnectDetail`) remains available on `client.on("disconnected", ...)` — escape hatch on purpose.
 
@@ -220,7 +220,7 @@ Creation of `@zyncbase/client/react` is complete; these remain its acceptance cr
 3. `useListen` path change re-binds; late detached deliveries ignored; `isPending` follows each delivery.
 4. `useAction` returns a stable identity; rejects propagate.
 5. `usePresence`: `publish` reaches `presence.set`; peers exclude self; two consumers share one wire subscription (registry asserted); last unmount unsubscribes.
-6. `useSyncStatus`: maps `statusChange` and `synced`/`reconnected` exactly; correct SSR defaults.
+6. `useSyncStatus`: maps `statusChange`, `synced`, and the disconnect transitions exactly; stays `false` on `reconnected`; reconciles with the client's current getters after subscription; correct SSR defaults.
 7. Unmount/Strict-Mode double-invoke leaks nothing (mock handles count calls).
 8. **Live e2e** against a running server (existing e2e harness):
    - provider + `useQuery` + `useListen` + real `store.set` round-trip, verifying the hook's `data` matches the plain client's `getSnapshot()` for the same query

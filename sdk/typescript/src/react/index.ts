@@ -510,13 +510,22 @@ export function createZyncBaseReact<
 			};
 			client.on("statusChange", onStatus);
 			client.on("synced", onSynced);
-			client.on("reconnected", onSynced);
 			client.on("disconnected", onDown);
 			client.on("reconnecting", onReconnecting);
+			// State may have moved between render and subscription, or the
+			// provider may have switched clients: re-read the getters.
+			const current: SyncStatus = {
+				status: client.status,
+				synced: client.synced,
+			};
+			setState((previous) =>
+				previous.status === current.status && previous.synced === current.synced
+					? previous
+					: current,
+			);
 			return () => {
 				client.off("statusChange", onStatus);
 				client.off("synced", onSynced);
-				client.off("reconnected", onSynced);
 				client.off("disconnected", onDown);
 				client.off("reconnecting", onReconnecting);
 			};
