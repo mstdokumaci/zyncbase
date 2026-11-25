@@ -68,6 +68,7 @@ export type BoundAction<A, K extends string> = [A] extends [never]
 /** Connection surface returned by `useSyncStatus`. */
 export interface SyncStatus {
 	status: ConnectionStatus;
+	/** Restored and current; implies `status === "connected"`. */
 	synced: boolean;
 }
 
@@ -485,12 +486,17 @@ export function createZyncBaseReact<
 		const client = useClient();
 		const [state, setState] = useState<SyncStatus>(() => ({
 			status: client.status,
-			synced: false,
+			synced: client.synced,
 		}));
 
 		useEffect(() => {
 			const onStatus: ClientEvents["statusChange"] = (status) => {
-				setState((previous) => ({ ...previous, status }));
+				// `synced` implies connected; some failure paths report only a
+				// status change, so leaving connected clears it.
+				setState((previous) => ({
+					status,
+					synced: status === "connected" && previous.synced,
+				}));
 			};
 			const onSynced: ClientEvents["synced"] = () => {
 				setState((previous) =>
@@ -509,13 +515,22 @@ export function createZyncBaseReact<
 			};
 			client.on("statusChange", onStatus);
 			client.on("synced", onSynced);
-			client.on("reconnected", onSynced);
 			client.on("disconnected", onDown);
 			client.on("reconnecting", onReconnecting);
+			// State may have moved between render and subscription, or the
+			// provider may have switched clients: re-read the getters.
+			const current: SyncStatus = {
+				status: client.status,
+				synced: client.synced,
+			};
+			setState((previous) =>
+				previous.status === current.status && previous.synced === current.synced
+					? previous
+					: current,
+			);
 			return () => {
 				client.off("statusChange", onStatus);
 				client.off("synced", onSynced);
-				client.off("reconnected", onSynced);
 				client.off("disconnected", onDown);
 				client.off("reconnecting", onReconnecting);
 			};

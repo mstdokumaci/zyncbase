@@ -68,7 +68,7 @@ class FakeListener {
 	}
 }
 
-function makeClient() {
+function makeClient(initial: { status?: string; synced?: boolean } = {}) {
 	const querySubs: FakeSubscription[] = [];
 	const listenSubs: Array<{ path: string; listener: FakeListener }> = [];
 	const presenceListeners: Array<(entries: unknown[]) => void> = [];
@@ -87,7 +87,8 @@ function makeClient() {
 		});
 
 	const client = {
-		status: "disconnected",
+		status: initial.status ?? "disconnected",
+		synced: initial.synced ?? false,
 		store: {
 			subscribe: async (
 				_collection: string,
@@ -735,10 +736,51 @@ describe("useSyncStatus", () => {
 		expect(result.current.synced).toBe(false);
 
 		act(() => emitter.emit("reconnected"));
+		expect(result.current.synced).toBe(false);
+
+		act(() => emitter.emit("synced"));
 		expect(result.current.synced).toBe(true);
 
 		act(() => emitter.emit("disconnected", { code: "gone" }));
 		expect(result.current.synced).toBe(false);
+	});
+
+	test("starts from an already-synced client", () => {
+		const { client } = makeClient({ status: "connected", synced: true });
+		const { result } = renderHook(() => useSyncStatus(), {
+			wrapper: wrapperFor(client),
+		});
+		expect(result.current).toEqual({ status: "connected", synced: true });
+	});
+
+	test("adopts the current status when the provider switches clients", () => {
+		const first = makeClient();
+		const second = makeClient({ status: "connected", synced: true });
+		let active = first.client;
+		const { result, rerender } = renderHook(() => useSyncStatus(), {
+			wrapper: ({ children }: { children?: ReactNode }) =>
+				createElement(ZyncBaseProvider, { client: active }, children),
+		});
+		expect(result.current).toEqual({ status: "disconnected", synced: false });
+
+		active = second.client;
+		rerender();
+		expect(result.current).toEqual({ status: "connected", synced: true });
+	});
+
+	test("a status change away from connected clears synced", () => {
+		const { client } = makeClient({ status: "connected", synced: true });
+		const emitter = client as unknown as {
+			emit: (event: string, ...args: unknown[]) => void;
+		};
+		const { result } = renderHook(() => useSyncStatus(), {
+			wrapper: wrapperFor(client),
+		});
+		expect(result.current).toEqual({ status: "connected", synced: true });
+
+		// Handshake/ticket failures report only a status change.
+		act(() => emitter.emit("statusChange", "disconnected"));
+		expect(result.current).toEqual({ status: "disconnected", synced: false });
 	});
 
 	test("server render uses the disconnected default", async () => {

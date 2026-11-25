@@ -77,9 +77,7 @@ function WorkspaceView({
 	const [pageId, setPageId] = useState<string | null>(() => hashPage());
 	const [menuId, setMenuId] = useState<string | null>(null);
 	const sync = useSyncStatus();
-	// `synced` is event-driven, and the client connected before this mounted, so
-	// the event was already missed. `status` is seeded from the client.
-	const online = sync.status === "connected";
+	const online = sync.synced;
 
 	useEffect(() => {
 		const onHash = () => setPageId(hashPage());
