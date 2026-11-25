@@ -3,6 +3,8 @@ import type { ChangeRow } from "./shared";
 export interface ChangeEntry {
 	at: number;
 	bytes: Uint8Array;
+	/** The connection that wrote this update, so the person who typed it. */
+	ownerId?: string;
 }
 
 /**
@@ -19,12 +21,19 @@ export function assembleChanges(rows: readonly ChangeRow[]): ChangeEntry[] {
 			chunks: Map<number, Uint8Array>;
 			committed: boolean;
 			at: number;
+			ownerId?: string;
 		}
 	>();
 	const entries: ChangeEntry[] = [];
 	for (const row of rows) {
 		if (row.parts === 1) {
-			if (row.data) entries.push({ at: row.created_at ?? 0, bytes: row.data });
+			if (row.data) {
+				entries.push({
+					at: row.created_at ?? 0,
+					bytes: row.data,
+					ownerId: row.owner_id,
+				});
+			}
 			continue;
 		}
 		let group = pending.get(row.update_id);
@@ -34,6 +43,7 @@ export function assembleChanges(rows: readonly ChangeRow[]): ChangeEntry[] {
 				chunks: new Map(),
 				committed: false,
 				at: row.created_at ?? 0,
+				ownerId: row.owner_id,
 			};
 			pending.set(row.update_id, group);
 		}
@@ -53,7 +63,7 @@ export function assembleChanges(rows: readonly ChangeRow[]): ChangeEntry[] {
 				bytes.set(part, offset);
 				offset += part.length;
 			}
-			entries.push({ at: group.at, bytes });
+			entries.push({ at: group.at, bytes, ownerId: group.ownerId });
 			pending.delete(row.update_id);
 		}
 	}

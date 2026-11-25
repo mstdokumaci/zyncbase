@@ -17,11 +17,48 @@ export const collections = {
 export type PageRow = DocumentRowOf<ZyncBaseSchema, "pages"> & {
 	created_at?: number;
 	updated_at?: number;
+	/** Server-stamped creator; never rewritten by later updates. */
+	owner_id?: string;
 };
 
 export type ChangeRow = DocumentRowOf<ZyncBaseSchema, "page_changes"> & {
 	created_at?: number;
+	/** The connection that wrote the change, so the person who typed it. */
+	owner_id?: string;
 };
+
+export type UserRow = DocumentRowOf<ZyncBaseSchema, "users">;
+
+export type People = Map<string, UserRow>;
+
+/** The users row for an owner id, when that person has joined this workspace. */
+export function userOf(
+	ownerId: string | undefined,
+	people: People,
+): UserRow | undefined {
+	return ownerId ? people.get(ownerId) : undefined;
+}
+
+const RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+const RELATIVE_UNITS = [
+	["year", 31_536_000_000],
+	["month", 2_592_000_000],
+	["day", 86_400_000],
+	["hour", 3_600_000],
+	["minute", 60_000],
+] as const;
+
+/** "3 days ago" for a store microsecond timestamp; absolute time lives in the tooltip. */
+export function relativeTime(at: number): string {
+	const delta = at / 1000 - Date.now();
+	if (Math.abs(delta) < 45_000) return "just now";
+	for (const [unit, ms] of RELATIVE_UNITS) {
+		if (Math.abs(delta) >= ms) {
+			return RELATIVE.format(Math.round(delta / ms), unit);
+		}
+	}
+	return "just now";
+}
 
 export type SnapshotRow = DocumentRowOf<ZyncBaseSchema, "page_snapshots"> & {
 	created_at?: number;
