@@ -133,7 +133,7 @@ function assembleCompletedGroup(group: UpdateGroup): Uint8Array | null {
 }
 
 interface CompactResult {
-	status: "compacted" | "skipped" | "incomplete" | "conflict";
+	status: "compacted" | "skipped" | "conflict";
 	incomplete: boolean;
 }
 
@@ -533,8 +533,7 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 		try {
 			if (currentSnapshotId !== null) {
 				const snapshot = await this.readSnapshot(documentId, currentSnapshotId);
-				if (snapshot === null)
-					return { status: "incomplete", incomplete: true };
+				if (snapshot === null) return { status: "skipped", incomplete: true };
 				Y.applyUpdate(doc, snapshot);
 			}
 
@@ -651,8 +650,7 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 			}
 
 			if (completeGroups.length === 0) {
-				const incomplete = activeIncomplete.length > 0;
-				return { status: incomplete ? "incomplete" : "skipped", incomplete };
+				return { status: "skipped", incomplete: activeIncomplete.length > 0 };
 			}
 
 			let maxComplete = Number.NEGATIVE_INFINITY;
@@ -671,8 +669,7 @@ export class YjsCompactor<S extends object = SchemaLike, A = never, P = never> {
 					? maxComplete
 					: Math.min(maxComplete, minIncomplete - 1);
 			if (watermark !== null && nextWatermark <= watermark) {
-				const incomplete = activeIncomplete.length > 0;
-				return { status: incomplete ? "incomplete" : "skipped", incomplete };
+				return { status: "skipped", incomplete: activeIncomplete.length > 0 };
 			}
 
 			const bytes = Y.encodeStateAsUpdate(doc);
