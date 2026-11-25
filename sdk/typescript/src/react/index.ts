@@ -485,7 +485,7 @@ export function createZyncBaseReact<
 		const client = useClient();
 		const [state, setState] = useState<SyncStatus>(() => ({
 			status: client.status,
-			synced: false,
+			synced: client.synced,
 		}));
 
 		useEffect(() => {

@@ -48,6 +48,8 @@ export class ZyncBaseClient<
 	>();
 	/** Whether a connection existed earlier in this process. */
 	private hasConnectedOnce = false;
+	/** Whether replay finished for the current connection. */
+	private restoreComplete = false;
 	private presenceSwitchGeneration = 0;
 	private presenceSwitchInFlight: {
 		namespace: string;
@@ -88,6 +90,7 @@ export class ZyncBaseClient<
 
 		// On connect/reconnect: restore everything, then emit `synced`.
 		this.conn.on("connected", () => {
+			this.restoreComplete = false;
 			if (this.hasConnectedOnce) {
 				queueMicrotask(() => this.emitLocal("reconnected"));
 			}
@@ -99,6 +102,14 @@ export class ZyncBaseClient<
 	/** Current connection status, readable synchronously at any time. */
 	get status(): ConnectionStatus {
 		return this.conn.status;
+	}
+
+	/**
+	 * Whether subscriptions and registrations are restored for the current
+	 * connection, readable synchronously at any time.
+	 */
+	get synced(): boolean {
+		return this.restoreComplete && this.conn.status === "connected";
 	}
 
 	/**
@@ -177,6 +188,7 @@ export class ZyncBaseClient<
 		this._restore()
 			.then(() => {
 				this.restoreAttempt = 0;
+				this.restoreComplete = true;
 				this.emitLocal("synced");
 			})
 			.catch((err: unknown) => {

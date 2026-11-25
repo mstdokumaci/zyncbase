@@ -68,7 +68,7 @@ class FakeListener {
 	}
 }
 
-function makeClient() {
+function makeClient(initial: { status?: string; synced?: boolean } = {}) {
 	const querySubs: FakeSubscription[] = [];
 	const listenSubs: Array<{ path: string; listener: FakeListener }> = [];
 	const presenceListeners: Array<(entries: unknown[]) => void> = [];
@@ -87,7 +87,8 @@ function makeClient() {
 		});
 
 	const client = {
-		status: "disconnected",
+		status: initial.status ?? "disconnected",
+		synced: initial.synced ?? false,
 		store: {
 			subscribe: async (
 				_collection: string,
@@ -739,6 +740,14 @@ describe("useSyncStatus", () => {
 
 		act(() => emitter.emit("disconnected", { code: "gone" }));
 		expect(result.current.synced).toBe(false);
+	});
+
+	test("starts from an already-synced client", () => {
+		const { client } = makeClient({ status: "connected", synced: true });
+		const { result } = renderHook(() => useSyncStatus(), {
+			wrapper: wrapperFor(client),
+		});
+		expect(result.current).toEqual({ status: "connected", synced: true });
 	});
 
 	test("server render uses the disconnected default", async () => {
