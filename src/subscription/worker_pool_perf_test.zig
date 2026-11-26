@@ -43,7 +43,7 @@ const TestContext = struct {
 
     fn deinit(self: *TestContext) void {
         self.schema.deinit();
-        while (self.send_queue.pop()) |entry| {
+        while (self.send_queue.popFrom(0)) |entry| {
             entry.deinit();
         }
         self.send_queue.deinit();
@@ -92,6 +92,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
                 filter,
                 @as(u64, @intCast(i + 1)),
                 @as(u64, @intCast(j + 1)),
+                0,
             );
         }
     }
@@ -145,7 +146,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         // dispatchDeltasToMatches owns the arena; the final pop in this drain releases it.
         var unique_messages: std.AutoHashMapUnmanaged(usize, void) = .empty;
         defer unique_messages.deinit(allocator);
-        while (ctx.send_queue.pop()) |entry| {
+        while (ctx.send_queue.popFrom(0)) |entry| {
             if (entry.items) |items| {
                 for (items) |delivery| {
                     try unique_messages.put(allocator, @intFromPtr(delivery.data.ptr), {});
@@ -191,7 +192,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         // Same-thread cache-warm drain. Real consumer is on a separate thread with
         // cache-cold access — D understates production consumer latency.
         // The final pop releases the arena back to the pool.
-        while (ctx.send_queue.pop()) |entry| {
+        while (ctx.send_queue.popFrom(0)) |entry| {
             entry.deinit();
         }
         now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();

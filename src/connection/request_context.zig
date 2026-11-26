@@ -19,6 +19,8 @@ pub const Scope = struct {
 /// content, request-scoped lifetime.
 pub const RequestContext = struct {
     conn_id: u64,
+    /// Owning event loop for responses/outcomes.
+    loop_id: u8 = 0,
     user_doc_id: DocId,
     external_user_id: ?[]const u8 = null,
     session_claims: ?*const std.StringHashMapUnmanaged(typed.Value) = null,

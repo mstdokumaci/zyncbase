@@ -43,7 +43,7 @@ const TestContext = struct {
 
     fn deinit(self: *TestContext) void {
         self.schema.deinit();
-        while (self.send_queue.pop()) |entry| {
+        while (self.send_queue.popFrom(0)) |entry| {
             entry.deinit();
         }
         self.send_queue.deinit();
@@ -81,7 +81,7 @@ test "SubscriptionWorkerPool: matching change is processed and pushed to send_qu
     const table = ctx.schema.table("items") orelse return error.TestExpectedValue;
     const sub_id: u64 = 100;
     const conn_id: u64 = 1;
-    _ = try ctx.subscription_engine.subscribe(conn_id, table.index, filter, conn_id, sub_id);
+    _ = try ctx.subscription_engine.subscribe(conn_id, table.index, filter, conn_id, sub_id, 0);
 
     var pool = try SubscriptionWorkerPool.init(
         allocator,
@@ -123,7 +123,7 @@ test "SubscriptionWorkerPool: matching change is processed and pushed to send_qu
     try testing.expect(ctx.notifier_called.load(.monotonic) > 0);
 
     // Drain and release the batched send_queue entry.
-    if (ctx.send_queue.pop()) |entry| {
+    if (ctx.send_queue.popFrom(0)) |entry| {
         const items = entry.items orelse return error.TestExpectedValue;
         try testing.expectEqual(@as(usize, 1), items.len);
         try testing.expectEqual(conn_id, items[0].conn_id);
@@ -144,7 +144,7 @@ test "SubscriptionWorkerPool: non-matching change does not push to send_queue" {
     defer filter.deinit(allocator);
 
     const table = ctx.schema.table("items") orelse return error.TestExpectedValue;
-    _ = try ctx.subscription_engine.subscribe(1, table.index, filter, 1, 100);
+    _ = try ctx.subscription_engine.subscribe(1, table.index, filter, 1, 100, 0);
 
     var pool = try SubscriptionWorkerPool.init(
         allocator,

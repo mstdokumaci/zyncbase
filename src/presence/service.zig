@@ -87,6 +87,7 @@ pub const PresenceService = struct {
         self.enqueue(.{ .subscribe_user = .{
             .namespace_id = ctx.request.presence_namespace_id,
             .conn_id = ctx.request.conn_id,
+            .loop_id = ctx.request.loop_id,
             .sub_id = sub_id,
             .msg_id = msg_id,
         } });
@@ -97,6 +98,7 @@ pub const PresenceService = struct {
         self.enqueue(.{ .subscribe_shared = .{
             .namespace_id = ctx.request.presence_namespace_id,
             .conn_id = ctx.request.conn_id,
+            .loop_id = ctx.request.loop_id,
             .sub_id = sub_id,
             .msg_id = msg_id,
         } });

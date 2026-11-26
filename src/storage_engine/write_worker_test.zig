@@ -221,7 +221,7 @@ test "WriteWorker: resolution queued after a write waits for that write" {
 
     var id_buf: [32]u8 = undefined;
     const external_user_id = typed_doc_id.hexSlice(user_id, &id_buf);
-    try ctx.engine.enqueueSessionResolution(0, 1, 0, "resolution-order", external_user_id, false);
+    try ctx.engine.enqueueSessionResolution(0, 1, 0, 0, "resolution-order", external_user_id, false);
     try ctx.engine.flushPendingWrites();
 
     try testing.expect(ctx.engine.documentExists(users_index, user_id));

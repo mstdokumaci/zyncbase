@@ -287,7 +287,7 @@ pub const TestContext = struct {
 
     pub fn deinit(self: *TestContext) void {
         if (self.send_queue) |*sq| {
-            while (sq.pop()) |entry| {
+            while (sq.popFrom(0)) |entry| {
                 entry.deinit();
             }
             sq.deinit();

@@ -122,55 +122,40 @@ No other storage backends will be added. The Zero-Zig deployment model (ADR-003)
 ---
 
 ## ADR-006: Deterministic Thread Budget Architecture
-
-A single-threaded core cannot use SQLite's parallel read capability (ADR-005) or the multi-core capacity available on modern server hardware. Configuration-driven thread counts introduce performance cliffs and support burden from misconfiguration.
-
-**Decision**: The engine runs six deterministic thread domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 2 CPU cores. There are no configuration overrides for thread counts. Background worker domains may encode outbound messages, but uWebSockets sends are event-loop-only and cross-thread delivery goes through `SendQueue`.
-
+A single uWebSockets reactor cannot use the network and fanout capacity available on modern server hardware. Configuration-driven thread counts introduce performance cliffs and support burden from misconfiguration.
+**Decision**: The engine runs two uWebSockets network reactors plus five deterministic worker domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 2 CPU cores. There are no configuration overrides for thread counts. Each connection is owned by one reactor; background worker domains may encode outbound messages, but sends are performed only by the connection's owning reactor and cross-thread delivery goes through per-loop `SendSink` queues.
 ### Minimum Hardware Requirement
-
-The server requires at least 2 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase. At 2 cores the logical topology still uses the minimum six threads: event loop, writer, checkpoint, presence, one reader, and one subscription worker.
-
+The server requires at least 2 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase. At 2 cores the logical topology runs seven threads: two reactors, writer, checkpoint, presence, one reader, and one notification worker. Small hosts are oversubscribed; every supported host runs two reactors.
 ### Thread Budget Formula
-
 ```
 if cpu_count < 2 → server refuses to start
-
 fixed:
-  event_loop   = 1
-  writer       = 1
-  checkpoint   = 1
-  presence     = 1
-
+  event_loops = 2
+  writer      = 1
+  checkpoint  = 1
+  presence    = 1
 variable:
-  remaining    = max(cpu_count, 4) - 4
+  fixed_used   = event_loops + writer + checkpoint + presence
+  remaining    = max(cpu_count, fixed_used + 2) - fixed_used
   readers      = min(4, max(1, remaining / 2))
   notification = max(1, remaining - readers)
 ```
-
 ### Threading Topology
-
-| CPU Cores | Event Loop | Writer | Checkpoint | Presence | Readers | Notification | Total |
-|-----------|------------|--------|------------|----------|---------|--------------|-------|
-| 2         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
-| 3         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
-| 4         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
-| 8         | 1          | 1      | 1          | 1        | 2       | 2            | 8     |
-| 16        | 1          | 1      | 1          | 1        | 4       | 8            | 16    |
-| 32        | 1          | 1      | 1          | 1        | 4       | 24           | 32    |
-
-**Event loop thread** — runs the uWebSockets reactor, handles all WebSocket I/O and message dispatch, and drains `SendQueue` to call `Connection.send()`. Must never block.
-
+| CPU Cores | Event Loops | Writer | Checkpoint | Presence | Readers | Notification | Total |
+|-----------|-------------|--------|------------|----------|---------|--------------|-------|
+| 2         | 2           | 1      | 1          | 1        | 1       | 1            | 7     |
+| 3         | 2           | 1      | 1          | 1        | 1       | 1            | 7     |
+| 4         | 2           | 1      | 1          | 1        | 1       | 1            | 7     |
+| 8         | 2           | 1      | 1          | 1        | 1       | 2            | 8     |
+| 12        | 2           | 1      | 1          | 1        | 3       | 4            | 12    |
+| 16        | 2           | 1      | 1          | 1        | 4       | 7            | 16    |
+| 32        | 2           | 1      | 1          | 1        | 4       | 23           | 32    |
+**Event loop threads** — run the uWebSockets reactors, handle WebSocket I/O for their connection shard, dispatch messages, and drain their own `SendSink` to call `Connection.send()`. Must never block. Main runs loop 0; one spawned thread runs loop 1.
 **Writer thread** — receives mutations from the write queue, commits them to SQLite, and publishes durable outcomes/change events for downstream delivery. Serialization is by design: SQLite supports only one concurrent writer, and total write ordering is architecturally valuable (ADR-002).
-
 **Checkpoint thread** — background WAL→main database flush, decoupled from the write path.
-
-**Presence thread** — encodes presence broadcasts from batched state and pushes to the send queue.
-
-**Reader pool** — up to 4 threads, each holding its own SQLite connection opened in WAL read mode. Used for cold queries (subscriptions to collections with no active warm state) and `loadMore` operations.
-
-**Notification threads** — drain the change buffer after storage commits, evaluate subscription filters (CPU-heavy), encode delta messages, and push to the send queue.
-
+**Presence thread** — encodes presence broadcasts from batched state and pushes to the owning connection's send sink.
+**Reader pool** — up to 4 threads, each holding its own SQLite connection opened in WAL read mode. Used for cold queries (subscriptions to collections with no active warm state) and `loadMore` operations. Responses route to the requesting connection's reactor.
+**Notification threads** — drain the change buffer after storage commits, evaluate subscription filters (CPU-heavy), encode delta messages, and route each connection's delivery to its owning reactor.
 ### Lock-Free Cache
 
 Metadata shared across all thread domains is served from a lock-free cache using epoch-based reclamation and atomic reference counting. Copy-on-write map swaps allow the writer thread to publish updated versions without acquiring a reader lock. Atomic reference counting over RCU or hazard pointers: simpler to implement correctly, sufficient for the metadata access patterns involved.
@@ -187,9 +172,9 @@ Collection query results and subscription state are managed exclusively by the S
 **Consequences**:
 - Deterministic resource usage — no configuration-induced performance cliffs.
 - Fail-fast on machines with fewer than 2 CPU cores — clear error at startup while still supporting constrained CI runners.
-- Full CPU core utilization — benchmarks show ~Nx throughput improvement on a cpu with N cores, moving from a single-threaded to a multi-threaded core.
-- uWS reactor thread remains non-blocking at all times; all I/O-dependent work is dispatched and returned asynchronously.
-- Background workers never call uWS send APIs directly; they enqueue owned encoded bytes and wake the event loop after successful enqueue.
+- Full CPU core utilization through two reactor threads and the variable worker pools.
+- Both uWS reactors remain non-blocking at all times; all I/O-dependent work is dispatched and returned asynchronously.
+- Background workers never call uWS send APIs directly; they enqueue owned encoded bytes to the target loop's `SendSink` and wake that reactor.
 
 **Principles**: P-PPF, P-VSF
 
@@ -739,7 +724,7 @@ Write promises are scoped to the originating live connection. On disconnect, the
 - **A client-generated write id** — rejected; the request id already identifies the write, and the SDK never resends one.
 - **Report only writer failures** — rejected; without a success message the client cannot tell when a write has settled.
 - **Send outcomes independently of deltas** — rejected; a resolved write could precede its own deltas, so the writer's subscriptions would briefly show pre-write state.
-- **Sequence outcomes behind deltas on the event loop** — rejected; the event loop does not know which deltas a transaction produces, only the subscription workers do.
+- **Sequence outcomes behind deltas on the connection's owning reactor** — rejected; the reactor does not know which deltas a transaction produces, only the subscription workers do.
 - **A marker job per change-queue shard** — rejected; every transaction would cost one job per shard, including shards it never touched.
 - **No writer failure reporting** — rejected; ambiguous missing deltas cannot support user-facing save-failure feedback.
 - **Show only committed state** — rejected; every UI update would wait a round trip plus the writer's batch window, and a controlled input that waits for its own value loses its caret position.
@@ -1006,15 +991,15 @@ Sync actions are orchestration, not transaction management. A multi-step action 
 ### Correlation and Timeouts
 
 - `ActionCall` carries the client's per-connection envelope `id` (for the immediate response) and an optional `timeoutMs`. The server mints a unique execution id when forwarding; `ActionForward` carries that id with the bound-scope user id, and `ActionReply` echoes only the execution id. Client request ids are never used as cross-connection correlation keys. `ActionForward` also carries the caller's session claims projected through the action's schema `claims` list.
-- Pending sync calls live in a bounded per-connection table owned by the event loop. Entries are removed on reply, timeout, worker disconnect, caller disconnect, and scope change. A scope change rejects the pending call with `REQUEST_SUPERSEDED`; a caller disconnect delivers nothing because the connection is gone.
+- Pending sync calls live in a bounded per-connection table owned by the connection's reactor. Entries are removed on reply, timeout, worker disconnect, caller disconnect, and scope change. A scope change rejects the pending call with `REQUEST_SUPERSEDED`; a caller disconnect delivers nothing because the connection is gone.
 - The server owns the deadline (default 10s). A client-supplied `timeoutMs` may only shorten it. Expiry answers the caller with `ACTION_TIMEOUT` and removes the pending entry; the worker may still be executing. Timeout means "no response received", not "not executed".
 - Worker-side cancellation (`AbortSignal`) is not part of this version; there is no cancel message.
 
 ### Threading and Delivery
 
-- Routing, registration bookkeeping, correlation, and forward/reply encoding run on the uWS event loop. No new thread domain is introduced (ADR-006).
+- Routing, registration bookkeeping, correlation, and forward/reply encoding run on the uWS reactors under the ActionsService mutex. No new thread domain is introduced (ADR-006).
 - There is no engine-side worker queue: forwarding uses normal connection sends, and a worker that cannot keep up with its uWS buffer is disconnected and must reconnect and re-register.
-- All existing send invariants apply: sends happen on the event loop, and handlers must not block it.
+- All existing send invariants apply: sends happen on the connection's owning reactor, and handlers must not block it.
 
 ### Wire Protocol Integration
 

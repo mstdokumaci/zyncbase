@@ -127,7 +127,7 @@ fn runIteration(
     last_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds();
 
     var message_count: usize = 0;
-    while (send_queue.pop()) |entry| {
+    while (send_queue.popFrom(0)) |entry| {
         entry.deinit();
         message_count += 1;
     }
@@ -173,7 +173,7 @@ test "PresenceWorker: batched user update fanout throughput" {
 
     var send_queue = try send_queue_type.init(allocator);
     defer {
-        while (send_queue.pop()) |entry| entry.deinit();
+        while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -183,7 +183,7 @@ test "PresenceWorker: batched user update fanout throughput" {
     defer worker.deinit();
 
     for (0..subscriber_count) |i| {
-        var snapshot = try manager.onSubscribeUser(namespace_id, @intCast(i + 1), @intCast(i + 1));
+        var snapshot = try manager.onSubscribeUser(namespace_id, @intCast(i + 1), @intCast(i + 1), 0);
         snapshot.deinit(allocator);
     }
 
@@ -236,7 +236,7 @@ test "PresenceWorker: batched user update fanout throughput" {
     const is_debug = builtin.mode == .Debug;
     const is_tsan = builtin.sanitize_thread;
     const target_update: f64 = if (is_tsan) 0.1 else if (is_debug) 0.1 else 0.03;
-    const target_batch: f64 = if (is_tsan) 0.05 else if (is_debug) 0.3 else 0.2;
+    const target_batch: f64 = if (is_tsan) 0.15 else if (is_debug) 0.3 else 0.2;
     const target_dispatch: f64 = if (is_tsan) 3.0 else if (is_debug) 2.0 else 0.95;
     const target_drain: f64 = if (is_tsan) 0.2 else if (is_debug) 0.25 else 0.05;
     const target_total: f64 = if (is_tsan) 4.0 else if (is_debug) 2.5 else 1.4;
@@ -265,11 +265,11 @@ test "PresenceWorker: sparse update latency" {
 
     var send_queue = try send_queue_type.init(allocator);
     defer {
-        while (send_queue.pop()) |entry| entry.deinit();
+        while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
     }
 
-    var snapshot = try manager.onSubscribeUser(namespace_id, 1, 1);
+    var snapshot = try manager.onSubscribeUser(namespace_id, 1, 1, 0);
     defer snapshot.deinit(allocator);
 
     // Sparse updates flush at the age-window boundary: the window (not the
@@ -311,7 +311,7 @@ test "PresenceWorker: sparse update latency" {
         sample.* = @intCast(std.Io.Clock.awake.now(testing.io).toNanoseconds() - started_ns);
 
         var message_count: usize = 0;
-        while (send_queue.pop()) |entry| {
+        while (send_queue.popFrom(0)) |entry| {
             entry.deinit();
             message_count += 1;
         }

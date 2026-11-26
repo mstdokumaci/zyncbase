@@ -126,7 +126,7 @@ fn expectDeltasBeforeOutcomes(allocator: std.mem.Allocator, fixture: *Fixture, s
     var deltas = std.AutoHashMapUnmanaged(u64, u32).empty;
     defer deltas.deinit(allocator);
     var outcomes: usize = 0;
-    while (fixture.send_queue.pop()) |entry| {
+    while (fixture.send_queue.popFrom(0)) |entry| {
         defer entry.deinit();
         if (entry.items) |items| {
             for (items) |delivery| {
@@ -166,7 +166,7 @@ test "outcome ordering: a write's deltas reach its connection before its outcome
 
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    try fixture.subscriptions.subscribe(namespace_id, fixture.table_index, filter, conn_id, 1);
+    try fixture.subscriptions.subscribe(namespace_id, fixture.table_index, filter, conn_id, 1, 0);
 
     // Four workers on one shard process a transaction's jobs in parallel, so
     // any of them can drop the last fence reference.

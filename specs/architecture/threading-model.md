@@ -1,14 +1,20 @@
 # Threading Model
 
----
+ZyncBase runs a **deterministic thread budget** built around two uWebSockets
+network reactors, one serialized SQLite writer, one checkpoint worker, one
+presence worker, a reader pool, and a notification pool. Thread counts are
+computed from the CPU core count with a hardcoded formula; there are no runtime
+overrides.
 
 ## Overview
 
-ZyncBase uses a **deterministic thread budget architecture** with six fixed thread domains. Thread counts are computed from CPU core count using a hardcoded formula — there are no configuration overrides. The server refuses to start on machines with fewer than 2 CPU cores.
-
-**Key Innovation**: Deterministic thread allocation ensures predictable resource usage and eliminates configuration-induced performance cliffs.
-
----
+- Every connection is owned by exactly one reactor for its lifetime.
+- All WebSocket I/O and sends for a connection happen on its owning reactor.
+- The two reactors are the main thread (loop 0) and one spawned thread (loop 1).
+- Cross-thread work is delivered through per-loop send queues.
+- The writer, readers, presence worker, and notification workers never call
+  uWebSockets send APIs directly.
+- The server refuses to start on machines with fewer than 2 CPU cores.
 
 ## Architecture Diagram
 
@@ -16,289 +22,270 @@ ZyncBase uses a **deterministic thread budget architecture** with six fixed thre
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                       ZyncBase Thread Domains                           │
 │                                                                         │
-│                           ┌──────────────┐                              │
-│                           │  Event Loop  │◄─────────────────────────┐   │
-│                           │   (1 fixed)  │                          │   │
-│                           └─┬────┬────┬──┘                          │   │
-│                             │    │    │                             │   │
-│               ┌─────────────┘    │    └──────────────┐              │   │
-│          presence ops        write ops         read requests        │   │
-│               │                  │                   │              │   │
-│       ┌───────▼──────┐    ┌──────▼───────┐    ┌──────▼───────┐      │   │
-│       │  Presence    │    │    Writer    │    │  Reader Pool │      │   │
-│       │  (1 fixed)   │    │   (1 fixed)  │    │  (var, max 4)│      │   │
-│       └──────┬───────┘    └─┬─────────┬──┘    └──────┬───────┘      │   │
-│              │              │         │              │              │   │
-│              │        change fan-out  │              │              │   │
-│              │          (sharded)     │              │              │   │
-│              │              │   write outcomes       │              │   │
-│              │    ┌─────────▼──┐      │              │              │   │
-│              │    │Notification│      │              │              │   │
-│              │    │  Workers   │      │              │              │   │
-│              │    │ (variable) │      │              │              │   │
-│              │    └─────┬──────┘      │              │              │   │
-│              │          │             │              │              │   │
-│              ▼          ▼             ▼              ▼              │   │
-│            ┌───────────────────────────────────────────┐            │   │
-│            │                 Send queue                │            │   │
-│            │       (cross-thread message queue)        ├────────────┘   │
-│            └───────────────────────────────────────────┘                │
+│   ┌────────────────┐                 ┌────────────────┐                 │
+│   │  Event Loop 0  │                 │  Event Loop 1  │                 │
+│   │  (main thread) │                 │  (spawned)     │                 │
+│   └─┬────┬────┬────┘                 └─┬────┬────┬────┘                 │
+│     │    │    │                        │    │    │                      │
+│  presence write read                presence write read                 │
+│     │    │    │                        │    │    │                      │
+│  ┌──▼────▼────▼──┐                  ┌──▼────▼────▼──┐                   │
+│  │  SendSink 0   │                  │  SendSink 1   │                   │
+│  └──────┬────────┘                  └──────┬────────┘                   │
+│         │                                  │                            │
+│   ┌─────▼──────┐   ┌──────────────┐   ┌────▼─────────┐                  │
+│   │  Presence  │   │    Writer    │   │ Reader Pool  │                  │
+│   │  (1 fixed) │   │  (1 fixed)   │   │ (variable)   │                  │
+│   └─────┬──────┘   └──────┬───────┘   └──────┬───────┘                  │
+│         │                 │ change fan-out     │                         │
+│         │          ┌──────▼────────┐           │                         │
+│         │          │ Notification  │           │                         │
+│         │          │  Workers      │           │                         │
+│         │          │  (variable)   │           │                         │
+│         │          └──────┬────────┘           │                         │
+│         └─────────────────┼────────────────────┘                         │
+│                           ▼                                              │
+│                 per-loop SendSink queues                                 │
 │                                                                         │
-│  * Note: The Checkpoint thread (1 fixed) runs independently in the      │
-│    background to flush WAL to the main SQLite database.                 │
+│  Checkpoint (1 fixed) runs independently and flushes WAL.                │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
----
-
 ## Thread Budget Formula
-
-The thread budget is computed at startup from the detected CPU core count:
 
 ```
 if cpu_count < 2 → server refuses to start
-
 fixed:
-  event_loop   = 1
-  writer       = 1
-  checkpoint   = 1
-  presence     = 1
+  event_loops = 2
+  writer      = 1
+  checkpoint  = 1
+  presence    = 1
 
 variable:
-  remaining    = max(cpu_count, 4) - 4
+  fixed_used   = event_loops + writer + checkpoint + presence
+  remaining    = max(cpu_count, fixed_used + 2) - fixed_used
   readers      = min(4, max(1, remaining / 2))
   notification = max(1, remaining - readers)
 ```
 
 ### Thread Count by CPU Cores
 
-| CPU Cores | Event Loop | Writer | Checkpoint | Presence | Readers | Notification | Total |
-|-----------|------------|--------|------------|----------|---------|--------------|-------|
-| 2         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
-| 3         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
-| 4         | 1          | 1      | 1          | 1        | 1       | 1            | 6     |
-| 8         | 1          | 1      | 1          | 1        | 2       | 2            | 8     |
-| 16        | 1          | 1      | 1          | 1        | 4       | 8            | 16    |
-| 32        | 1          | 1      | 1          | 1        | 4       | 24           | 32    |
+| CPU Cores | Event Loops | Writer | Checkpoint | Presence | Readers | Notification | Total |
+|-----------|-------------|--------|------------|----------|---------|--------------|-------|
+| 2         | 2           | 1      | 1          | 1        | 1       | 1            | 7     |
+| 3         | 2           | 1      | 1          | 1        | 1       | 1            | 7     |
+| 4         | 2           | 1      | 1          | 1        | 1       | 1            | 7     |
+| 8         | 2           | 1      | 1          | 1        | 1       | 2            | 8     |
+| 12        | 2           | 1      | 1          | 1        | 3       | 4            | 12    |
+| 16        | 2           | 1      | 1          | 1        | 4       | 7            | 16    |
+| 32        | 2           | 1      | 1          | 1        | 4       | 23           | 32    |
 
----
+On 2-4 CPU hosts the minimum worker set oversubscribes the machine.
 
 ## Thread Domain Responsibilities
 
-### Event Loop (1 thread, fixed)
-- Runs the network reactor; handles all WebSocket I/O (connect, message, disconnect)
-- Dispatches incoming messages to the write or read path without blocking
-- Drains the cross-thread message queue in the post-handler and delivers outbound payloads to connections
-- Must never block — all I/O is non-blocking
+### Event Loops (2, fixed)
 
-### Writer (1 thread, fixed)
-- Receives mutations through a dedicated write queue
-- Commits to SQLite in serialized order; total write ordering is architecturally guaranteed
-- After each commit, fans committed changes out to subscription workers
-- Delivers write outcomes (committed or rejected) back to the event loop for client delivery
+- Each reactor accepts and owns a shard of the WebSocket connections.
+- Handles connect, message, and disconnect for its connections.
+- Dispatches incoming messages to the write or read path without blocking.
+- Drains its own `SendSink` in the post-handler and delivers outbound frames.
+- Owns its per-loop timers: token-expiry sweep and connection cleanup.
+- Must never block; all I/O is non-blocking.
 
-### Checkpoint (1 thread, fixed)
-- Background WAL→main database flush
-- Periodic full checkpoints
-- Decoupled from the write path to avoid blocking mutations
+### Writer (1, fixed)
 
-### Presence (1 thread, fixed)
-- Accepts presence operations from the event loop through a dedicated input queue
-- Processes operations serially, updates in-memory presence state, and encodes outbound broadcasts
-- Delivers encoded presence messages to the event loop through the cross-thread message queue
+- Receives mutations through the dedicated write queue.
+- Commits to SQLite in serialized order.
+- After each commit, fans committed changes out to subscription workers.
+- Routes write outcomes to the connection's owning loop.
+- Preserves the single-writer ordering guarantee of SQLite.
+
+### Checkpoint (1, fixed)
+
+- Background WAL→main database flush.
+- Periodic full checkpoints.
+- Decoupled from the write path to avoid blocking mutations.
+
+### Presence (1, fixed)
+
+- Accepts presence operations from both reactors through a synchronized input
+  queue.
+- Processes operations serially, updates in-memory presence state, and encodes
+  outbound broadcasts.
+- Routes each encoded broadcast to the subscriber's owning loop.
 
 ### Reader Pool (variable, max 4)
-- Each reader thread holds its own SQLite connection in WAL read mode
-- Accepts read requests from a shared work queue; multiple readers consume concurrently
-- Encodes read responses and delivers them to the event loop through the cross-thread message queue
-- Scales with CPU cores up to 4 workers
+
+- Each reader thread holds its own SQLite connection in WAL read mode.
+- Reads requests from a shared work queue.
+- Each request carries its target loop; responses are pushed to that loop's
+  `SendSink`.
+- Scales with CPU cores up to 4 workers.
 
 ### Notification (variable)
-- A pool of workers; committed changes are distributed across shards so each worker owns one shard
-- Each worker blocks on its shard until a change arrives, then evaluates subscription filters (CPU-heavy)
-- Encodes delta messages and delivers them to the event loop through the cross-thread message queue
 
----
+- A pool of workers; committed changes are distributed across shards so each
+  worker owns one shard.
+- Each worker blocks on its shard until a change arrives, then evaluates
+  subscription filters (CPU-heavy).
+- Encodes deltas and routes each connection's delivery to its owning loop.
+- Subscription fanout is batched per change and split by owning loop; it is not
+  pushed one queue entry per subscriber.
 
 ## How It Works
 
 ### 1. Message Arrival
-- WebSocket message arrives on the event loop thread
-- Message handler parses and routes to the read or write path
-- No blocking — all operations are dispatched asynchronously
+
+- A WebSocket message arrives on the reactor that owns the connection.
+- The message handler parses and routes it to the read or write path.
+- No blocking; operations are dispatched asynchronously.
 
 ### 2. Write Path (Serialized)
-- Mutation is enqueued to the dedicated write queue and the event loop returns immediately
-- Writer thread dequeues and commits to SQLite in serialized order
-- After commit, committed changes are distributed to subscription workers for subscription fanout
-- Write outcomes (`WriteCommitted` / `WriteError`) are delivered back to the event loop for the issuing client
+
+- The mutation is enqueued to the write queue with its origin loop and ack.
+- The writer commits it to SQLite in serialized order.
+- After commit, the change is distributed to subscription workers.
+- `WriteCommitted` / `WriteError` outcomes are pushed to the origin loop's
+  `SendSink` after the transaction's deltas.
 
 ### 3. Read Path (Parallel)
-- Warm reads (active subscriptions) evaluate in-memory via the Subscription Engine
-- Cold reads and pagination requests are dispatched to the reader pool via a shared work queue
-- Reader threads execute SQLite queries in parallel on dedicated connections
-- Results are encoded and delivered to the event loop through the cross-thread message queue
 
-### 4. Presence Path (Dedicated)
-- Presence operations from the event loop are enqueued into the presence worker's input queue
-- The presence worker processes operations serially, updates in-memory state, and encodes responses
-- Encoded broadcasts and snapshots are delivered to the event loop through the cross-thread message queue
+- Warm reads evaluate in-memory through the Subscription Engine.
+- Cold reads and pagination are dispatched to the reader pool.
+- Readers execute SQLite queries in parallel on their own connections.
+- Responses are encoded and pushed to the requesting connection's loop.
 
----
+### 4. Presence Path
+
+- Each reactor enqueues presence operations into the presence worker's input
+  queue.
+- The presence worker processes them serially, updates in-memory state, and
+  encodes snapshots and broadcasts.
+- Each delivery is routed to the subscriber's owning loop.
+
+### 5. Connection and Subscription Fanout
+
+- A subscription records the owning loop at registration.
+- A change's matches include the loop for each subscriber.
+- The worker splits a change batch by loop and pushes one batch entry per loop.
+- The owning reactor groups deliveries by connection and sends one frame per
+  connection, preserving per-connection order.
 
 ## Thread Safety Strategy
 
-The core engine routes incoming messages to either the parallel read path or the serialized write path. The Subscription Engine maintains in-memory collection state updated by the writer thread after each commit. A lock-free cache handles auth/schema/namespace/identity metadata with atomic reference counting and copy-on-write map swaps.
+A connection belongs to one reactor. That ownership is the primary
+synchronization boundary; cross-loop delivery is explicit.
 
-**Synchronization boundaries:**
-- Connection state: mutated only through connection management methods; no direct mutation from background threads
-- Storage writes: serialized through the single-writer queue; bypassing it breaks write ordering
-- Storage reads: each reader thread owns its SQLite connection exclusively; no connection sharing
-- Notification fanout: committed changes distributed to subscription workers via a sharded work queue; each worker owns one shard
-- Subscriptions: register/unregister through the subscription registry; disconnects must detach all connection-owned subscriptions
-- Presence: event loop enqueues operations into the presence worker's input queue; the presence worker is the sole mutator of presence state
-- WebSocket sends: background workers push owned encoded messages to the cross-thread queue; only the event loop drains and delivers to connections
+**Invariants:**
 
----
+- Every `Connection.send` runs on the connection's owning reactor.
+- A `SendSink` has exactly one consumer: its reactor.
+- Producers push to a queue with the target loop id; there is no global
+  connection-to-loop lookup on the push path.
+- Batched subscription fanout stays batched and is split only at the loop
+  boundary.
+- Each reactor has its own drain arena; drain state is never shared.
+- Per-loop token and action sweeps only touch and send to their own shard.
+- Write outcomes and session-resolution results route to the origin loop.
+- Cross-loop control sends are deferred to the owning loop, never sent from the
+  caller's loop.
+- Shared registries use their documented lock or ownership model:
+  - connection registry: one mutex-protected map with an immutable owning-loop id per
+    connection; per-loop drain arenas and sweep selectors;
+  - subscription engine: thread-safe registration/matching;
+  - lock-free metadata cache: atomic reference counting and copy-on-write;
+  - presence: sole mutator is the presence worker;
+  - actions: shared state guarded by its mutex and delivered through target
+    sinks.
+- Shutdown closes both listeners, sends disconnects on each owning loop, drains
+  both queues, joins both reactors, then stops workers and checkpoints.
 
-## Performance Characteristics
+**Ordering:**
 
-### Typical Workload (90% reads, 10% writes)
-
-**16-core machine:**
-```
-Readers:      4 threads × ~11k each = 44k cold reads/sec
-Notification: 8 threads × ~5k each  = 40k change evaluations/sec
-Writes:       1 thread  × ~10k      = 10k writes/sec (serialized)
-Event Loop:   1 thread  × ~200k     = 200k messages/sec dispatch
-Total: ~150k+ req/sec average
-CPU usage: ~85% (all cores used)
-```
-
-**vs Single-threaded approach:**
-```
-Combined: 10k req/sec
-CPU usage: 6% (1/16 cores)
-```
-
-**Result: 15x+ performance improvement**
-
-### Why This Works
-
-**1. Deterministic thread allocation**
-- No configuration-induced performance cliffs
-- Formula ensures balanced resource allocation
-- Server refuses to start on underpowered machines
-
-**2. Warm reads are lock-free and in-memory**
-- Subscription Engine evaluates against in-memory state
-- No SQLite round-trip for subscribed collections
-- No contention, scales with CPU cores
-
-**3. Cold reads use the parallel SQLite read pool**
-- Up to 4 reader threads
-- WAL mode enables true parallel reads
-
-**4. Writes are serialized**
-- Necessary for correctness (ACID)
-- SQLite single-writer limitation
-- Batching keeps throughput high (10k+ writes/sec)
-
-**5. Notification evaluation is parallelized**
-- Multiple threads evaluate subscription filters
-- CPU-heavy work distributed across cores
-
----
+- Per-connection order is preserved by loop affinity.
+- A transaction's deltas for a connection are pushed before that connection's
+  write outcome (ADR-018).
+- The single writer defines the commit order. Global arrival order across the
+  two reactors is not part of the contract.
 
 ## Memory Management Strategy
 
-ZyncBase employs specialized allocation patterns to minimize overhead in a high-concurrency environment:
-- **Arena Allocation** for request-scoped data.
-- **Object Pooling** for reusing common structures.
-- **Allocator Strategies** (Arena, Pool, GPA).
+- Arena allocation for request-scoped data, one drain arena per reactor.
+- Object pooling for connections and queue nodes.
+- Send-queue entries carry one arena reference per queue entry; a split fanout
+  batch retains the arena once per target loop.
+- Allocator strategies: arena, pool, general allocator.
 
----
+## Performance Characteristics
+
+The network reactor is the only component that cannot be parallelized within a
+single uWebSockets instance. Two reactors shard connections and their outbound
+work; the writer, readers, and notification pool remain shared.
+
+- Warm reads evaluate in memory.
+- Cold reads use the parallel SQLite reader pool.
+- Writes are serialized by SQLite.
+- Notification evaluation is parallelized across shards.
+- Fanout is batched per connection per reactor drain.
 
 ## Pros and Cons
 
 ### Pros
 
-- **Uses all CPU cores** — True vertical scaling
-- **Deterministic** — No configuration knobs to misconfigure
-- **Warm reads are fully in-memory** — Subscription Engine eliminates SQLite round-trips
-- **SQLite parallel reads** — Fully used for cold queries
-- **Lock-free metadata** — Auth/schema/namespace lookups are wait-free
-- **Fail-fast** — Server refuses to start on underpowered machines
+- Uses both reactors for network I/O and fanout delivery.
+- Deterministic thread allocation; no runtime knobs.
+- Warm reads are in-memory.
+- SQLite parallel reads are fully used.
+- Lock-free metadata lookups.
+- Connection-local ordering with explicit cross-loop routing.
 
 ### Cons
 
-- **Minimum 2 cores required** — Cannot run on small instances
-- **Writes are serialized** — SQLite single-writer limitation
-- **Need atomic operations** — For lock-free cache
-- **Cold queries hit SQLite** — First subscribe to a collection incurs a read
-- **More complex** — Than single-threaded approach
+- Minimum 2 cores; small hosts run seven threads with two reactors.
+- Writes remain serialized by SQLite.
+- Two reactors require strict connection ownership and cross-loop discipline.
+- Cold queries still hit SQLite.
+- Two reactors are required on every supported host.
 
 ### Mitigation
 
-**For minimum core requirement:**
-- Modern servers have 2+ cores
-- Small instances are not the target deployment environment
-- Clear error message at startup
+- Most workloads are read-heavy; writes are batched.
+- Cold reads become warm after the first subscription.
+- Invariants and tests enforce loop ownership; TSAN and two-loop e2e are
+  required for every threading change.
 
-**For serialized writes:**
-- Most workloads are read-heavy (90%+)
-- 10k writes/sec is sufficient for most apps
-- Batching increases effective throughput
+## Rejected Alternatives
 
-**For cold queries:**
-- After first subscribe, all subsequent reads for that collection are in-memory
-- `loadMore` always hits SQLite by design (historical data, not hot path)
+### One Shared Send Queue With Two Consumers
 
----
+Rejected: the queue is single-consumer, and a consumer must never send on a
+socket it does not own.
 
-## Comparison with Alternatives
+### Namespace or Tenant Pinning
 
-### Single-threaded Core (Rejected)
+Rejected: it does not split fanout within a namespace and would require
+connection migration. Connections are sharded by connection, not by namespace.
 
-**Pros:**
-- Simpler implementation
-- No race conditions
-- Easier to reason about
+### Configuration-Driven Thread Counts
 
-**Cons:**
-- Cannot use multiple CPU cores
-- Limited to ~10k req/sec total
-- Wastes SQLite parallel read capability
-- Not competitive with Bun/modern systems
+Rejected: deterministic allocation avoids configuration-induced cliffs and
+support burden. The reactor count is fixed at two.
 
-### Configuration-Driven Thread Counts (Rejected)
+### More Than Two Reactors Now
 
-**Pros:**
-- Flexibility for unusual deployments
-- Tuning knobs for performance enthusiasts
-
-**Cons:**
-- Configuration-induced performance cliffs
-- Support burden from misconfiguration
-- Most users don't understand thread tuning
-- Deterministic formula is sufficient for target workloads
+Deferred: two reactors cover the current target; additional reactors add
+port-sharing, shutdown, and shared-registry complexity without proven headroom.
 
 ### Thread-per-Namespace (Future)
 
-**Pros:**
-- Natural isolation per tenant
-- Could scale beyond single-writer limit
-
-**Cons:**
-- More complex than read/write separation
-- Harder to load balance
-- Requires more sophisticated scheduling
-
----
+Could provide tenant isolation, but it is more complex than connection sharding
+and requires more sophisticated scheduling.
 
 ## Related Specifications
 
 - [ADRs](./adrs.md) - Architectural Decision Records
-- [Storage Layer](./storage-layer.md) - Details on parallel disk access
+- [Storage Layer](./storage-layer.md) - Parallel disk access
 - [Core Principles](./core-principles.md) - Design philosophy
-- [Threading](../implementation/threading.md) - Implementation details: source files, types, queue mechanics, and synchronization invariants
+- [Threading](../implementation/threading.md) - Source files, types, queues, and
+  synchronization invariants

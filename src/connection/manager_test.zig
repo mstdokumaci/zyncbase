@@ -323,12 +323,12 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
     const msg1 = try arena_alloc.dupe(u8, "first-message");
     const msg2 = try arena_alloc.dupe(u8, "second-message");
     handle.retain();
-    try queue.push(.{ .conn_id = conn_id, .data = msg1, .arena = handle });
+    try queue.push(0, .{ .conn_id = conn_id, .data = msg1, .arena = handle });
     handle.retain();
-    try queue.push(.{ .conn_id = conn_id, .data = msg2, .arena = handle });
+    try queue.push(0, .{ .conn_id = conn_id, .data = msg2, .arena = handle });
     handle.release();
 
-    app.connection_manager.drainSendQueue(&queue);
+    app.connection_manager.drainSendQueue(&queue, 0);
 
     // One ws.send for the whole group — entries are concatenated into a
     // single frame in queue order per connection per drain pass.
@@ -375,7 +375,7 @@ test "ConnectionManager: drain drops and closes a connection that exceeds the pe
     const handle_a = try app.memory_strategy.acquireArenaDeferred();
     for (0..entry_count) |_| {
         handle_a.retain();
-        try queue.push(.{ .conn_id = ws_a.getConnId(), .data = chunk, .arena = handle_a });
+        try queue.push(0, .{ .conn_id = ws_a.getConnId(), .data = chunk, .arena = handle_a });
     }
     handle_a.release(); // producer hold; the entries hold the rest
 
@@ -386,12 +386,12 @@ test "ConnectionManager: drain drops and closes a connection that exceeds the pe
     const msg1 = try alloc_b.dupe(u8, "first");
     const msg2 = try alloc_b.dupe(u8, "second");
     handle_b.retain();
-    try queue.push(.{ .conn_id = ws_b.getConnId(), .data = msg1, .arena = handle_b });
+    try queue.push(0, .{ .conn_id = ws_b.getConnId(), .data = msg1, .arena = handle_b });
     handle_b.retain();
-    try queue.push(.{ .conn_id = ws_b.getConnId(), .data = msg2, .arena = handle_b });
+    try queue.push(0, .{ .conn_id = ws_b.getConnId(), .data = msg2, .arena = handle_b });
     handle_b.release();
 
-    app.connection_manager.drainSendQueue(&queue);
+    app.connection_manager.drainSendQueue(&queue, 0);
 
     try testing.expect(!queue.hasItems());
 
@@ -438,10 +438,10 @@ test "ConnectionManager: drain delivers a lone entry larger than the pending byt
 
     const handle = try app.memory_strategy.acquireArenaDeferred();
     handle.retain();
-    try queue.push(.{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
+    try queue.push(0, .{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
     handle.release();
 
-    app.connection_manager.drainSendQueue(&queue);
+    app.connection_manager.drainSendQueue(&queue, 0);
 
     try testing.expect(!queue.hasItems());
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
@@ -476,12 +476,12 @@ test "ConnectionManager: drain closes a connection whose group mixes an oversize
     const handle = try app.memory_strategy.acquireArenaDeferred();
     const small = try handle.allocator().dupe(u8, "sm");
     handle.retain();
-    try queue.push(.{ .conn_id = ws.getConnId(), .data = small, .arena = handle });
+    try queue.push(0, .{ .conn_id = ws.getConnId(), .data = small, .arena = handle });
     handle.retain();
-    try queue.push(.{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
+    try queue.push(0, .{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
     handle.release();
 
-    app.connection_manager.drainSendQueue(&queue);
+    app.connection_manager.drainSendQueue(&queue, 0);
 
     try testing.expect(!queue.hasItems());
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
@@ -517,11 +517,11 @@ test "ConnectionManager: drain closes a connection with repeated oversized entri
     const handle = try app.memory_strategy.acquireArenaDeferred();
     for (0..2) |_| {
         handle.retain();
-        try queue.push(.{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
+        try queue.push(0, .{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
     }
     handle.release();
 
-    app.connection_manager.drainSendQueue(&queue);
+    app.connection_manager.drainSendQueue(&queue, 0);
 
     try testing.expect(!queue.hasItems());
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
@@ -548,11 +548,11 @@ test "ConnectionManager: token sweep expires JWT sessions but preserves anonymou
     app.connection_manager.token_grace_period_seconds = 30;
     session.token_expires_at = std.Io.Clock.real.now(std.testing.io).toSeconds();
     session.is_anonymous = true;
-    app.connection_manager.sweepExpiredTokens();
+    app.connection_manager.sweepExpiredTokens(0);
     try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
 
     session.is_anonymous = false;
-    app.connection_manager.sweepExpiredTokens();
+    app.connection_manager.sweepExpiredTokens(0);
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
     const notification = try helpers.parseResponse(std.heap.smp_allocator, recorder.bytes());
     defer if (notification.code) |code| std.heap.smp_allocator.free(code);
@@ -562,12 +562,12 @@ test "ConnectionManager: token sweep expires JWT sessions but preserves anonymou
     defer notification_map.free(std.heap.smp_allocator);
     try testing.expect((try notification_map.mapGet("id")) == null);
 
-    app.connection_manager.sweepExpiredTokens();
+    app.connection_manager.sweepExpiredTokens(0);
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
 
     app.connection_manager.token_grace_period_seconds = 0;
     recorder.reset();
-    app.connection_manager.sweepExpiredTokens();
+    app.connection_manager.sweepExpiredTokens(0);
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
     const terminal = try helpers.parseResponse(std.heap.smp_allocator, recorder.bytes());
     defer if (terminal.code) |code| std.heap.smp_allocator.free(code);

@@ -30,7 +30,7 @@
 | `wire.Envelope` | MessagePack extractor | Carries `type` and `id`, the only fields needed before routing. |
 | `StoreService` | `StorageEngine`, `Schema`, `Authorization` | Executes store reads/writes and resolves namespace/user scope. |
 | `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Tracks store subscriptions and evaluates record changes for fanout. |
-| `PresenceService` | `PresenceWorker`, schema, authorization | Accepts presence requests on the event loop and hands work to the dedicated presence thread. |
+| `PresenceService` | `PresenceWorker`, schema, authorization | Accepts presence requests on the owning reactor and hands work to the dedicated presence thread. |
 
 ## Ping Fast Path
 
@@ -47,7 +47,7 @@ Before ordinary request rate limiting or arena acquisition, `MessageHandler` att
 7. Return `null` for store writes and for asynchronous read, subscribe, load-more, presence, or scope-resolution paths; the relevant worker later sends the response if the connection state is still current. Action paths settle as follows:
    - Async `ActionCall` answers immediately with `0x00 OK` once admitted to the forward path; it has no deferred response.
    - Sync `ActionCall` records a pending entry and answers only when the worker's `ActionReply` resolves it, or fails it with `ACTION_TIMEOUT` / `WORKER_DISCONNECTED` / `REQUEST_SUPERSEDED`.
-   - `ActionRegister` completes on the event loop and answers immediately.
+   - `ActionRegister` completes on the owning reactor and answers immediately.
    - `ActionReply` resolves a pending caller by `execId`; a reply that does not match a pending `execId` owned by the sending worker is discarded.
 8. Convert route failures through `wire.getWireError` and send a canonical error response.
 
@@ -81,7 +81,7 @@ Before ordinary request rate limiting or arena acquisition, `MessageHandler` att
 - Public codes and retry categories are owned by [Error Taxonomy](./error-taxonomy.md).
 - Message format and parser-limit failures are recorded in `ConnectionViolationTracker`.
 - Repeated security-sensitive violations close the WebSocket instead of allowing unbounded error responses.
-- Store writes (`StoreSet`, `StoreRemove`, `StoreBatch`) get no `ok`. They complete through `WriteCommitted` or `WriteError` pushes correlated by request `id`; an accept-phase failure gets an `error` response instead. An empty `StoreBatch` commits nothing, so the handler answers it with `WriteCommitted` directly. The writer thread encodes the outcome after the transaction commits or rejects, pushes owned bytes to `SendQueue`, and wakes the event loop.
+- Store writes (`StoreSet`, `StoreRemove`, `StoreBatch`) get no `ok`. They complete through `WriteCommitted` or `WriteError` pushes correlated by request `id`; an accept-phase failure gets an `error` response instead. An empty `StoreBatch` commits nothing, so the handler answers it with `WriteCommitted` directly. The writer thread encodes the outcome after the transaction commits or rejects, pushes owned bytes to the per-loop send queue, and wakes the owning reactor.
 
 ## Error Propagation
 
@@ -96,11 +96,11 @@ Errors flow through four distinct paths depending on when they occur:
 
 ### Asynchronous Write Outcomes
 
-1. Event loop enqueues the write operation with its `WriteAck` (`conn_id` and request `msg_id`) and sends no immediate response.
+1. The owning reactor enqueues the write operation with its `WriteAck` (`conn_id` and request `msg_id`) and sends no immediate response.
 2. Writer thread commits or rejects the transaction after durable ordering is known.
 3. Writer encodes `WriteCommitted` (success) or `WriteError` (failure) with the request `msg_id` as `id` and optional `batch_index` into the transaction's `OutcomeFence`.
-4. Once the subscription workers have pushed the transaction's deltas, the last fence holder pushes the outcomes to `SendQueue` and wakes the event loop.
-5. The event loop drains `SendQueue` and delivers the encoded push to the origin connection via `Connection.send()`.
+4. Once the subscription workers have pushed the transaction's deltas, the last fence holder pushes the outcomes to the origin loop's send queue and wakes the owning reactor.
+5. The owning reactor drains its per-loop send queue and delivers the encoded push to the origin connection via `Connection.send()`.
 
 ### Asynchronous Session Resolution Errors
 

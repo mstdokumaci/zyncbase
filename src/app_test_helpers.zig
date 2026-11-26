@@ -414,11 +414,11 @@ pub const AppTestContext = struct {
         mock_conn.beginStoreScopeResolutionLocked(namespace_dupe);
         const scope_seq = mock_conn.scope_seq;
 
-        try self.store_service.enqueueResolveScope(mock_conn.id, msg_id, scope_seq, namespace, external_user_id, false);
+        try self.store_service.enqueueResolveScope(mock_conn.id, msg_id, 0, scope_seq, namespace, external_user_id, false);
         try self.storage_engine.flushPendingWrites();
 
         var matched_entry: ?send_queue_mod.Entry = null;
-        while (self.test_context.send_queue.?.pop()) |entry| {
+        while (self.test_context.send_queue.?.popFrom(0)) |entry| {
             if (entry.conn_id == mock_conn.id) {
                 if (matched_entry != null) {
                     // Unexpected multiple results. Deinit both and fail.

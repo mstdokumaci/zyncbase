@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 pub const Subscriber = struct {
     conn_id: u64,
     sub_id: u64,
+    loop_id: u8 = 0,
 };
 
 /// A namespace-indexed table of subscriber lists.
@@ -30,6 +31,7 @@ pub const SubscriberTable = struct {
         namespace_id: i64,
         conn_id: u64,
         sub_id: u64,
+        loop_id: u8,
     ) !void {
         const result = try self.map.getOrPut(allocator, namespace_id);
         const created = !result.found_existing;
@@ -42,7 +44,7 @@ pub const SubscriberTable = struct {
                 _ = self.map.remove(namespace_id);
             }
         }
-        try result.value_ptr.append(allocator, .{ .conn_id = conn_id, .sub_id = sub_id });
+        try result.value_ptr.append(allocator, .{ .conn_id = conn_id, .sub_id = sub_id, .loop_id = loop_id });
     }
 
     /// Remove the first subscriber matching the given connection.

@@ -247,6 +247,7 @@ pub const SubscriptionWorker = struct {
             items[count] = .{
                 .conn_id = match.connection_id,
                 .data = owned_msg,
+                .loop_id = match.loop_id,
             };
             count += 1;
         }
@@ -260,7 +261,7 @@ pub const SubscriptionWorker = struct {
         // queue owns a second ref while the batch is visible; the consumer
         // releases that ref once after all deliveries are sent.
         handle.retain();
-        self.send_queue.push(.{
+        self.send_queue.push(0, .{
             .conn_id = 0,
             .data = &.{},
             .items = items[0..count],

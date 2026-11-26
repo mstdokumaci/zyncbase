@@ -297,6 +297,8 @@ pub const MessageHandler = struct {
         const detached = conn.detachSubscriptionsLocked();
         conn.resetSessionLocked();
         self.unsubscribeDetached(conn, detached);
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         self.actions_service.removeAllForConnection(conn.id);
 
         if (presence_ns != connection_mod.unset_namespace_id) {
@@ -314,6 +316,8 @@ pub const MessageHandler = struct {
         transferred = true;
         const scope_seq = conn.scope_seq;
         self.unsubscribeDetached(conn, detached);
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         self.actions_service.invalidateScope(conn.id, .store);
         return scope_seq;
     }
@@ -343,6 +347,7 @@ pub const MessageHandler = struct {
     fn baseCtx(conn: *Connection) RequestContext {
         return .{
             .conn_id = conn.id,
+            .loop_id = conn.loop_id,
             .user_doc_id = conn.user_doc_id,
             .external_user_id = conn.getExternalUserId(),
             .session_claims = conn.getSessionClaimsPtr(),
@@ -427,7 +432,7 @@ pub const MessageHandler = struct {
             return error.RequestSuperseded;
         }
 
-        try self.store_service.enqueueResolveScope(conn.id, msg_id, scope_seq, req.namespace, external_user_id, false);
+        try self.store_service.enqueueResolveScope(conn.id, msg_id, conn.loop_id, scope_seq, req.namespace, external_user_id, false);
         return null;
     }
 
@@ -570,6 +575,7 @@ pub const MessageHandler = struct {
             read_req.filter,
             conn.id,
             sub_id,
+            conn.loop_id,
         );
         errdefer self.subscription_engine.unsubscribe(conn.id, sub_id);
         try conn.addSubscription(sub_id);
@@ -643,6 +649,8 @@ pub const MessageHandler = struct {
         validated.claims = .{};
         validated.deinit(conn.allocator);
         conn.updateSessionClaims(claims, expires_at);
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         self.actions_service.reauthorizeRegistrations(try requireActionCtx(conn));
 
         return try wire_encode.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
@@ -683,7 +691,7 @@ pub const MessageHandler = struct {
             return error.RequestSuperseded;
         }
 
-        try self.store_service.enqueueResolveScope(conn.id, msg_id, scope_seq, req.namespace, external_user_id, true);
+        try self.store_service.enqueueResolveScope(conn.id, msg_id, conn.loop_id, scope_seq, req.namespace, external_user_id, true);
         return null;
     }
 
@@ -849,6 +857,8 @@ pub const MessageHandler = struct {
         if (old_ns != connection_mod.unset_namespace_id) {
             self.presence_service.removeAllForConnection(old_ns, old_user, conn.id);
         }
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         self.actions_service.invalidateScope(conn.id, .presence);
 
         return scope_seq;
@@ -866,6 +876,8 @@ pub const MessageHandler = struct {
         const req = try wire_decode.extractActionCallFast(message, arena_allocator);
         const ctx = try requireActionCtx(conn);
 
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         const outcome = try self.actions_service.call(ctx, msg_id, req.action_id, &req.params, req.timeoutMs);
         return switch (outcome) {
             .accepted => try wire_encode.encodeSuccess(arena_allocator, msg_id),
@@ -888,6 +900,8 @@ pub const MessageHandler = struct {
             action_ids[i] = msgpack.extractPayloadUsize(item) orelse return error.InvalidPayload;
         }
 
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         try self.actions_service.register(try requireActionCtx(conn), action_ids);
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
@@ -901,6 +915,8 @@ pub const MessageHandler = struct {
     ) !?[]const u8 {
         _ = msg_id;
         const req = try wire_decode.extractActionReplyFast(message, arena_allocator);
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         self.actions_service.resolveReply(conn.id, req.execId, req.ok, &req.payload);
         return null;
     }

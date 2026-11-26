@@ -15,6 +15,8 @@ const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};
 pub const Connection = struct {
     allocator: Allocator,
     id: u64,
+    /// Owning event loop. Immutable after activate().
+    loop_id: u8,
     session: ?Session,
     namespace_id: i64,
     store_namespace: ?[]const u8,
@@ -54,6 +56,7 @@ pub const Connection = struct {
         self.presence_scope_seq = 0;
         self.subscription_ids = .empty;
         self.next_subscription_id = 1;
+        self.loop_id = 0;
         self.ref_count = std.atomic.Value(usize).init(0);
     }
 
@@ -61,6 +64,7 @@ pub const Connection = struct {
     pub fn activate(self: *Connection, io: std.Io, id: u64, ws: WebSocket) void {
         self.resetSessionLocked();
         self.id = id;
+        self.loop_id = ws.loop_id;
         self.ws = ws;
         self.ref_count.store(1, .release);
         self.created_at = std.Io.Clock.real.now(io).toSeconds();

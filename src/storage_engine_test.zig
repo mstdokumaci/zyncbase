@@ -809,7 +809,7 @@ fn drainOutcomes(sq: *send_queue_mod.send_queue) ![]SendQueueEntry {
         for (entries.items) |entry| entry.deinit();
         entries.deinit(std.heap.smp_allocator);
     }
-    while (sq.pop()) |entry| {
+    while (sq.popFrom(0)) |entry| {
         errdefer entry.deinit();
         try entries.append(std.heap.smp_allocator, entry);
     }

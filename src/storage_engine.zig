@@ -545,6 +545,7 @@ pub const StorageEngine = struct {
         self: *StorageEngine,
         conn_id: u64,
         msg_id: u64,
+        loop_id: u8,
         scope_seq: u64,
         namespace: []const u8,
         external_user_id: []const u8,
@@ -560,6 +561,7 @@ pub const StorageEngine = struct {
         const op = WriteOp{
             .resolve_session = .{
                 .conn_id = conn_id,
+                .loop_id = loop_id,
                 .msg_id = msg_id,
                 .scope_seq = scope_seq,
                 .namespace = namespace_owned,

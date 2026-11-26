@@ -44,9 +44,9 @@ Some concerns span multiple subsystems. The canonical owner for each flow is:
 
 | Concern | Canonical Owner | Key Mechanism | Thread Boundary |
 |---------|----------------|---------------|-----------------|
-| Namespace resolution | `authorization/session_resolver.zig` | `SessionResolutionBuffer` with stale `scope_seq` checks | Writer thread → Event loop |
-| Subscription lifecycle | `subscription/engine.zig` | Connection-local subscription ids and shared registry | Event loop + subscription workers |
-| Write outcome | `storage_engine/write_worker.zig` | `SendQueue` (lock-free MPSC) | Writer thread (producer) → Event loop (consumer, drains in post-handler) |
+| Namespace resolution | `authorization/session_resolver.zig` | Stale `scope_seq` checks; target loop carried by the request | Writer thread → connection's reactor |
+| Subscription lifecycle | `subscription/engine.zig` | Connection-local subscription ids and shared registry | Owning reactor + subscription workers |
+| Write outcome | `storage_engine/write_worker.zig` | Per-loop send queue (lock-free MPSC) | Writer thread → origin reactor (drains in its post-handler) |
 | Subscription fanout | `subscription/worker_pool.zig` | `ChangeQueue` (sharded SPMC blocking queue) | Writer thread (producer) → `SubscriptionWorkerPool` workers (consumers) |
 | Error propagation | `wire/errors.zig` | `getWireError()` switch table | Synchronous + async via `SendQueue` |
 | Schema sync | `wire/encode.zig` + `connection/manager.zig` | Pre-encoded `[]const u8` at startup | Startup only, sent on `onOpen` |

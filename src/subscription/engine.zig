@@ -22,11 +22,14 @@ pub const SubscriptionGroup = struct {
     table_index: usize,
     filter: QueryFilter,
     /// Set of (connection_id, client_subscription_id)
-    subscribers: std.AutoHashMapUnmanaged(SubscriberKey, void) = .empty,
+    subscribers: std.AutoHashMapUnmanaged(SubscriberKey, SubscriberInfo) = .empty,
 
     pub const SubscriberKey = struct {
         connection_id: u64,
         id: SubscriptionId,
+    };
+    pub const SubscriberInfo = struct {
+        loop_id: u8,
     };
 
     pub fn deinit(self: *SubscriptionGroup, allocator: Allocator) void {
@@ -212,6 +215,7 @@ pub const SubscriptionEngine = struct {
         table_index: usize,
         filter: QueryFilter,
         sub_key: SubscriptionGroup.SubscriberKey,
+        loop_id: u8,
     ) !u64 {
         const group_id = self.next_group_id;
         self.next_group_id += 1;
@@ -230,7 +234,7 @@ pub const SubscriptionEngine = struct {
         var group_owned = true;
         errdefer if (group_owned) group.deinit(self.allocator);
 
-        try group.subscribers.put(self.allocator, sub_key, {});
+        try group.subscribers.put(self.allocator, sub_key, .{ .loop_id = loop_id });
         try self.groups.put(self.allocator, group_id, group);
         group_owned = false;
         errdefer {
@@ -286,6 +290,7 @@ pub const SubscriptionEngine = struct {
         filter: QueryFilter,
         conn_id: u64,
         sub_id: u64,
+        loop_id: u8,
     ) !void {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
@@ -301,13 +306,14 @@ pub const SubscriptionEngine = struct {
         if (self.groups_by_filter.get(.{ .collection = coll_key, .filter = filter })) |gid| {
             group_id = gid;
             var group = self.groups.getPtr(group_id) orelse return error.GroupNotFound;
-            try group.subscribers.put(self.allocator, sub_key, {});
+            try group.subscribers.put(self.allocator, sub_key, .{ .loop_id = loop_id });
         } else {
             group_id = try self.createSubscriptionGroup(
                 namespace_id,
                 table_index,
                 filter,
                 sub_key,
+                loop_id,
             );
         }
 
@@ -430,6 +436,7 @@ pub const SubscriptionEngine = struct {
         connection_id: u64,
         subscription_id: SubscriptionId,
         op: MatchOp,
+        loop_id: u8 = 0,
     };
 
     inline fn appendSubscriberMatches(
@@ -445,12 +452,14 @@ pub const SubscriptionEngine = struct {
 
         for (matched_after) |gid| {
             const group = self.groups.get(gid) orelse continue;
-            var sub_it = group.subscribers.keyIterator();
-            while (sub_it.next()) |sub| {
+            var sub_it = group.subscribers.iterator();
+            while (sub_it.next()) |entry| {
+                const sub = entry.key_ptr.*;
                 try matches.append(allocator, .{
                     .connection_id = sub.connection_id,
                     .subscription_id = sub.id,
                     .op = .set_op,
+                    .loop_id = entry.value_ptr.loop_id,
                 });
             }
         }
@@ -458,12 +467,14 @@ pub const SubscriptionEngine = struct {
         for (matched_before) |gid| {
             if (after_set.contains(gid)) continue;
             const group = self.groups.get(gid) orelse continue;
-            var sub_it = group.subscribers.keyIterator();
-            while (sub_it.next()) |sub| {
+            var sub_it = group.subscribers.iterator();
+            while (sub_it.next()) |entry| {
+                const sub = entry.key_ptr.*;
                 try matches.append(allocator, .{
                     .connection_id = sub.connection_id,
                     .subscription_id = sub.id,
                     .op = .remove,
+                    .loop_id = entry.value_ptr.loop_id,
                 });
             }
         }

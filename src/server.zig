@@ -64,7 +64,18 @@ pub var pending_signal: std.atomic.Value(bool) = std.atomic.Value(bool).init(fal
 // Set by the first termination signal; the next one skips the graceful path.
 pub var signal_seen: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
-const ShutdownState = enum { running, in_progress, performed };
+const event_loop_count = @import("thread_budget.zig").event_loop_count;
+const EventLoopContext = struct {
+    server: *ZyncBaseServer,
+    id: u8,
+    websocket_server: WebSocketServer,
+    thread: ?std.Thread = null,
+    ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    app_initialized: bool = false,
+    shutdown_started: bool = false,
+    app_closed: bool = false,
+    shutdown_timer: ?*uws_c.struct_us_timer_t = null,
+};
 
 /// ZyncBaseServer integrates all components to create a complete real-time database server
 pub const ZyncBaseServer = struct {
@@ -82,7 +93,7 @@ pub const ZyncBaseServer = struct {
     change_queue: ChangeQueue,
     subscription_worker_pool: ?SubscriptionWorkerPool,
     session_resolver: SessionResolver,
-    websocket_server: WebSocketServer,
+    event_loops: [event_loop_count]EventLoopContext,
     connection_manager: ConnectionManager,
     store_service: StoreService,
     presence_manager: PresenceManager,
@@ -94,7 +105,6 @@ pub const ZyncBaseServer = struct {
     server_metrics: ServerMetrics,
     http_context: http_handlers.HttpContext,
     shutdown_requested: std.atomic.Value(bool),
-    wakeup_pending: std.atomic.Value(bool),
     schema: Schema,
     schema_identity: canonical.Identity,
     auth_config: authorization_types.AuthConfig,
@@ -102,9 +112,8 @@ pub const ZyncBaseServer = struct {
     jwks: ?*Jwks = null,
     jwt_validator: ?JwtValidator = null,
     shutdown_mutex: std.Io.Mutex = .init,
-    shutdown_state: ShutdownState = .running,
     workers_stopped: bool = false,
-    shutdown_timeout_timer: ?*uws_c.struct_us_timer_t = null,
+    startup_logged: bool = false,
 
     /// Initialize the ZyncBase server with all components
     pub fn init(io: std.Io, environ: std.process.Environ, allocator: std.mem.Allocator, custom_config_path: ?[]const u8) !*ZyncBaseServer {
@@ -126,6 +135,16 @@ pub const ZyncBaseServer = struct {
         self.io = io;
         self.environ = environ;
         self.allocator = allocator;
+        for (&self.event_loops, 0..) |*loop, index| {
+            loop.* = .{
+                .server = self,
+                .id = @intCast(index),
+                .websocket_server = undefined,
+                .thread = null,
+                .ready = std.atomic.Value(bool).init(index == 0),
+                .app_initialized = false,
+            };
+        }
         self.server_metrics = ServerMetrics.init(std.Io.Clock.real.now(io).toSeconds());
 
         try self.memory_strategy.initWithAllocator(allocator);
@@ -171,12 +190,8 @@ pub const ZyncBaseServer = struct {
         errdefer self.send_queue.deinit();
         errdefer self.change_queue.deinit();
 
-        // Notifier state must exist before the storage engine spawns worker
-        // threads that can invoke storageEngineWakeup.
-        self.wakeup_pending = std.atomic.Value(bool).init(false);
-
         try self.initWebSocketServer(config);
-        errdefer self.websocket_server.deinit();
+        errdefer self.deinitLoopWrapper(0);
 
         try self.initStorageAndMigrations(config);
         errdefer self.releaseDataLock();
@@ -249,20 +264,18 @@ pub const ZyncBaseServer = struct {
         );
 
         // Wire Subscription Dispatcher hook into WebSocket Server
-        self.websocket_server.post_handler = notifyPostHandler;
-        self.websocket_server.post_handler_ctx = self;
-        self.websocket_server.wakeup_pending_check = takePendingWakeup;
-        self.websocket_server.wakeup_pending_check_ctx = self;
+        self.event_loops[0].websocket_server.post_handler = notifyPostHandler;
+        self.event_loops[0].websocket_server.post_handler_ctx = &self.event_loops[0];
 
         try self.initTicketExchangeInternal(config);
         errdefer if (self.ticket_exchange) |te| {
             te.deinit();
             self.ticket_exchange = null;
         };
-        self.websocket_server.verify_ticket_cb = verifyTicketCallback;
+        self.event_loops[0].websocket_server.verify_ticket_cb = verifyTicketCallback;
 
         self.http_context = .{
-            .ssl = self.websocket_server.ssl,
+            .ssl = self.event_loops[0].websocket_server.ssl,
             .io = self.io,
             .metrics = &self.server_metrics,
             .active_connection_count = &self.connection_manager.active_connection_count,
@@ -272,11 +285,10 @@ pub const ZyncBaseServer = struct {
 
         std.log.debug("Setting up ZyncBaseServer state", .{});
 
-        self.shutdown_state = .running;
         self.shutdown_mutex = .init;
         self.shutdown_requested = std.atomic.Value(bool).init(false);
         self.workers_stopped = false;
-        self.shutdown_timeout_timer = null;
+        self.startup_logged = false;
 
         return self;
     }
@@ -395,10 +407,21 @@ pub const ZyncBaseServer = struct {
         if (!(cert_ok and key_ok)) return error.InvalidTlsConfig;
     }
 
+    fn ws(self: *ZyncBaseServer, index: usize) *WebSocketServer {
+        return &self.event_loops[index].websocket_server;
+    }
+    fn deinitLoopWrapper(self: *ZyncBaseServer, index: usize) void {
+        if (!self.event_loops[index].app_initialized) return;
+        self.event_loops[index].websocket_server.deinit();
+        self.event_loops[index].app_initialized = false;
+    }
     fn initWebSocketServer(self: *ZyncBaseServer, config: *const Config) !void {
-        std.log.debug("Initializing WebSocket server", .{});
+        try self.initLoopWrapper(0, config);
+    }
+    fn initLoopWrapper(self: *ZyncBaseServer, index: usize, config: *const Config) !void {
+        std.log.debug("Initializing WebSocket server loop {d}", .{index});
         try validateTlsPair(config.server.tls_cert_file, config.server.tls_key_file);
-        try self.websocket_server.init(
+        try self.ws(index).init(
             self.memory_strategy.generalAllocator(),
             .{
                 .port = config.server.port,
@@ -410,6 +433,8 @@ pub const ZyncBaseServer = struct {
                 .max_payload_length = config.security.max_message_size,
             },
         );
+        self.ws(index).loop_id = @intCast(index);
+        self.event_loops[index].app_initialized = true;
     }
 
     fn initPresenceWorkerInternal(self: *ZyncBaseServer) !*PresenceWorker {
@@ -521,7 +546,7 @@ pub const ZyncBaseServer = struct {
             if (self.jwt_validator) |*jv| jv else null,
             auth_cfg.anonymous_enabled,
             auth_cfg.anonymous_subject_prefix,
-            self.websocket_server.ssl,
+            self.event_loops[0].websocket_server.ssl,
             &auth_cfg.session.claims,
         );
     }
@@ -622,29 +647,44 @@ pub const ZyncBaseServer = struct {
         try self.storage_engine.start(&self.send_queue, &self.change_queue, &self.session_resolver);
     }
 
-    /// Start the server and run the event loop
+    /// Start both reactors and run loop 0 on the main thread.
     pub fn start(self: *ZyncBaseServer) !void {
         std.log.info("Starting ZyncBase server on {s}:{d}", .{
             self.config.server.host,
             self.config.server.port,
         });
+        try self.registerLoopRoutes(0);
+        try self.checkpoint_manager.spawn();
+        try self.activateSignalHandling();
 
-        // Register timer hooks. Timers will be created from the event loop
-        // thread once the loop is ready (after listen()).
-        self.websocket_server.on_loop_ready = loopReadyDispatcher;
-        self.websocket_server.on_loop_ready_ctx = self;
+        self.event_loops[1].thread = try std.Thread.spawn(.{}, eventLoopThread, .{self});
+        while (!self.event_loops[1].ready.load(.acquire)) std.Thread.yield() catch {};
 
-        // Register HTTP POST /auth/ticket route
+        self.ws(0).listen() catch |err| {
+            // Loop 1 is already listening; stop and join it before unwinding.
+            self.ws(1).close();
+            if (self.event_loops[1].thread) |thread| thread.join();
+            return err;
+        };
+        if (self.ws(0).loop.load(.acquire)) |reactor| self.connection_manager.setLoopPointer(0, reactor);
+
+        self.ws(0).run();
+        self.ws(0).loop.store(null, .release);
+
+        if (!self.shutdown_requested.load(.acquire)) self.ws(1).close();
+        if (self.event_loops[1].thread) |thread| thread.join();
+        try self.finishShutdown();
+    }
+    fn registerLoopRoutes(self: *ZyncBaseServer, index: usize) !void {
+        const server_ws = self.ws(index);
+        server_ws.on_loop_ready = loopReadyDispatcher;
+        server_ws.on_loop_ready_ctx = &self.event_loops[index];
         if (self.ticket_exchange) |te| {
-            self.websocket_server.post("/auth/ticket", te, ticket_exchange.handleAuthTicket);
+            server_ws.post("/auth/ticket", te, ticket_exchange.handleAuthTicket);
         }
-
-        // Register HTTP GET observability routes
-        self.websocket_server.get("/health", &self.http_context, http_handlers.handleHealth);
-        self.websocket_server.get("/stats", &self.http_context, http_handlers.handleStats);
-
-        // Register WebSocket handlers with server as user data
-        self.websocket_server.registerWebSocketHandlers(
+        server_ws.get("/health", &self.http_context, http_handlers.handleHealth);
+        server_ws.get("/stats", &self.http_context, http_handlers.handleStats);
+        server_ws.registerWebSocketHandlers(
             "/*",
             .{
                 .on_open = onWebSocketOpen,
@@ -653,99 +693,44 @@ pub const ZyncBaseServer = struct {
             },
             self,
         );
-
-        // Start checkpoint manager background thread
-        try self.checkpoint_manager.spawn();
-
-        // Setup signal handlers for graceful shutdown (signal-safe)
-        try self.activateSignalHandling();
-
-        // Start listening on configured port
-        try self.websocket_server.listen();
-
-        std.log.info("Server started successfully", .{});
-
-        // Run event loop (blocks until shutdown signal or close)
-        self.websocket_server.run();
-
-        // Arrive here after the event loop exits (graceful or forced)
-        // Check if we need to perform graceful shutdown
-        try self.shutdown();
     }
-
-    /// Initiate graceful shutdown of the server.
-    /// SAFE to call multiple times, but will only perform logic once.
-    /// Safe to call from main thread after start() returns.
-    pub fn shutdown(self: *ZyncBaseServer) !void {
-        try self.startGracefulShutdown();
-        try self.finishGracefulShutdown();
-        self.stopBackgroundWorkers();
+    fn eventLoopThread(self: *ZyncBaseServer) void {
+        const loop = &self.event_loops[1];
+        self.initLoopWrapper(1, &self.config) catch |err| {
+            std.log.err("Failed to initialize event loop 1: {}", .{err});
+            std.process.exit(1);
+        };
+        loop.websocket_server.post_handler = notifyPostHandler;
+        loop.websocket_server.post_handler_ctx = loop;
+        loop.websocket_server.verify_ticket_cb = verifyTicketCallback;
+        self.registerLoopRoutes(1) catch |err| {
+            std.log.err("Failed to register event loop 1 routes: {}", .{err});
+            std.process.exit(1);
+        };
+        loop.websocket_server.listen() catch |err| {
+            std.log.err("Failed to listen on event loop 1: {}", .{err});
+            std.process.exit(1);
+        };
+        if (loop.websocket_server.loop.load(.acquire)) |reactor| self.connection_manager.setLoopPointer(1, reactor);
+        loop.ready.store(true, .release);
+        loop.websocket_server.run();
+        loop.websocket_server.loop.store(null, .release);
+        // The app and its socket contexts belong to this thread's loop; destroy
+        // them before the loop thread exits.
+        self.deinitLoopWrapper(1);
     }
-
-    pub fn startGracefulShutdown(self: *ZyncBaseServer) !void {
-        self.shutdown_mutex.lockUncancelable(self.io);
-        defer self.shutdown_mutex.unlock(self.io);
-        if (self.shutdown_state != .running) return;
-        self.shutdown_state = .in_progress;
-
-        // Set shutdown flag
-        self.shutdown_requested.store(true, .release);
-
-        std.log.info("Initiating graceful shutdown", .{});
-
-        // Stop background checkpoint loop
-        self.checkpoint_manager.stop();
-
-        // Stop accepting new connections by closing the listen socket
-        if (self.websocket_server.listen_socket) |ls| {
-            uws_c.us_listen_socket_close(if (self.websocket_server.ssl) 1 else 0, ls);
-            self.websocket_server.listen_socket = null;
-        }
-
-        // Deliver staged async forwards before disconnects so accepted work
-        // reaches workers ahead of the close.
-        self.actions_service.flushOutbox();
-
-        // Send ServerDisconnect to all connections and close them
-        self.connection_manager.sendDisconnectToAll("SERVER_SHUTDOWN", "Server is shutting down.", 4002);
-
-        // Wake loop to ensure another post-handler iteration fires so
-        // finishGracefulShutdown can be called once all connections drain.
-        if (self.websocket_server.loop.load(.acquire)) |loop| {
-            uws_c.us_wakeup_loop(loop);
-            self.armShutdownTimeout(loop) catch |err| {
-                std.log.warn("Failed to arm shutdown timeout timer: {}", .{err});
-            };
-        }
-    }
-
-    pub fn finishGracefulShutdown(self: *ZyncBaseServer) !void {
-        self.shutdown_mutex.lockUncancelable(self.io);
-        defer self.shutdown_mutex.unlock(self.io);
-        if (self.shutdown_state != .in_progress) return;
-        self.shutdown_state = .performed;
-        // Close application timers on the event-loop thread before exiting it.
-        self.stopShutdownTimeoutTimer();
+    fn finishShutdown(self: *ZyncBaseServer) !void {
+        self.connection_manager.markLoopsStopped();
         self.connection_manager.stopTokenSweepTimer();
         self.actions_service.stopSweepTimer();
         if (self.jwks) |jc| jc.stopRefreshTimer();
-
         std.log.info("Flushing pending writes and performing final checkpoint", .{});
-
-        // Flush pending writes
         try self.storage_engine.flushPendingWrites();
-
-        // Perform final checkpoint with retry for transient failures
         _ = try self.checkpoint_manager.performCheckpointWithRetry(.full, 5);
-
-        // Stop the uWebSockets event loop
-        self.websocket_server.close();
-
+        self.stopBackgroundWorkers();
         std.log.info("Graceful shutdown complete", .{});
     }
-
     /// Stop all background worker threads before resource deinitialization.
-    /// Must be called after finishGracefulShutdown() and before deinit().
     /// Idempotent: safe to call multiple times.
     pub fn stopBackgroundWorkers(self: *ZyncBaseServer) void {
         self.shutdown_mutex.lockUncancelable(self.io);
@@ -764,12 +749,9 @@ pub const ZyncBaseServer = struct {
         // Stop action deadline sweep timer.
         self.actions_service.stopSweepTimer();
 
-        // Stop shutdown timeout timer.
-        self.stopShutdownTimeoutTimer();
-
         // Stop the storage engine writer thread. Must be after final flush+checkpoint
-        // in finishGracefulShutdown(), which uses the writer thread. Safe to call
-        // even if already stopped — stop() checks and sets write_thread to null.
+        // in finishShutdown(), which uses the writer thread. Safe to call even if
+        // already stopped — stop() checks and sets write_thread to null.
         self.storage_engine.write_worker.stop();
 
         // Stop subscription workers to ensure no one pushes to change_queue/send_queue during their deinit.
@@ -825,8 +807,10 @@ pub const ZyncBaseServer = struct {
 
         // send_queue.deinit() releases the stub node. Drain remaining entries first.
         std.log.debug("Deinitializing send_queue", .{});
-        while (self.send_queue.pop()) |entry| {
-            entry.deinit();
+        for (0..event_loop_count) |index| {
+            while (self.send_queue.popFrom(index)) |entry| {
+                entry.deinit();
+            }
         }
         self.send_queue.deinit();
 
@@ -855,7 +839,7 @@ pub const ZyncBaseServer = struct {
         if (self.subscription_worker_pool) |*pool| pool.deinit();
 
         std.log.debug("Deinitializing websocket_server", .{});
-        self.websocket_server.deinit();
+        for (0..self.event_loops.len) |index| self.deinitLoopWrapper(index);
 
         std.log.debug("Deinitializing checkpoint_manager", .{});
         self.checkpoint_manager.deinit();
@@ -906,52 +890,76 @@ pub const ZyncBaseServer = struct {
 
     fn notifyPostHandler(ctx: ?*anyopaque) void {
         if (ctx == null) return;
-        const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-
-        // Clear before draining (and the shutdown early-return) so a stale
-        // flag can never suppress a future wakeup.
-        self.wakeup_pending.store(false, .release);
-
-        // Handle graceful shutdown state machine
-        if (self.shutdown_requested.load(.acquire)) {
-            if (self.shutdown_state == .running) {
-                self.startGracefulShutdown() catch |err| {
-                    std.log.err("Failed to start graceful shutdown: {}", .{err});
-                };
-            }
-            if (self.shutdown_state == .in_progress) {
-                const count = self.connection_manager.active_connection_count.load(.acquire);
-                if (count == 0) {
-                    self.finishGracefulShutdown() catch |err| {
-                        std.log.err("Failed to finish graceful shutdown: {}", .{err});
-                    };
-                }
-            }
-            if (self.shutdown_state != .running) {
-                return;
-            }
+        const loop: *EventLoopContext = @ptrCast(@alignCast(ctx.?));
+        const self = loop.server;
+        if (loop.id == 0 and !self.startup_logged) {
+            self.startup_logged = true;
+            std.log.info("Server started successfully", .{});
         }
-
-        self.connection_manager.drainSendQueue(&self.send_queue);
-        self.actions_service.flushOutbox();
+        if (self.shutdown_requested.load(.acquire)) {
+            if (!loop.shutdown_started) {
+                loop.shutdown_started = true;
+                std.log.info("Event loop {} starting graceful shutdown", .{loop.id});
+                self.connection_manager.stopTokenSweepTimerForLoop(loop.id);
+                if (loop.id == 0) {
+                    self.actions_service.stopSweepTimer();
+                    if (self.jwks) |jc| jc.stopRefreshTimer();
+                }
+                if (loop.websocket_server.listen_socket) |ls| {
+                    uws_c.us_listen_socket_close(if (loop.websocket_server.ssl) 1 else 0, ls);
+                    loop.websocket_server.listen_socket = null;
+                }
+                self.connection_manager.sendDisconnectToAllForLoop(loop.id, "SERVER_SHUTDOWN", "Server is shutting down.", 4002);
+                if (self.connection_manager.countForLoop(loop.id) != 0) {
+                    if (loop.websocket_server.loop.load(.acquire)) |reactor| {
+                        loop.shutdown_timer = uws_timer.startTimer(
+                            EventLoopContext,
+                            loop,
+                            reactor,
+                            shutdownLoopTimeoutCallback,
+                            3_000,
+                            0,
+                        ) catch |err| blk: {
+                            std.log.warn("Failed to arm shutdown timeout on loop {}: {}", .{ loop.id, err });
+                            break :blk null;
+                        };
+                    }
+                }
+                if (self.connection_manager.countForLoop(loop.id) == 0) {
+                    loop.app_closed = true;
+                    loop.websocket_server.close();
+                }
+            } else if (!loop.app_closed and self.connection_manager.countForLoop(loop.id) == 0) {
+                uws_timer.stopTimer(&loop.shutdown_timer);
+                loop.app_closed = true;
+                loop.websocket_server.close();
+            }
+            return;
+        }
+        self.connection_manager.drainSendQueue(&self.send_queue, loop.id);
+        if (loop.id == 0) {
+            self.actions_service.lock();
+            defer self.actions_service.unlock();
+            self.actions_service.flushOutbox();
+        }
     }
-
-    fn armShutdownTimeout(self: *ZyncBaseServer, loop: *uws_c.struct_us_loop_t) !void {
-        self.shutdown_timeout_timer = try uws_timer.startTimer(ZyncBaseServer, self, loop, shutdownTimeoutCallback, 3_000, 0);
-    }
-
-    fn stopShutdownTimeoutTimer(self: *ZyncBaseServer) void {
-        uws_timer.stopTimer(&self.shutdown_timeout_timer);
-    }
-
-    fn shutdownTimeoutCallback(t: ?*uws_c.struct_us_timer_t) callconv(.c) void {
+    fn shutdownLoopTimeoutCallback(t: ?*uws_c.struct_us_timer_t) callconv(.c) void {
         const timer = t orelse return;
-        const self = uws_timer.extractPtr(ZyncBaseServer, timer);
-        self.finishGracefulShutdown() catch |err| {
-            std.log.err("Shutdown timeout timer finishGracefulShutdown failed: {}", .{err});
-        };
+        const loop = uws_timer.extractPtr(EventLoopContext, timer);
+        if (loop.app_closed) return;
+        loop.app_closed = true;
+        const self = loop.server;
+        self.connection_manager.stopTokenSweepTimerForLoop(loop.id);
+        if (loop.id == 0) {
+            self.actions_service.stopSweepTimer();
+            if (self.jwks) |jc| jc.stopRefreshTimer();
+        }
+        if (loop.websocket_server.listen_socket) |ls| {
+            uws_c.us_listen_socket_close(if (loop.websocket_server.ssl) 1 else 0, ls);
+            loop.websocket_server.listen_socket = null;
+        }
+        loop.websocket_server.close();
     }
-
     fn verifyTicketCallback(user_data: ?*anyopaque, ticket: []const u8, allocator: std.mem.Allocator) anyerror!Session {
         if (user_data == null) return error.AuthFailed;
         const self: *ZyncBaseServer = @ptrCast(@alignCast(user_data.?));
@@ -983,8 +991,10 @@ fn handleSignal(sig: std.posix.SIG) callconv(.c) void {
     pending_signal.store(true, .release);
     if (global_server.load(.acquire)) |server| {
         server.shutdown_requested.store(true, .release);
-        if (server.websocket_server.loop.load(.acquire)) |loop| {
-            uws_c.us_wakeup_loop(loop);
+        for (0..server.event_loops.len) |index| {
+            if (server.ws(index).loop.load(.acquire)) |loop| {
+                uws_c.us_wakeup_loop(loop);
+            }
         }
     }
 }
@@ -992,53 +1002,36 @@ fn handleSignal(sig: std.posix.SIG) callconv(.c) void {
 fn storageEngineWakeup(ctx: ?*anyopaque) void {
     if (ctx == null) return;
     const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-    // One wakeup per dispatch burst: the post handler drains the whole send
-    // queue every iteration, so later dispatches just set the flag.
-    if (server.wakeup_pending.swap(true, .acquire)) return;
-    if (server.websocket_server.loop.load(.acquire)) |loop| {
-        uws_c.us_wakeup_loop(loop);
+    for (0..server.event_loops.len) |index| {
+        if (server.ws(index).loop.load(.acquire)) |loop| {
+            uws_c.us_wakeup_loop(loop);
+        }
     }
 }
-
-/// Called from listenCallback once the loop pointer is published: re-take the
-/// coalescing flag that storageEngineWakeup may have set while the loop was
-/// still null. Swap (not load) closes the release/acquire handshake with
-/// storageEngineWakeup — exactly one of the two paths wakes the loop. The
-/// flag is cleared here, so notifyPostHandler still drains on the wakeup.
-///
-/// A shutdown requested before the loop existed is reported too: the signal
-/// handler had no loop to wake, and without this the post handler would not
-/// run until the next sweep timer tick (~1 s).
-fn takePendingWakeup(ctx: ?*anyopaque) bool {
-    const self: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-    const storage_pending = self.wakeup_pending.swap(false, .acquire);
-    return storage_pending or self.shutdown_requested.load(.acquire);
-}
-
 fn loopReadyDispatcher(ctx: ?*anyopaque, loop: ?*uws_c.struct_us_loop_t) void {
     if (ctx == null or loop == null) return;
-    const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-
-    server.connection_manager.startTokenSweepTimer(loop.?) catch |err| {
-        std.log.err("Failed to start token sweep timer: {}", .{err});
+    const loop_ctx: *EventLoopContext = @ptrCast(@alignCast(ctx.?));
+    const server = loop_ctx.server;
+    server.connection_manager.startTokenSweepTimer(loop_ctx.id, loop.?) catch |err| {
+        std.log.err("Failed to start token sweep timer on loop {}: {}", .{ loop_ctx.id, err });
     };
-
-    server.actions_service.startSweepTimer(loop.?) catch |err| {
-        std.log.err("Failed to start action deadline sweep timer: {}", .{err});
-    };
-
-    if (server.jwks) |jc| {
-        jc.startRefreshTimer(loop.?) catch |err| {
-            std.log.err("Failed to start JWKS refresh timer: {}", .{err});
+    if (loop_ctx.id == 0) {
+        server.actions_service.startSweepTimer(loop.?) catch |err| {
+            std.log.err("Failed to start action deadline sweep timer: {}", .{err});
         };
+        if (server.jwks) |jc| {
+            jc.startRefreshTimer(loop.?) catch |err| {
+                std.log.err("Failed to start JWKS refresh timer: {}", .{err});
+            };
+        }
     }
 }
 
 fn lastConnectionClosed(ctx: ?*anyopaque) void {
     if (ctx == null) return;
     const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
-    if (server.shutdown_state == .in_progress) {
-        if (server.websocket_server.loop.load(.acquire)) |loop| {
+    for (0..server.event_loops.len) |index| {
+        if (server.ws(index).loop.load(.acquire)) |loop| {
             uws_c.us_wakeup_loop(loop);
         }
     }

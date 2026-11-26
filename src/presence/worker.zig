@@ -53,12 +53,14 @@ pub const PresenceOp = struct {
         subscribe_user: struct {
             namespace_id: i64,
             conn_id: u64,
+            loop_id: u8 = 0,
             sub_id: u64,
             msg_id: u64,
         },
         subscribe_shared: struct {
             namespace_id: i64,
             conn_id: u64,
+            loop_id: u8 = 0,
             sub_id: u64,
             msg_id: u64,
         },
@@ -243,9 +245,9 @@ pub const PresenceWorker = struct {
     }
 
     fn processSubscribeUser(self: *PresenceWorker, sub: anytype) void {
-        var snapshot = self.presence_manager.onSubscribeUser(sub.namespace_id, sub.conn_id, sub.sub_id) catch |err| {
+        var snapshot = self.presence_manager.onSubscribeUser(sub.namespace_id, sub.conn_id, sub.sub_id, sub.loop_id) catch |err| {
             std.log.err("PresenceWorker onSubscribeUser failed: {}", .{err});
-            self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE", "subscribe failed");
+            self.sendError(sub.conn_id, sub.loop_id, sub.msg_id, "PRESENCE_SUBSCRIBE", "subscribe failed");
             return;
         };
         defer snapshot.deinit(self.allocator);
@@ -258,16 +260,16 @@ pub const PresenceWorker = struct {
 
         const msg = wire_encode.encodePresenceUserSnapshot(handle.allocator(), sub.msg_id, sub.sub_id, snapshot.users.items) catch |err| {
             std.log.err("PresenceWorker encodePresenceUserSnapshot failed: {}", .{err});
-            self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE", "encode failed");
+            self.sendError(sub.conn_id, sub.loop_id, sub.msg_id, "PRESENCE_SUBSCRIBE", "encode failed");
             return;
         };
-        self.pushToSendQueue(sub.conn_id, msg, handle);
+        self.pushToSendQueue(sub.conn_id, sub.loop_id, msg, handle);
     }
 
     fn processSubscribeShared(self: *PresenceWorker, sub: anytype) void {
-        var shared = self.presence_manager.onSubscribeShared(sub.namespace_id, sub.conn_id, sub.sub_id) catch |err| {
+        var shared = self.presence_manager.onSubscribeShared(sub.namespace_id, sub.conn_id, sub.sub_id, sub.loop_id) catch |err| {
             std.log.err("PresenceWorker onSubscribeShared failed: {}", .{err});
-            self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE_SHARED", "subscribe failed");
+            self.sendError(sub.conn_id, sub.loop_id, sub.msg_id, "PRESENCE_SUBSCRIBE_SHARED", "subscribe failed");
             return;
         };
         defer if (shared) |*s| s.deinit(self.allocator);
@@ -285,15 +287,15 @@ pub const PresenceWorker = struct {
             if (shared) |*s| s else null,
         ) catch |err| {
             std.log.err("PresenceWorker encodePresenceSharedSnapshot failed: {}", .{err});
-            self.sendError(sub.conn_id, sub.msg_id, "PRESENCE_SUBSCRIBE_SHARED", "encode failed");
+            self.sendError(sub.conn_id, sub.loop_id, sub.msg_id, "PRESENCE_SUBSCRIBE_SHARED", "encode failed");
             return;
         };
-        self.pushToSendQueue(sub.conn_id, msg, handle);
+        self.pushToSendQueue(sub.conn_id, sub.loop_id, msg, handle);
     }
 
-    fn pushToSendQueue(self: *PresenceWorker, conn_id: u64, msg: []const u8, handle: ArenaHandle) void {
+    fn pushToSendQueue(self: *PresenceWorker, conn_id: u64, loop_id: u8, msg: []const u8, handle: ArenaHandle) void {
         handle.retain();
-        self.send_queue.push(.{ .conn_id = conn_id, .data = msg, .arena = handle }) catch |err| {
+        self.send_queue.push(loop_id, .{ .conn_id = conn_id, .data = msg, .arena = handle }) catch |err| {
             std.log.err("PresenceWorker send_queue push failed: {}", .{err});
             handle.release();
             return;
@@ -301,7 +303,7 @@ pub const PresenceWorker = struct {
         self.notifier.notify();
     }
 
-    fn sendError(self: *PresenceWorker, conn_id: u64, msg_id: u64, code: []const u8, message: []const u8) void {
+    fn sendError(self: *PresenceWorker, conn_id: u64, loop_id: u8, msg_id: u64, code: []const u8, message: []const u8) void {
         const handle = self.memory_strategy.acquireArenaDeferred() catch |err| {
             std.log.err("PresenceWorker sendError acquire arena failed: {}", .{err});
             return;
@@ -312,7 +314,7 @@ pub const PresenceWorker = struct {
             .code = code,
             .message = message,
         }) catch return;
-        self.pushToSendQueue(conn_id, err_msg, handle);
+        self.pushToSendQueue(conn_id, loop_id, err_msg, handle);
     }
 
     fn flush(self: *PresenceWorker) void {
@@ -446,7 +448,7 @@ pub const PresenceWorker = struct {
                 // Reserve a ref for this entry BEFORE pushing so the consumer can never
                 // observe the refcount dropping to zero before the entry is visible.
                 handle.retain();
-                self.send_queue.push(.{ .conn_id = subscriber.conn_id, .data = owned_msg, .arena = handle }) catch |err| {
+                self.send_queue.push(subscriber.loop_id, .{ .conn_id = subscriber.conn_id, .data = owned_msg, .arena = handle }) catch |err| {
                     std.log.err("PresenceWorker push {s} broadcast failed: {}", .{ log_label, err });
                     handle.release();
                     continue;

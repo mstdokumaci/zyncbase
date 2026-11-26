@@ -125,7 +125,7 @@ pub const ReadWorker = struct {
                     continue;
                 };
                 handle.retain();
-                self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
+                self.send_queue.push(response.loop_id, .{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
                     std.log.err("ReadWorker: failed to push error to send queue", .{});
                     handle.release();
                     continue;
@@ -157,7 +157,7 @@ pub const ReadWorker = struct {
                         continue;
                     };
                     handle.retain();
-                    self.send_queue.push(.{ .conn_id = response.conn_id, .data = too_large, .arena = handle }) catch {
+                    self.send_queue.push(response.loop_id, .{ .conn_id = response.conn_id, .data = too_large, .arena = handle }) catch {
                         std.log.err("ReadWorker: failed to push response-too-large error to send queue", .{});
                         handle.release();
                         continue;
@@ -166,7 +166,7 @@ pub const ReadWorker = struct {
                     continue;
                 }
                 handle.retain();
-                self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
+                self.send_queue.push(response.loop_id, .{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
                     std.log.err("ReadWorker: failed to push to send queue", .{});
                     handle.release();
                     continue;
@@ -194,7 +194,7 @@ pub const ReadWorker = struct {
                 continue;
             };
             handle.retain();
-            self.send_queue.push(.{ .conn_id = request.conn_id, .data = shutdown_encoded, .arena = handle }) catch |err| {
+            self.send_queue.push(request.loop_id, .{ .conn_id = request.conn_id, .data = shutdown_encoded, .arena = handle }) catch |err| {
                 std.log.err("ReadWorker: failed to push shutdown error: {}", .{err});
                 handle.release();
             };
@@ -253,6 +253,7 @@ pub const ReadWorker = struct {
         );
         const response = ReadResponse{
             .conn_id = req.conn_id,
+            .loop_id = req.loop_id,
             .msg_id = req.msg_id,
             .table = table_metadata,
             .records = result.records,

@@ -25,6 +25,7 @@ pub const OutcomeFence = struct {
 
     const Outcome = struct {
         conn_id: u64,
+        loop_id: u8,
         data: []const u8,
     };
 
@@ -54,7 +55,7 @@ pub const OutcomeFence = struct {
             std.log.err("OutcomeFence: failed to encode outcome for conn_id={d}: {}", .{ ack.conn_id, encode_err });
             return;
         };
-        self.entries.append(alloc, .{ .conn_id = ack.conn_id, .data = encoded }) catch |append_err| {
+        self.entries.append(alloc, .{ .conn_id = ack.conn_id, .loop_id = ack.loop_id, .data = encoded }) catch |append_err| {
             std.log.err("OutcomeFence: failed to record outcome for conn_id={d}: {}", .{ ack.conn_id, append_err });
         };
     }
@@ -80,7 +81,7 @@ pub const OutcomeFence = struct {
         var pushed = false;
         for (self.entries.items) |entry| {
             handle.retain();
-            send_queue.push(.{ .conn_id = entry.conn_id, .data = entry.data, .arena = handle }) catch |err| {
+            send_queue.push(entry.loop_id, .{ .conn_id = entry.conn_id, .data = entry.data, .arena = handle }) catch |err| {
                 std.log.err("OutcomeFence: failed to push outcome for conn_id={d}: {}", .{ entry.conn_id, err });
                 handle.release();
                 continue;

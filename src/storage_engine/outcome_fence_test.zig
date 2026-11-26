@@ -21,7 +21,7 @@ const Harness = struct {
     }
 
     fn deinit(self: *Harness) void {
-        while (self.send_queue.pop()) |entry| entry.deinit();
+        while (self.send_queue.popFrom(0)) |entry| entry.deinit();
         self.send_queue.deinit();
         self.ms.deinit();
     }
@@ -38,7 +38,7 @@ const Harness = struct {
     /// Pops every queued outcome into `out` as its request id and releases it.
     fn drainIds(self: *Harness, out: []u64) !usize {
         var n: usize = 0;
-        while (self.send_queue.pop()) |entry| {
+        while (self.send_queue.popFrom(0)) |entry| {
             defer entry.deinit();
             var reader: std.Io.Reader = .fixed(entry.data);
             const outcome = try msgpack.decode(testing.allocator, &reader);

@@ -574,6 +574,7 @@ pub const PresenceManager = struct {
         namespace_id: i64,
         conn_id: u64,
         sub_id: u64,
+        loop_id: u8,
     ) !UserSnapshot {
         self.data_mutex.lockUncancelable(self.io);
         defer self.data_mutex.unlock(self.io);
@@ -605,7 +606,7 @@ pub const PresenceManager = struct {
             }
         }
 
-        try self.user_subscribers.subscribe(self.allocator, namespace_id, conn_id, sub_id);
+        try self.user_subscribers.subscribe(self.allocator, namespace_id, conn_id, sub_id, loop_id);
 
         return snapshot;
     }
@@ -617,6 +618,7 @@ pub const PresenceManager = struct {
         namespace_id: i64,
         conn_id: u64,
         sub_id: u64,
+        loop_id: u8,
     ) !?PresenceRecord {
         self.data_mutex.lockUncancelable(self.io);
         defer self.data_mutex.unlock(self.io);
@@ -628,7 +630,7 @@ pub const PresenceManager = struct {
             null;
         errdefer if (cloned_record) |*r| r.deinit(self.allocator);
 
-        try self.shared_subscribers.subscribe(self.allocator, namespace_id, conn_id, sub_id);
+        try self.shared_subscribers.subscribe(self.allocator, namespace_id, conn_id, sub_id, loop_id);
 
         return cloned_record;
     }
