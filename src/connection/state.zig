@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -6,7 +7,6 @@ const uws = @import("../uwebsockets_wrapper.zig");
 const request_context = @import("request_context.zig");
 const Session = @import("../authentication/session.zig").Session;
 
-const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const WebSocket = uws.WebSocket;
 pub const unset_namespace_id: i64 = request_context.unset_namespace_id;
