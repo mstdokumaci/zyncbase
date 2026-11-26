@@ -200,9 +200,9 @@ synchronization boundary; cross-loop delivery is explicit.
   - presence: sole mutator is the presence worker;
   - actions: shared state guarded by its mutex and delivered through the
     target loop's queue.
-- Shutdown stops both listeners, has each reactor flush staged action forwards,
-  drain its own queue and send its disconnects, joins both reactors, then stops
-  workers and checkpoints.
+- Shutdown stops both listeners, has loop 0 flush staged action forwards, has
+  each reactor drain its own queue and send its disconnects, joins both
+  reactors, then stops workers and checkpoints.
 
 **Ordering:**
 

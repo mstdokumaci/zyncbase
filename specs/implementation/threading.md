@@ -89,7 +89,7 @@ Subscription fanout:
 | Subscriptions | Thread-safe registration/matching; disconnect detaches all connection-owned subscriptions. |
 | Presence | Presence worker is sole mutator; reactors only enqueue operations. |
 | Actions | External entry points lock the ActionsService mutex; replies/forwards route to target loops. |
-| Shutdown | Each reactor flushes staged action forwards, drains its queue, disconnects its connections and closes; the supervisor joins both. |
+| Shutdown | Loop 0 flushes staged action forwards; each reactor drains its queue, disconnects its connections and closes; the supervisor joins both. |
 
 ## Invariants
 
