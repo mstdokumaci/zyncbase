@@ -19,7 +19,8 @@ const RegistryKey = service_mod.RegistryKey;
 /// Actions sends are queued on the owning reactor; the drain is what puts them
 /// on the wire.
 fn drain(app: *AppTestContext) void {
-    app.connection_manager.drainSendQueue(&app.test_context.send_queue.?, 0);
+    const send_queue = if (app.test_context.send_queue) |*sq| sq else @panic("test context has no send queue");
+    app.connection_manager.drainSendQueue(send_queue, 0);
 }
 
 fn flushAndDrain(app: *AppTestContext) void {

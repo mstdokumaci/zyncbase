@@ -809,7 +809,10 @@ pub const ZyncBaseServer = struct {
         self.change_queue.deinit();
 
         // send_queue.deinit() releases the stub node. Drain remaining entries first.
+        // Unwire it before the drain: connection teardown can still call
+        // sendToConnection, and nothing may push into a dead queue.
         std.log.debug("Deinitializing send_queue", .{});
+        self.connection_manager.setSendQueue(null);
         for (0..event_loop_count) |index| {
             while (self.send_queue.popFrom(index)) |entry| {
                 entry.deinit();

@@ -96,7 +96,7 @@ test "ActionsService: async forward dispatch throughput (1 worker)" {
             );
         }
         app.actions_service.flushOutbox();
-        app.connection_manager.drainSendQueue(&app.test_context.send_queue.?, 0);
+        if (app.test_context.send_queue) |*sq| app.connection_manager.drainSendQueue(sq, 0);
     }
     recorder.reset();
 
@@ -109,7 +109,7 @@ test "ActionsService: async forward dispatch throughput (1 worker)" {
         }
         const flush_start_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds();
         app.actions_service.flushOutbox();
-        app.connection_manager.drainSendQueue(&app.test_context.send_queue.?, 0);
+        if (app.test_context.send_queue) |*sq| app.connection_manager.drainSendQueue(sq, 0);
         const flush_end_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds();
         total_call_ns += @intCast(flush_start_ns - call_start_ns);
         total_flush_ns += @intCast(flush_end_ns - flush_start_ns);

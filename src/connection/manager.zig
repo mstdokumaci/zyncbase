@@ -110,7 +110,7 @@ pub const ConnectionManager = struct {
     pub fn setMetrics(self: *ConnectionManager, metrics: ?*ServerMetrics) void {
         self.metrics = metrics;
     }
-    pub fn setSendQueue(self: *ConnectionManager, send_queue: *SendQueueType) void {
+    pub fn setSendQueue(self: *ConnectionManager, send_queue: ?*SendQueueType) void {
         self.send_queue = send_queue;
     }
     pub fn setLoopWake(self: *ConnectionManager, loop_id: u8, loop: *c.struct_us_loop_t) void {
@@ -169,16 +169,28 @@ pub const ConnectionManager = struct {
         self.stopTokenSweepTimer();
         for (&self.drain_arenas) |*arena| arena.deinit();
 
+        // Session teardown re-enters the registry (sendToConnection) and the
+        // actions service, so snapshot the connections under the lock and drop
+        // it before calling out.
+        var conns: std.ArrayListUnmanaged(*Connection) = .empty;
+        defer conns.deinit(self.allocator);
         self.mutex.lockUncancelable(self.io);
         var it = self.map.valueIterator();
-        while (it.next()) |conn_ptr| {
-            const conn = conn_ptr.*;
+        while (it.next()) |conn_ptr| conns.append(self.allocator, conn_ptr.*) catch |err| {
+            std.log.err("ConnectionManager.deinit: failed to snapshot connection {}: {}", .{ conn_ptr.*.id, err });
+            break;
+        };
+        self.mutex.unlock(self.io);
+
+        for (conns.items) |conn| {
             // Ensure all logical cleanup (unsubscriptions) is performed before manager shuts down
             self.message_handler.teardownSession(conn);
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
             }
         }
+
+        self.mutex.lockUncancelable(self.io);
         self.map.deinit(self.allocator);
         self.mutex.unlock(self.io);
 

@@ -1,13 +1,13 @@
 const std = @import("std");
 
 const memory_strategy = @import("../memory/strategy.zig");
-const MemoryStrategy = memory_strategy.MemoryStrategy;
-const ArenaHandle = memory_strategy.ArenaHandle;
 const send_queue_mod = @import("send_queue.zig");
-const SendQueue = send_queue_mod.SendQueue;
-const Delivery = send_queue_mod.Delivery;
 
 const testing = std.testing;
+const ArenaHandle = memory_strategy.ArenaHandle;
+const MemoryStrategy = memory_strategy.MemoryStrategy;
+const Delivery = send_queue_mod.Delivery;
+const SendQueue = send_queue_mod.SendQueue;
 
 fn dupeDelivery(handle: ArenaHandle, conn_id: u64, loop_id: u8, bytes: []const u8) !Delivery {
     return .{
