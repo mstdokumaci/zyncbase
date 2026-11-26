@@ -486,7 +486,7 @@ pub const ConnectionManager = struct {
                     std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
                 }
             }
-            conn.ws.end(close_code);
+            conn.end(close_code);
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
             }
@@ -590,7 +590,7 @@ pub const ConnectionManager = struct {
                         std.log.warn("Failed to send TOKEN_EXPIRED to connection {}: {}", .{ conn.id, err });
                     }
                 }
-                conn.ws.end(4006);
+                conn.end(4006);
             }
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);

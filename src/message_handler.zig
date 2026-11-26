@@ -91,7 +91,7 @@ pub const MessageHandler = struct {
         if (!isSecurityError(err)) return false;
         if (!try self.violation_tracker.recordViolation(conn.id)) return false;
         std.log.warn("Closing connection {} due to repeated security violations", .{conn.id});
-        conn.ws.close();
+        conn.close();
         return true;
     }
 
@@ -430,6 +430,9 @@ pub const MessageHandler = struct {
 
         const scope_seq = try self.resetStoreScopeAndClearSubscriptions(conn, req.namespace);
         errdefer _ = conn.resetScopeIfSeq(scope_seq, false);
+        // The namespace change drains the queue, which can close this
+        // connection; skip the success response in that case.
+        if (!conn.isOpen()) return null;
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
             try authorization_evaluate.authorizeNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), false);
             if (conn.setScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id, false)) {
@@ -680,6 +683,9 @@ pub const MessageHandler = struct {
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
         const scope_seq = try self.resetPresenceScopeAndClearSubscriptions(conn, req.namespace);
         errdefer _ = conn.resetScopeIfSeq(scope_seq, true);
+        // The namespace change drains the queue, which can close this
+        // connection; skip the success response in that case.
+        if (!conn.isOpen()) return null;
 
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
             try authorization_evaluate.authorizeNamespace(
@@ -932,7 +938,8 @@ pub const MessageHandler = struct {
     }
 
     pub fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8, close_code: u16) void {
-        defer conn.ws.end(close_code);
+        if (!conn.isOpen()) return;
+        defer conn.end(close_code);
         const disconnect_msg = wire_encode.encodeServerDisconnect(self.allocator, code, msg) catch return;
         defer self.allocator.free(disconnect_msg);
         if (conn.send(disconnect_msg)) {

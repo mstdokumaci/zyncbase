@@ -6,6 +6,7 @@ const uws = @import("../uwebsockets_wrapper.zig");
 const request_context = @import("request_context.zig");
 const Session = @import("../authentication/session.zig").Session;
 
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const WebSocket = uws.WebSocket;
 pub const unset_namespace_id: i64 = request_context.unset_namespace_id;
@@ -280,10 +281,32 @@ pub const Connection = struct {
     }
 
     /// Send a message to the client. Must be called from the event loop thread.
+    /// After end()/close() the stored handle is null and this returns Dropped.
     pub fn send(self: *Connection, data: []const u8) !void {
         switch (self.ws.send(data, .binary)) {
             .success, .backpressure => {},
             .dropped => return error.Dropped,
         }
+    }
+
+    /// Close with a WebSocket close code. Clears the socket handle so later
+    /// sends are refused by WebSocket.send instead of writing after the close
+    /// frame.
+    pub fn end(self: *Connection, code: u16) void {
+        self.ws.end(code);
+        self.ws.ws = null;
+    }
+
+    /// Raw transport close. Same handle clearing as end().
+    pub fn close(self: *Connection) void {
+        self.ws.close();
+        self.ws.ws = null;
+    }
+
+    /// Whether the connection can still send. Mock sockets start without a
+    /// handle, so test builds treat every connection as open and let the send
+    /// observer/status decide the outcome.
+    pub fn isOpen(self: *const Connection) bool {
+        return builtin.is_test or self.ws.ws != null;
     }
 };

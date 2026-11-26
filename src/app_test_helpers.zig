@@ -508,7 +508,7 @@ pub const AppTestContext = struct {
             var it = self.connection_manager.map.valueIterator();
             while (it.next()) |state| {
                 const conn = state.*;
-                conn.ws.close();
+                conn.close();
             }
         }
         self.connection_manager.mutex.unlock(self.connection_manager.io);
