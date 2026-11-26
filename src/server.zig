@@ -904,6 +904,15 @@ pub const ZyncBaseServer = struct {
             if (!loop.shutdown_started) {
                 loop.shutdown_started = true;
                 std.log.info("Event loop {} starting graceful shutdown", .{loop.id});
+                // Deliver work this loop accepted before the disconnect frame.
+                // Staged action forwards still queued for the other reactor are
+                // best effort: it may have entered its own shutdown already.
+                if (loop.id == 0) {
+                    self.actions_service.lock();
+                    self.actions_service.flushOutbox();
+                    self.actions_service.unlock();
+                }
+                self.connection_manager.drainSendQueue(&self.send_queue, loop.id);
                 self.connection_manager.stopTokenSweepTimerForLoop(loop.id);
                 if (loop.id == 0) {
                     self.actions_service.stopSweepTimer();

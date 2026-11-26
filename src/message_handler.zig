@@ -297,9 +297,11 @@ pub const MessageHandler = struct {
         const detached = conn.detachSubscriptionsLocked();
         conn.resetSessionLocked();
         self.unsubscribeDetached(conn, detached);
-        self.actions_service.lock();
-        defer self.actions_service.unlock();
-        self.actions_service.removeAllForConnection(conn.id);
+        {
+            self.actions_service.lock();
+            defer self.actions_service.unlock();
+            self.actions_service.removeAllForConnection(conn.id);
+        }
 
         if (presence_ns != connection_mod.unset_namespace_id) {
             self.presence_service.removeAllForConnection(presence_ns, presence_user, conn.id);
