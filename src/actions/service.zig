@@ -451,6 +451,10 @@ pub const ActionsService = struct {
             const pending = self.removePending(exec_id) orelse continue;
             self.sendError(pending.caller_conn_id, pending.req_id, wire_errors.getWireError(error.RequestSuperseded));
         }
+
+        // Everything above was queued on the owning reactor. Send it now so it
+        // precedes the scope-change response the handler sends after we return.
+        if (self.connection_manager) |cm| cm.drainOwningLoop(conn_id);
     }
 
     /// Re-evaluate every registration of a refreshed session. Registrations

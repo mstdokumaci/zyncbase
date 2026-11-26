@@ -269,9 +269,8 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     try testing.expect(notifier.called.load(.monotonic) > 0);
 
     // Drain and release
-    if (send_queue.popFrom(0)) |entry| {
-        entry.deinit();
-    }
+    const entry = send_queue.popFrom(0) orelse return error.MissingResponse;
+    defer entry.deinit();
 }
 
 test "PresenceWorker: multiple ops batched into single flush" {

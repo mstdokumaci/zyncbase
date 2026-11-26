@@ -25,6 +25,7 @@ const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const ConfigLoader = @import("config/loader.zig").ConfigLoader;
 const Config = @import("config/state.zig").Config;
 const SendQueueType = @import("connection/send_queue.zig").SendQueue;
+const WakeRegistry = @import("connection/wake_registry.zig").WakeRegistry;
 const DataLock = @import("data_lock.zig").DataLock;
 const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
@@ -106,6 +107,9 @@ pub const ZyncBaseServer = struct {
     server_metrics: ServerMetrics,
     http_context: http_handlers.HttpContext,
     shutdown_requested: std.atomic.Value(bool),
+    /// Cross-thread reactor wake handles. Initialized before any worker starts
+    /// so notify callbacks never read an uninitialized loop pointer.
+    wake_registry: WakeRegistry,
     schema: Schema,
     schema_identity: canonical.Identity,
     auth_config: authorization_types.AuthConfig,
@@ -135,6 +139,7 @@ pub const ZyncBaseServer = struct {
         self.io = io;
         self.environ = environ;
         self.allocator = allocator;
+        self.wake_registry = WakeRegistry.init();
         for (&self.event_loops, 0..) |*loop, index| {
             loop.* = .{
                 .server = self,
@@ -250,6 +255,7 @@ pub const ZyncBaseServer = struct {
         errdefer self.connection_manager.deinit();
         self.actions_service.setConnectionManager(&self.connection_manager);
         self.connection_manager.setSendQueue(&self.send_queue);
+        self.connection_manager.setWakeRegistry(&self.wake_registry);
 
         var pool = try self.initSubscriptionPoolInternal();
         errdefer {
@@ -662,22 +668,25 @@ pub const ZyncBaseServer = struct {
         while (!self.event_loops[1].ready.load(.acquire)) try std.Thread.yield();
 
         self.ws(0).listen() catch |err| {
-            // Loop 1 is already listening; stop and join it before unwinding.
-            self.ws(1).close();
+            // Loop 1 is already listening. Drive it through its own shutdown
+            // path so it stops its timers before exiting; closing the wrapper
+            // directly would leave a non-fallthrough timer and hang the join.
+            self.shutdown_requested.store(true, .release);
+            self.wake_registry.wake(1);
             if (self.event_loops[1].thread) |thread| thread.join();
             return err;
         };
         if (self.ws(0).loop.load(.acquire)) |reactor| {
-            self.connection_manager.setLoopWake(0, reactor);
+            self.wake_registry.set(0, reactor);
             // A signal parked before the loop existed was replayed into
             // shutdown_requested with no loop to wake; kick the first poll so
             // the shutdown does not wait for the sweep timer tick.
-            if (self.shutdown_requested.load(.acquire)) uws_c.us_wakeup_loop(reactor);
+            if (self.shutdown_requested.load(.acquire)) self.wake_registry.wake(0);
         }
         std.log.info("Server started successfully", .{});
 
         self.ws(0).run();
-        self.connection_manager.clearLoopWake(0);
+        self.wake_registry.clear(0);
         self.ws(0).loop.store(null, .release);
 
         if (!self.shutdown_requested.load(.acquire)) self.ws(1).close();
@@ -721,12 +730,12 @@ pub const ZyncBaseServer = struct {
             std.process.exit(1);
         };
         if (loop.websocket_server.loop.load(.acquire)) |reactor| {
-            self.connection_manager.setLoopWake(1, reactor);
-            if (self.shutdown_requested.load(.acquire)) uws_c.us_wakeup_loop(reactor);
+            self.wake_registry.set(1, reactor);
+            if (self.shutdown_requested.load(.acquire)) self.wake_registry.wake(1);
         }
         loop.ready.store(true, .release);
         loop.websocket_server.run();
-        self.connection_manager.clearLoopWake(1);
+        self.wake_registry.clear(1);
         loop.websocket_server.loop.store(null, .release);
         // The app and its socket contexts belong to this thread's loop; destroy
         // them before the loop thread exits.
@@ -954,9 +963,9 @@ pub const ZyncBaseServer = struct {
             }
             return;
         }
-        // Flush staged action forwards first so their queue entries are drained
-        // in this same post-handler pass.
-        if (loop.id == 0) {
+        // Either reactor may flush staged forwards: the outbox is shared and
+        // mutex-guarded, and each reactor drains its own queue right after.
+        {
             self.actions_service.lock();
             defer self.actions_service.unlock();
             self.actions_service.flushOutbox();
@@ -1021,9 +1030,7 @@ fn handleSignal(sig: std.posix.SIG) callconv(.c) void {
     if (global_server.load(.acquire)) |server| {
         server.shutdown_requested.store(true, .release);
         for (0..server.event_loops.len) |index| {
-            if (server.ws(index).loop.load(.acquire)) |loop| {
-                uws_c.us_wakeup_loop(loop);
-            }
+            server.wake_registry.wake(@intCast(index));
         }
     }
 }
@@ -1032,9 +1039,7 @@ fn storageEngineWakeup(ctx: ?*anyopaque) void {
     if (ctx == null) return;
     const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
     for (0..server.event_loops.len) |index| {
-        if (server.ws(index).loop.load(.acquire)) |loop| {
-            uws_c.us_wakeup_loop(loop);
-        }
+        server.wake_registry.wake(@intCast(index));
     }
 }
 fn loopReadyDispatcher(ctx: ?*anyopaque, loop: ?*uws_c.struct_us_loop_t) void {
@@ -1060,9 +1065,7 @@ fn lastConnectionClosed(ctx: ?*anyopaque) void {
     if (ctx == null) return;
     const server: *ZyncBaseServer = @ptrCast(@alignCast(ctx.?));
     for (0..server.event_loops.len) |index| {
-        if (server.ws(index).loop.load(.acquire)) |loop| {
-            uws_c.us_wakeup_loop(loop);
-        }
+        server.wake_registry.wake(@intCast(index));
     }
 }
 

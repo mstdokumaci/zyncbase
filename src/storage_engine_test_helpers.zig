@@ -577,7 +577,9 @@ pub const EngineTestContext = struct {
         // reference to the arena backing its head node, so the pool's
         // active_count assertion only holds once the queue is gone.
         if (self.test_context.send_queue) |*sq| {
-            while (sq.popFrom(0)) |entry| entry.deinit();
+            for (0..sq.queues.len) |loop_index| {
+                while (sq.popFrom(loop_index)) |entry| entry.deinit();
+            }
             sq.deinit();
             self.test_context.send_queue = null;
         }

@@ -9,10 +9,11 @@ owning reactor.
 | File | Role |
 |---|---|
 | `src/thread_budget.zig` | Fixed two-reactor budget and variable reader/notification split. |
-| `src/server.zig` | `EventLoopContext`, reactor startup/shutdown, post handlers, per-loop timers. |
+| `src/server.zig` | `EventLoopContext`, reactor startup/shutdown, post handlers, per-loop timers, owned `WakeRegistry`. |
 | `src/uwebsockets_wrapper.zig` | App/listen/run/destroy per reactor; loop id on sockets. |
 | `src/connection/send_queue.zig` | Two per-loop send queues; one consumer each. |
-| `src/connection/manager.zig` | Connection registry, per-loop drains, token sweeps, queued cross-loop control sends, loop wake registry. |
+| `src/connection/wake_registry.zig` | Cross-thread reactor wake handles with an in-flight count so `clear` waits out wakes before the loop is freed. |
+| `src/connection/manager.zig` | Connection registry, per-loop drains, token sweeps, queued cross-loop control sends, owning-loop drain. |
 | `src/connection/state.zig` | Connection-local state and immutable owning loop id. |
 | `src/storage_engine/read_buffer.zig` | Read request/response with target loop. |
 | `src/storage_engine/write_queue.zig` | `WriteAck` with target loop. |

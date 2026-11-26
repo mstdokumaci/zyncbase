@@ -123,12 +123,11 @@ test "SubscriptionWorkerPool: matching change is processed and pushed to send_qu
     try testing.expect(ctx.notifier_called.load(.monotonic) > 0);
 
     // Drain and release the batched send_queue entry.
-    if (ctx.send_queue.popFrom(0)) |entry| {
-        const items = entry.items orelse return error.TestExpectedValue;
-        try testing.expectEqual(@as(usize, 1), items.len);
-        try testing.expectEqual(conn_id, items[0].conn_id);
-        entry.deinit();
-    }
+    const entry = ctx.send_queue.popFrom(0) orelse return error.MissingResponse;
+    defer entry.deinit();
+    const items = entry.items orelse return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 1), items.len);
+    try testing.expectEqual(conn_id, items[0].conn_id);
 }
 
 test "SubscriptionWorkerPool: non-matching change does not push to send_queue" {

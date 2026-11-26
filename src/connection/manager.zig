@@ -15,6 +15,7 @@ const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const c = @import("../uwebsockets_wrapper.zig").c;
 const SendQueueType = @import("send_queue.zig").SendQueue;
 const Connection = @import("state.zig").Connection;
+const WakeRegistry = @import("wake_registry.zig").WakeRegistry;
 
 const Allocator = std.mem.Allocator;
 
@@ -89,9 +90,9 @@ pub const ConnectionManager = struct {
     token_sweep_ctx: [event_loop_count]TokenSweepCtx,
 
     /// Wake handles by loop id, used to kick the owning reactor after a queued
-    /// cross-loop send. Cleared when the reactor exits so a late send can never
-    /// touch a freed loop.
-    loop_wakes: [event_loop_count]std.atomic.Value(?*c.struct_us_loop_t),
+    /// cross-loop send. Owned by the server and initialized before any worker
+    /// can notify; null only in tests that never wake a reactor.
+    wake_registry: ?*WakeRegistry = null,
     /// Atomic connection count for cheap shutdown polling (maintained alongside map count).
     active_connection_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
@@ -113,17 +114,11 @@ pub const ConnectionManager = struct {
     pub fn setSendQueue(self: *ConnectionManager, send_queue: ?*SendQueueType) void {
         self.send_queue = send_queue;
     }
-    pub fn setLoopWake(self: *ConnectionManager, loop_id: u8, loop: *c.struct_us_loop_t) void {
-        std.debug.assert(loop_id < event_loop_count);
-        self.loop_wakes[loop_id].store(loop, .release);
-    }
-    /// Drop the wake handle before the reactor frees its loop.
-    pub fn clearLoopWake(self: *ConnectionManager, loop_id: u8) void {
-        std.debug.assert(loop_id < event_loop_count);
-        self.loop_wakes[loop_id].store(null, .release);
+    pub fn setWakeRegistry(self: *ConnectionManager, wake_registry: ?*WakeRegistry) void {
+        self.wake_registry = wake_registry;
     }
     fn wakeLoop(self: *ConnectionManager, loop_id: u8) void {
-        if (self.loop_wakes[loop_id].load(.acquire)) |loop| c.us_wakeup_loop(loop);
+        if (self.wake_registry) |registry| registry.wake(loop_id);
     }
 
     pub fn init(
@@ -156,12 +151,9 @@ pub const ConnectionManager = struct {
             .metrics = null,
             // SAFETY: populated for every loop in the loop below before any timer uses it.
             .token_sweep_ctx = undefined,
-            // SAFETY: atomics initialized in the loop below before any producer runs.
-            .loop_wakes = undefined,
         };
         for (0..event_loop_count) |i| {
             self.token_sweep_ctx[i] = .{ .manager = self, .loop_id = @intCast(i) };
-            self.loop_wakes[i] = std.atomic.Value(?*c.struct_us_loop_t).init(null);
         }
     }
 
@@ -366,6 +358,19 @@ pub const ConnectionManager = struct {
             return;
         };
         self.wakeLoop(loop_id);
+    }
+
+    /// Deliver everything already queued for the connection's reactor. Must be
+    /// called on that reactor. Used to put earlier frames ahead of a direct
+    /// response the caller is about to send.
+    pub fn drainOwningLoop(self: *ConnectionManager, conn_id: u64) void {
+        const send_queue = self.send_queue orelse return;
+        const loop_id = blk: {
+            const conn = self.acquireConnection(conn_id) catch return;
+            defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
+            break :blk conn.loop_id;
+        };
+        self.drainSendQueue(send_queue, loop_id);
     }
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
     /// Called in notifyPostHandler after dispatcher polls.

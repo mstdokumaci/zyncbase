@@ -668,7 +668,7 @@ test "ConnectionManager: sendToConnection queues on the owning loop" {
     try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
     try testing.expect(app.test_context.send_queue.?.popFrom(0) == null);
 
-    // The wake handle is null in tests: a closed reactor must not crash a send.
+    // No wake registry is wired in tests: a missing reactor must not crash a send.
     const entry = app.test_context.send_queue.?.popFrom(1) orelse return error.TestExpectedValue;
     defer entry.deinit();
     try testing.expectEqual(ws.getConnId(), entry.conn_id);
