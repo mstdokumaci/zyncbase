@@ -47,6 +47,7 @@ test {
     _ = @import("threading/wait_group_test.zig");
     _ = @import("threading/latch_test.zig");
     _ = @import("connection/manager_test.zig");
+    _ = @import("connection/send_queue_test.zig");
     _ = @import("connection/state_test.zig");
     _ = @import("connection/violations_test.zig");
     _ = @import("presence/record_test.zig");

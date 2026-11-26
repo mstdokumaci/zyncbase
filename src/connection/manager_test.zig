@@ -646,3 +646,75 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
     try testing.expectEqual(@as(usize, expected_count), seen.count());
     try testing.expectEqual(@as(usize, 0), connectionCount(&app));
 }
+
+test "ConnectionManager: sendToConnection queues on the owning loop" {
+    var app: AppTestContext = undefined;
+    try app.init(std.heap.smp_allocator, "conn-mgr-send-route", &.{});
+    defer app.deinit();
+
+    var sent_buf: [64]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&sent_buf);
+    var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
+    ws.loop_id = 1;
+    ws.test_send_observer = helpers.sendRecorderObserver;
+    ws.test_send_observer_ctx = &recorder;
+    try app.connection_manager.onOpen(&ws);
+    defer app.connection_manager.onClose(&ws, 1000, "");
+    recorder.reset();
+
+    app.connection_manager.sendToConnection(ws.getConnId(), "hello");
+
+    // Nothing is sent inline, and the other loop's queue stays empty.
+    try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
+    try testing.expect(app.test_context.send_queue.?.popFrom(0) == null);
+
+    // The wake handle is null in tests: a closed reactor must not crash a send.
+    const entry = app.test_context.send_queue.?.popFrom(1) orelse return error.TestExpectedValue;
+    defer entry.deinit();
+    try testing.expectEqual(ws.getConnId(), entry.conn_id);
+    try testing.expectEqualStrings("hello", entry.data);
+}
+
+test "ConnectionManager: token sweep only touches its own loop" {
+    var app: AppTestContext = undefined;
+    try app.init(std.heap.smp_allocator, "conn-mgr-sweep-shard", &.{});
+    defer app.deinit();
+
+    var buf0: [256]u8 = undefined;
+    var buf1: [256]u8 = undefined;
+    var recorder0 = helpers.SendRecorder.init(&buf0);
+    var recorder1 = helpers.SendRecorder.init(&buf1);
+    var ws0 = createMockWebSocket(app.memory_strategy.generalAllocator());
+    var ws1 = createMockWebSocket(app.memory_strategy.generalAllocator());
+    ws0.test_send_observer = helpers.sendRecorderObserver;
+    ws0.test_send_observer_ctx = &recorder0;
+    ws1.loop_id = 1;
+    ws1.test_send_observer = helpers.sendRecorderObserver;
+    ws1.test_send_observer_ctx = &recorder1;
+    try app.connection_manager.onOpen(&ws0);
+    defer app.connection_manager.onClose(&ws0, 1000, "");
+    try app.connection_manager.onOpen(&ws1);
+    defer app.connection_manager.onClose(&ws1, 1000, "");
+
+    const now = std.Io.Clock.real.now(std.testing.io).toSeconds();
+    const conn0 = try app.connection_manager.acquireConnection(ws0.getConnId());
+    defer app.releaseConnection(conn0);
+    (conn0.session orelse return error.MissingSession).token_expires_at = now;
+    const conn1 = try app.connection_manager.acquireConnection(ws1.getConnId());
+    defer app.releaseConnection(conn1);
+    (conn1.session orelse return error.MissingSession).token_expires_at = now;
+
+    recorder0.reset();
+    recorder1.reset();
+    app.connection_manager.token_grace_period_seconds = 0;
+    app.connection_manager.sweepExpiredTokens(1);
+
+    // Zero grace sends the expiry notification and the disconnect, both to the
+    // loop that owns the connection and never to the other one.
+    try testing.expectEqual(@as(u64, 0), recorder0.send_count.load(.monotonic));
+    try testing.expectEqual(@as(u64, 2), recorder1.send_count.load(.monotonic));
+
+    // The untouched shard expires on its own sweep.
+    app.connection_manager.sweepExpiredTokens(0);
+    try testing.expectEqual(@as(u64, 2), recorder0.send_count.load(.monotonic));
+}
