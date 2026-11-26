@@ -18,8 +18,6 @@ pub const Entry = struct {
     conn_id: u64,
     data: []const u8,
     arena: ArenaHandle,
-    /// Owning loop, used for the debug ownership invariant.
-    loop_id: u8 = 0,
     /// Non-null for a batched subscription-fanout entry. The `data` slices in
     /// `items` point into the same arena and use the same lifetime as `data`.
     items: ?[]const Delivery = null,
@@ -54,20 +52,15 @@ pub const SendQueue = struct {
         for (&self.queues) |*queue| queue.deinit();
     }
     pub fn push(self: *@This(), loop_id: u8, item: Entry) !void {
-        if (loop_id >= event_loop_count) return error.InvalidLoop;
+        std.debug.assert(loop_id < event_loop_count);
         if (item.items) |items| return self.pushBatch(item, items);
-        var entry = item;
-        entry.loop_id = loop_id;
-        return self.queues[loop_id].push(entry);
+        return self.queues[loop_id].push(item);
     }
     fn pushBatch(self: *@This(), item: Entry, items: []const Delivery) !void {
-        if (items.len == 0) {
-            item.arena.release();
-            return;
-        }
+        std.debug.assert(items.len > 0);
         var per_loop = [_]usize{0} ** event_loop_count;
         for (items) |delivery| {
-            if (delivery.loop_id >= event_loop_count) return error.InvalidLoop;
+            std.debug.assert(delivery.loop_id < event_loop_count);
             per_loop[delivery.loop_id] += 1;
         }
         var only: ?usize = null;
@@ -82,7 +75,6 @@ pub const SendQueue = struct {
         if (only) |idx| {
             var entry = item;
             entry.conn_id = items[0].conn_id;
-            entry.loop_id = @intCast(idx);
             return self.queues[idx].push(entry);
         }
         // A change can match subscribers on more than one loop. Split the
@@ -109,7 +101,6 @@ pub const SendQueue = struct {
                 .data = &.{},
                 .items = slice,
                 .arena = item.arena,
-                .loop_id = @intCast(i),
             };
             self.queues[i].push(entry) catch |err| {
                 if (pushed == 0) return err;
@@ -118,7 +109,6 @@ pub const SendQueue = struct {
             };
             pushed += 1;
         }
-        if (pushed == 0) return error.OutOfMemory;
     }
     pub fn popFrom(self: *@This(), loop_index: usize) ?Entry {
         std.debug.assert(loop_index < event_loop_count);

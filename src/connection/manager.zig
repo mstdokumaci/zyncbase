@@ -88,10 +88,10 @@ pub const ConnectionManager = struct {
     token_sweep_timers: [event_loop_count]?*c.struct_us_timer_t = .{null} ** event_loop_count,
     token_sweep_ctx: [event_loop_count]TokenSweepCtx,
 
-    /// Reactor pointers by loop id, used to detect cross-loop sends.
-    loop_ptrs: [event_loop_count]?*c.struct_us_loop_t = .{null} ** event_loop_count,
-    /// Set once both reactors have joined; late sends from teardown are dropped.
-    loops_stopped: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Wake handles by loop id, used to kick the owning reactor after a queued
+    /// cross-loop send. Cleared when the reactor exits so a late send can never
+    /// touch a freed loop.
+    loop_wakes: [event_loop_count]std.atomic.Value(?*c.struct_us_loop_t),
     /// Atomic connection count for cheap shutdown polling (maintained alongside map count).
     active_connection_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
@@ -101,17 +101,29 @@ pub const ConnectionManager = struct {
     /// Arena for temporary allocations during drainSendQueue grouping.
     drain_arenas: [event_loop_count]std.heap.ArenaAllocator,
 
+    /// Queue used by sendToConnection to reach a connection owned by another
+    /// reactor. Null only before the server wires it.
+    send_queue: ?*SendQueueType = null,
+
     metrics: ?*ServerMetrics = null,
 
     pub fn setMetrics(self: *ConnectionManager, metrics: ?*ServerMetrics) void {
         self.metrics = metrics;
     }
-    pub fn setLoopPointer(self: *ConnectionManager, loop_id: u8, loop: *c.struct_us_loop_t) void {
-        std.debug.assert(loop_id < event_loop_count);
-        self.loop_ptrs[loop_id] = loop;
+    pub fn setSendQueue(self: *ConnectionManager, send_queue: *SendQueueType) void {
+        self.send_queue = send_queue;
     }
-    pub fn markLoopsStopped(self: *ConnectionManager) void {
-        self.loops_stopped.store(true, .release);
+    pub fn setLoopWake(self: *ConnectionManager, loop_id: u8, loop: *c.struct_us_loop_t) void {
+        std.debug.assert(loop_id < event_loop_count);
+        self.loop_wakes[loop_id].store(loop, .release);
+    }
+    /// Drop the wake handle before the reactor frees its loop.
+    pub fn clearLoopWake(self: *ConnectionManager, loop_id: u8) void {
+        std.debug.assert(loop_id < event_loop_count);
+        self.loop_wakes[loop_id].store(null, .release);
+    }
+    fn wakeLoop(self: *ConnectionManager, loop_id: u8) void {
+        if (self.loop_wakes[loop_id].load(.acquire)) |loop| c.us_wakeup_loop(loop);
     }
 
     pub fn init(
@@ -144,9 +156,12 @@ pub const ConnectionManager = struct {
             .metrics = null,
             // SAFETY: populated for every loop in the loop below before any timer uses it.
             .token_sweep_ctx = undefined,
+            // SAFETY: atomics initialized in the loop below before any producer runs.
+            .loop_wakes = undefined,
         };
         for (0..event_loop_count) |i| {
             self.token_sweep_ctx[i] = .{ .manager = self, .loop_id = @intCast(i) };
+            self.loop_wakes[i] = std.atomic.Value(?*c.struct_us_loop_t).init(null);
         }
     }
 
@@ -312,37 +327,33 @@ pub const ConnectionManager = struct {
         if (metrics) |m| m.recordMessagesSent(count);
     }
 
-    const DeferredSend = struct {
-        manager: *ConnectionManager,
-        conn_id: u64,
-        data: []u8,
-    };
-    /// Broadcast helper as a method on ConnectionManager. Safe from any loop:
-    /// sends to a connection owned by another reactor are deferred there.
+    /// Queue a message for delivery on the connection's owning reactor. Safe
+    /// from any thread: the bytes are copied into an arena and the owning loop
+    /// performs the send during its drain. Used for low-rate control messages
+    /// (action replies and errors); worker fanout carries the loop id instead.
     pub fn sendToConnection(self: *ConnectionManager, conn_id: u64, data: []const u8) void {
-        if (self.loops_stopped.load(.acquire)) return;
-        const conn = self.acquireConnection(conn_id) catch return;
-        const target = self.loop_ptrs[conn.loop_id];
-        const current = c.uws_get_loop();
-        if (target == null or current == null or target.? == current.?) {
+        const send_queue = self.send_queue orelse return;
+        const loop_id = blk: {
+            const conn = self.acquireConnection(conn_id) catch return;
             defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
-            sendOrClose(conn, data, self.message_handler, self.metrics, 1);
-            return;
-        }
-        // Do not touch the connection on this loop; copy the bytes and let the
-        // owning loop perform the send.
-        const copy = self.allocator.dupe(u8, data) catch {
-            if (conn.release()) self.memory_strategy.releaseConnection(conn);
+            break :blk conn.loop_id;
+        };
+        const handle = self.memory_strategy.acquireArenaDeferred() catch |err| {
+            std.log.warn("sendToConnection: arena acquire failed for conn {}: {}", .{ conn_id, err });
             return;
         };
-        const job = self.allocator.create(DeferredSend) catch {
-            self.allocator.free(copy);
-            if (conn.release()) self.memory_strategy.releaseConnection(conn);
+        defer handle.release();
+        const copy = handle.allocator().dupe(u8, data) catch |err| {
+            std.log.warn("sendToConnection: copy failed for conn {}: {}", .{ conn_id, err });
             return;
         };
-        job.* = .{ .manager = self, .conn_id = conn_id, .data = copy };
-        if (conn.release()) self.memory_strategy.releaseConnection(conn);
-        c.uws_loop_defer(target orelse unreachable, job, deferredSendCallback);
+        handle.retain();
+        send_queue.push(loop_id, .{ .conn_id = conn_id, .data = copy, .arena = handle }) catch |err| {
+            std.log.warn("sendToConnection: queue push failed for conn {}: {}", .{ conn_id, err });
+            handle.release();
+            return;
+        };
+        self.wakeLoop(loop_id);
     }
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
     /// Called in notifyPostHandler after dispatcher polls.
@@ -378,7 +389,6 @@ pub const ConnectionManager = struct {
                     appendToGroup(alloc, &groups, delivery.conn_id, delivery.data);
                 }
             } else {
-                std.debug.assert(entry.loop_id == loop_id);
                 appendToGroup(alloc, &groups, entry.conn_id, entry.data);
             }
         }
@@ -597,18 +607,6 @@ pub const ConnectionManager = struct {
         ctx.manager.sweepExpiredTokens(ctx.loop_id);
     }
 };
-
-fn deferredSendCallback(ctx: ?*anyopaque) callconv(.c) void {
-    const job: *ConnectionManager.DeferredSend = @ptrCast(@alignCast(ctx orelse return));
-    const manager = job.manager;
-    defer {
-        manager.allocator.free(job.data);
-        manager.allocator.destroy(job);
-    }
-    const conn = manager.acquireConnection(job.conn_id) catch return;
-    defer if (conn.release()) manager.memory_strategy.releaseConnection(conn);
-    ConnectionManager.sendOrClose(conn, job.data, manager.message_handler, manager.metrics, 1);
-}
 
 fn sendDisconnectAndEnd(ws: *WebSocket, allocator: Allocator, code: []const u8, message: []const u8, close_code: u16, metrics: ?*ServerMetrics) void {
     defer ws.end(close_code);

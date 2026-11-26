@@ -16,6 +16,17 @@ const AppTestContext = helpers.AppTestContext;
 const ActionsService = service_mod.ActionsService;
 const RegistryKey = service_mod.RegistryKey;
 
+/// Actions sends are queued on the owning reactor; the drain is what puts them
+/// on the wire.
+fn drain(app: *AppTestContext) void {
+    app.connection_manager.drainSendQueue(&app.test_context.send_queue.?, 0);
+}
+
+fn flushAndDrain(app: *AppTestContext) void {
+    app.actions_service.flushOutbox();
+    drain(app);
+}
+
 fn connectionContext(conn: anytype) RequestContext {
     return .{
         .conn_id = conn.id,
@@ -206,6 +217,7 @@ test "actions service: rate-limited sync calls are not forwarded" {
             break;
         };
         accepted += 1;
+        drain(&app); // one frame per call keeps the count equal to the forwards
     }
 
     try testing.expect(accepted > 0);
@@ -242,6 +254,7 @@ test "actions service: late worker reply times out instead of succeeding" {
     pending_entry.value_ptr.deadline_ns = std.math.minInt(i96);
 
     app.actions_service.resolveReply(worker.conn.id, pending_entry.key_ptr.*, true, &params);
+    drain(&app);
 
     try testing.expectEqual(@as(usize, 0), app.actions_service.pending_counts.get(caller.conn.id) orelse 0);
     const response = try helpers.parseResponse(allocator, recorder.bytes());
@@ -412,6 +425,7 @@ test "actions service: worker error tuples and return validation settle callers"
     defer err_tuple.free(allocator);
 
     app.actions_service.resolveReply(worker.conn.id, 1, false, &err_tuple);
+    drain(&app);
     try testing.expectEqual(@as(usize, 0), app.actions_service.pending_counts.get(caller.conn.id) orelse 0);
     const error_response = try helpers.parseResponse(allocator, recorder.bytes());
     defer if (error_response.code) |code| allocator.free(code);
@@ -424,6 +438,7 @@ test "actions service: worker error tuples and return validation settle callers"
 
     var empty_returns = msgpack.Payload{ .arr = &.{} };
     app.actions_service.resolveReply(worker.conn.id, 2, true, &empty_returns);
+    drain(&app);
     try testing.expectEqual(@as(usize, 0), app.actions_service.pending_counts.get(caller.conn.id) orelse 0);
     const validation_response = try helpers.parseResponse(allocator, recorder.bytes());
     defer if (validation_response.code) |code| allocator.free(code);
@@ -517,7 +532,7 @@ test "actions service: async forwards stage until flush and concatenate in order
     // Nothing is on the wire until the event-loop flush.
     try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
 
-    app.actions_service.flushOutbox();
+    flushAndDrain(&app);
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
 
     // One frame carries three complete forwards in exec-id order.
@@ -534,7 +549,7 @@ test "actions service: async forwards stage until flush and concatenate in order
     }
 
     // Flushing again is a no-op.
-    app.actions_service.flushOutbox();
+    flushAndDrain(&app);
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
 }
 
@@ -574,9 +589,11 @@ test "actions service: sync forward flushes staged async forwards first" {
     try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 2, 0, &params, null));
     try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
 
-    // The sync call flushes the two staged forwards, then sends its own.
+    // The sync call flushes the two staged forwards, then queues its own; the
+    // drain concatenates both entries for the worker into one frame.
     try testing.expectEqual(service_mod.CallOutcome.pending, try app.actions_service.call(caller_ctx, 3, 1, &params, null));
-    try testing.expectEqual(@as(u64, 2), recorder.send_count.load(.monotonic));
+    drain(&app);
+    try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
 
     var reader: std.Io.Reader = .fixed(recorder.bytes());
     const expected_action_ids = [_]u64{ 0, 0, 1 };
@@ -630,7 +647,7 @@ test "actions service: projects declared session claims and omits absent ones" {
     var caller_ctx = connectionContext(caller.conn);
     caller_ctx.session_claims = &claims;
     try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 1, 0, &params, null));
-    app.actions_service.flushOutbox();
+    flushAndDrain(&app);
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
 
     var reader: std.Io.Reader = .fixed(recorder.bytes());
@@ -681,7 +698,7 @@ test "actions service: re-reads session claims at forward time" {
     try claims.put(allocator, "role", .{ .scalar = .{ .text = "admin" } });
     try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 2, 0, &params, null));
 
-    app.actions_service.flushOutbox();
+    flushAndDrain(&app);
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
 
     var reader: std.Io.Reader = .fixed(recorder.bytes());
@@ -727,7 +744,7 @@ test "actions service: oversized staging buffers release capacity after flush" {
     try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 1, 0, &big_params, null));
     const staged = app.actions_service.outbox.getPtr(worker.conn.id).?; // zwanzig-disable-line: optional-unwrap
     try testing.expect(staged.bytes.capacity >= 96 * 1024);
-    app.actions_service.flushOutbox();
+    flushAndDrain(&app);
     try testing.expectEqual(@as(usize, 0), staged.bytes.capacity);
 
     // Small bursts keep their buffer for the next iteration.
@@ -736,6 +753,6 @@ test "actions service: oversized staging buffers release capacity after flush" {
     });
     defer small_params.free(allocator);
     try testing.expectEqual(service_mod.CallOutcome.accepted, try app.actions_service.call(caller_ctx, 2, 0, &small_params, null));
-    app.actions_service.flushOutbox();
+    flushAndDrain(&app);
     try testing.expect(staged.bytes.capacity > 0);
 }

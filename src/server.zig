@@ -250,6 +250,7 @@ pub const ZyncBaseServer = struct {
         try self.initConnectionManagerInternal(config);
         errdefer self.connection_manager.deinit();
         self.actions_service.setConnectionManager(&self.connection_manager);
+        self.connection_manager.setSendQueue(&self.send_queue);
 
         var pool = try self.initSubscriptionPoolInternal();
         errdefer {
@@ -668,9 +669,10 @@ pub const ZyncBaseServer = struct {
             if (self.event_loops[1].thread) |thread| thread.join();
             return err;
         };
-        if (self.ws(0).loop.load(.acquire)) |reactor| self.connection_manager.setLoopPointer(0, reactor);
+        if (self.ws(0).loop.load(.acquire)) |reactor| self.connection_manager.setLoopWake(0, reactor);
 
         self.ws(0).run();
+        self.connection_manager.clearLoopWake(0);
         self.ws(0).loop.store(null, .release);
 
         if (!self.shutdown_requested.load(.acquire)) self.ws(1).close();
@@ -713,16 +715,16 @@ pub const ZyncBaseServer = struct {
             std.log.err("Failed to listen on event loop 1: {}", .{err});
             std.process.exit(1);
         };
-        if (loop.websocket_server.loop.load(.acquire)) |reactor| self.connection_manager.setLoopPointer(1, reactor);
+        if (loop.websocket_server.loop.load(.acquire)) |reactor| self.connection_manager.setLoopWake(1, reactor);
         loop.ready.store(true, .release);
         loop.websocket_server.run();
+        self.connection_manager.clearLoopWake(1);
         loop.websocket_server.loop.store(null, .release);
         // The app and its socket contexts belong to this thread's loop; destroy
         // them before the loop thread exits.
         self.deinitLoopWrapper(1);
     }
     fn finishShutdown(self: *ZyncBaseServer) !void {
-        self.connection_manager.markLoopsStopped();
         self.connection_manager.stopTokenSweepTimer();
         self.actions_service.stopSweepTimer();
         if (self.jwks) |jc| jc.stopRefreshTimer();
@@ -936,12 +938,14 @@ pub const ZyncBaseServer = struct {
             }
             return;
         }
-        self.connection_manager.drainSendQueue(&self.send_queue, loop.id);
+        // Flush staged action forwards first so their queue entries are drained
+        // in this same post-handler pass.
         if (loop.id == 0) {
             self.actions_service.lock();
             defer self.actions_service.unlock();
             self.actions_service.flushOutbox();
         }
+        self.connection_manager.drainSendQueue(&self.send_queue, loop.id);
     }
     fn shutdownLoopTimeoutCallback(t: ?*uws_c.struct_us_timer_t) callconv(.c) void {
         const timer = t orelse return;

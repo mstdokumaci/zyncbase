@@ -251,6 +251,7 @@ pub const AppTestContext = struct {
         try self.connection_manager.init(std.testing.io, gpa, &self.memory_strategy, &self.handler, &self.schema, 100_000, 30);
         errdefer self.connection_manager.deinit();
         self.actions_service.setConnectionManager(&self.connection_manager);
+        if (self.test_context.send_queue) |*sq| self.connection_manager.setSendQueue(sq);
 
         // 10. Initialize Session Resolver
         self.session_resolver.init(gpa, &self.connection_manager, &self.memory_strategy);
