@@ -30,7 +30,7 @@ overrides.
 │  presence write read                presence write read                 │
 │     │    │    │                        │    │    │                      │
 │  ┌──▼────▼────▼──┐                  ┌──▼────▼────▼──┐                   │
-│  │  SendSink 0   │                  │  SendSink 1   │                   │
+│  │  SendQueue 0   │                  │  SendQueue 1   │                   │
 │  └──────┬────────┘                  └──────┬────────┘                   │
 │         │                                  │                            │
 │   ┌─────▼──────┐   ┌──────────────┐   ┌────▼─────────┐                  │
@@ -45,7 +45,7 @@ overrides.
 │         │          └──────┬────────┘           │                         │
 │         └─────────────────┼────────────────────┘                         │
 │                           ▼                                              │
-│                 per-loop SendSink queues                                 │
+│                 per-loop SendQueue queues                                 │
 │                                                                         │
 │  Checkpoint (1 fixed) runs independently and flushes WAL.                │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -89,7 +89,7 @@ On 2-4 CPU hosts the minimum worker set oversubscribes the machine.
 - Each reactor accepts and owns a shard of the WebSocket connections.
 - Handles connect, message, and disconnect for its connections.
 - Dispatches incoming messages to the write or read path without blocking.
-- Drains its own `SendSink` in the post-handler and delivers outbound frames.
+- Drains its own `SendQueue` in the post-handler and delivers outbound frames.
 - Owns its per-loop timers: token-expiry sweep and connection cleanup.
 - Must never block; all I/O is non-blocking.
 
@@ -120,7 +120,7 @@ On 2-4 CPU hosts the minimum worker set oversubscribes the machine.
 - Each reader thread holds its own SQLite connection in WAL read mode.
 - Reads requests from a shared work queue.
 - Each request carries its target loop; responses are pushed to that loop's
-  `SendSink`.
+  `SendQueue`.
 - Scales with CPU cores up to 4 workers.
 
 ### Notification (variable)
@@ -147,7 +147,7 @@ On 2-4 CPU hosts the minimum worker set oversubscribes the machine.
 - The writer commits it to SQLite in serialized order.
 - After commit, the change is distributed to subscription workers.
 - `WriteCommitted` / `WriteError` outcomes are pushed to the origin loop's
-  `SendSink` after the transaction's deltas.
+  `SendQueue` after the transaction's deltas.
 
 ### 3. Read Path (Parallel)
 
@@ -180,26 +180,29 @@ synchronization boundary; cross-loop delivery is explicit.
 **Invariants:**
 
 - Every `Connection.send` runs on the connection's owning reactor.
-- A `SendSink` has exactly one consumer: its reactor.
+- A `SendQueue` has exactly one consumer: its reactor.
 - Producers push to a queue with the target loop id; there is no global
-  connection-to-loop lookup on the push path.
+  connection-to-loop lookup on the worker-to-connection delivery path. The
+  low-rate actions control path resolves the owner through the registry once
+  per send.
 - Batched subscription fanout stays batched and is split only at the loop
   boundary.
 - Each reactor has its own drain arena; drain state is never shared.
 - Per-loop token and action sweeps only touch and send to their own shard.
 - Write outcomes and session-resolution results route to the origin loop.
-- Cross-loop control sends are deferred to the owning loop, never sent from the
-  caller's loop.
+- Cross-loop control sends are copied into the owning loop's queue and that
+  reactor is woken; they are never sent from the caller's loop.
 - Shared registries use their documented lock or ownership model:
   - connection registry: one mutex-protected map with an immutable owning-loop id per
     connection; per-loop drain arenas and sweep selectors;
   - subscription engine: thread-safe registration/matching;
   - lock-free metadata cache: atomic reference counting and copy-on-write;
   - presence: sole mutator is the presence worker;
-  - actions: shared state guarded by its mutex and delivered through target
-    sinks.
-- Shutdown closes both listeners, sends disconnects on each owning loop, drains
-  both queues, joins both reactors, then stops workers and checkpoints.
+  - actions: shared state guarded by its mutex and delivered through the
+    target loop's queue.
+- Shutdown stops both listeners, has each reactor flush staged action forwards,
+  drain its own queue and send its disconnects, joins both reactors, then stops
+  workers and checkpoints.
 
 **Ordering:**
 
@@ -252,8 +255,8 @@ work; the writer, readers, and notification pool remain shared.
 
 - Most workloads are read-heavy; writes are batched.
 - Cold reads become warm after the first subscription.
-- Invariants and tests enforce loop ownership; TSAN and two-loop e2e are
-  required for every threading change.
+- Unit tests cover per-loop routing, the fanout split and per-loop sweeps;
+  TSAN is required for every threading change.
 
 ## Rejected Alternatives
 

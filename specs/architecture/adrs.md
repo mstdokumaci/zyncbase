@@ -123,7 +123,7 @@ No other storage backends will be added. The Zero-Zig deployment model (ADR-003)
 
 ## ADR-006: Deterministic Thread Budget Architecture
 A single uWebSockets reactor cannot use the network and fanout capacity available on modern server hardware. Configuration-driven thread counts introduce performance cliffs and support burden from misconfiguration.
-**Decision**: The engine runs two uWebSockets network reactors plus five deterministic worker domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 2 CPU cores. There are no configuration overrides for thread counts. Each connection is owned by one reactor; background worker domains may encode outbound messages, but sends are performed only by the connection's owning reactor and cross-thread delivery goes through per-loop `SendSink` queues.
+**Decision**: The engine runs two uWebSockets network reactors plus five deterministic worker domains computed from CPU core count using a hardcoded formula. The server refuses to start on machines with fewer than 2 CPU cores. There are no configuration overrides for thread counts. Each connection is owned by one reactor; background worker domains may encode outbound messages, but sends are performed only by the connection's owning reactor and cross-thread delivery goes through per-loop `SendQueue` queues.
 ### Minimum Hardware Requirement
 The server requires at least 2 CPU cores. This is a hard constraint enforced at startup. Machines with fewer cores cannot run ZyncBase. At 2 cores the logical topology runs seven threads: two reactors, writer, checkpoint, presence, one reader, and one notification worker. Small hosts are oversubscribed; every supported host runs two reactors.
 ### Thread Budget Formula
@@ -150,7 +150,7 @@ variable:
 | 12        | 2           | 1      | 1          | 1        | 3       | 4            | 12    |
 | 16        | 2           | 1      | 1          | 1        | 4       | 7            | 16    |
 | 32        | 2           | 1      | 1          | 1        | 4       | 23           | 32    |
-**Event loop threads** — run the uWebSockets reactors, handle WebSocket I/O for their connection shard, dispatch messages, and drain their own `SendSink` to call `Connection.send()`. Must never block. Main runs loop 0; one spawned thread runs loop 1.
+**Event loop threads** — run the uWebSockets reactors, handle WebSocket I/O for their connection shard, dispatch messages, and drain their own `SendQueue` to call `Connection.send()`. Must never block. Main runs loop 0; one spawned thread runs loop 1.
 **Writer thread** — receives mutations from the write queue, commits them to SQLite, and publishes durable outcomes/change events for downstream delivery. Serialization is by design: SQLite supports only one concurrent writer, and total write ordering is architecturally valuable (ADR-002).
 **Checkpoint thread** — background WAL→main database flush, decoupled from the write path.
 **Presence thread** — encodes presence broadcasts from batched state and pushes to the owning connection's send sink.
@@ -174,7 +174,7 @@ Collection query results and subscription state are managed exclusively by the S
 - Fail-fast on machines with fewer than 2 CPU cores — clear error at startup while still supporting constrained CI runners.
 - Full CPU core utilization through two reactor threads and the variable worker pools.
 - Both uWS reactors remain non-blocking at all times; all I/O-dependent work is dispatched and returned asynchronously.
-- Background workers never call uWS send APIs directly; they enqueue owned encoded bytes to the target loop's `SendSink` and wake that reactor.
+- Background workers never call uWS send APIs directly; they enqueue owned encoded bytes to the target loop's `SendQueue` and wake that reactor.
 
 **Principles**: P-PPF, P-VSF
 

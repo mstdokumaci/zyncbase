@@ -12,7 +12,7 @@ owning reactor.
 | `src/server.zig` | `EventLoopContext`, reactor startup/shutdown, post handlers, per-loop timers. |
 | `src/uwebsockets_wrapper.zig` | App/listen/run/destroy per reactor; loop id on sockets. |
 | `src/connection/send_queue.zig` | Two per-loop send queues; one consumer each. |
-| `src/connection/manager.zig` | Connection registry, per-loop drains, token sweeps, cross-loop defer. |
+| `src/connection/manager.zig` | Connection registry, per-loop drains, token sweeps, queued cross-loop control sends, loop wake registry. |
 | `src/connection/state.zig` | Connection-local state and immutable owning loop id. |
 | `src/storage_engine/read_buffer.zig` | Read request/response with target loop. |
 | `src/storage_engine/write_queue.zig` | `WriteAck` with target loop. |
@@ -82,14 +82,14 @@ Subscription fanout:
 |---|---|
 | Connection state | Mutated through connection/loop-owned methods; owning loop id is immutable. |
 | WebSocket sends | Only on the connection's owning reactor via its send queue or same-loop direct send. |
-| Cross-loop send | Deferred to the target reactor with `uws_loop_defer`; never send from the caller's reactor. |
+| Cross-loop send | Copied into the target loop's queue and that reactor is woken; never send from the caller's reactor. |
 | Storage writes | Serialized through the writer; do not bypass it. |
 | Storage reads | Reader owns its SQLite connection; request/response carries target loop. |
 | Notification fanout | Sharded by change; each worker evaluates its shard; deltas route by loop. |
 | Subscriptions | Thread-safe registration/matching; disconnect detaches all connection-owned subscriptions. |
 | Presence | Presence worker is sole mutator; reactors only enqueue operations. |
 | Actions | External entry points lock the ActionsService mutex; replies/forwards route to target loops. |
-| Shutdown | Each reactor closes its listener, disconnects its connections, drains, and exits; supervisor joins both. |
+| Shutdown | Each reactor flushes staged action forwards, drains its queue, disconnects its connections and closes; the supervisor joins both. |
 
 ## Invariants
 
@@ -102,7 +102,8 @@ Subscription fanout:
 - Per-loop token/action sweeps only inspect and send to their own shard.
 - Write outcomes and session-resolution outcomes route to the origin loop.
 - No shared service calls `Connection.send()` directly from a background
-  thread; it pushes to the target send queue or defers to the target loop.
+  thread or a non-owning reactor; it pushes to the target send queue and wakes
+  the owning reactor.
 - Background producers encode into general-allocator-owned bytes; after a
   successful push, the queue owns the bytes and the reactor frees them after
   send.
@@ -110,7 +111,7 @@ Subscription fanout:
   write outcome (ADR-018); each connection's queue preserves push order.
 - `SendQueue.deinit()` runs only after both reactors and all producers have
   stopped and both queues are drained.
-- Threading changes require two-loop e2e, TSAN, and safe-mode coverage.
+- Threading changes require the loop-routing unit tests, TSAN, and safe-mode coverage.
 - Thread counts are deterministic; the reactor count is fixed at two.
 
 ## Related Specifications
