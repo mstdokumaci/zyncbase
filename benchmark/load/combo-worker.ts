@@ -85,6 +85,13 @@ let connections: RawConnection[] = [];
 const setupFail: Record<string, number> = {};
 type StageStat = { count: number; totalMs: number; maxMs: number };
 const setupStages: Record<string, StageStat> = {};
+const pairAGaps: number[] = [];
+const pairBGaps: number[] = [];
+let pairASameFrame = 0;
+let pairBSameFrame = 0;
+let setupFramesTotal = 0;
+let setupMessagesTotal = 0;
+let setupConnections = 0;
 
 function recordStage(name: string, ms: number): void {
 	let stat = setupStages[name];
@@ -198,6 +205,26 @@ try {
 				await conn.waitForMessages(6);
 				recordStage("presence-subs", performance.now() - stageStart);
 
+				const storeSubAt = conn.messageTimes.get(2);
+				const presenceNsAt = conn.messageTimes.get(3);
+				if (storeSubAt !== undefined && presenceNsAt !== undefined) {
+					pairAGaps.push(Math.abs(presenceNsAt - storeSubAt));
+					if (conn.messageFrames.get(2) === conn.messageFrames.get(3)) {
+						pairASameFrame++;
+					}
+				}
+				const presenceSubAt = conn.messageTimes.get(4);
+				const sharedAt = conn.messageTimes.get(5);
+				if (presenceSubAt !== undefined && sharedAt !== undefined) {
+					pairBGaps.push(Math.abs(sharedAt - presenceSubAt));
+					if (conn.messageFrames.get(4) === conn.messageFrames.get(5)) {
+						pairBSameFrame++;
+					}
+				}
+				setupFramesTotal += conn.frames;
+				setupMessagesTotal += conn.messages;
+				setupConnections++;
+
 				if (conn.errors > 0) {
 					setupFail.subscriptions = (setupFail.subscriptions ?? 0) + 1;
 				}
@@ -228,6 +255,13 @@ process.send?.({
 	connections: connections.length,
 	cpuMs: (setupCpu.user + setupCpu.system) / 1000,
 	stages: setupStages,
+	pairAGaps,
+	pairBGaps,
+	pairASameFrame,
+	pairBSameFrame,
+	setupFramesTotal,
+	setupMessagesTotal,
+	setupConnections,
 });
 
 function phaseCreates(): Promise<void> {

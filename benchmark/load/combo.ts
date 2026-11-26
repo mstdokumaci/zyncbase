@@ -21,6 +21,7 @@ const { values } = parseArgs({
 // connection/global ids; only the shard count may vary.
 const clientsPerProcess = 2500;
 const shards = Number(values.shards);
+const internal = process.env.BENCH_INTERNAL === "1";
 const root = path.resolve(import.meta.dir, "../..");
 const corpusPath = path.resolve(root, values.corpus);
 const processesPerShard = 4;
@@ -80,6 +81,13 @@ type WorkerState = {
 		string,
 		{ count: number; totalMs: number; maxMs: number }
 	>;
+	readyPairAGaps: number[];
+	readyPairBGaps: number[];
+	readyPairASameFrame: number;
+	readyPairBSameFrame: number;
+	readyFramesTotal: number;
+	readyMessagesTotal: number;
+	readySetupConnections: number;
 	phaseCpu: Map<string, number>;
 	phaseWaiters: Map<
 		string,
@@ -168,6 +176,13 @@ await withServer(
 				result,
 				readyCpuMs: 0,
 				readyStages: {},
+				readyPairAGaps: [],
+				readyPairBGaps: [],
+				readyPairASameFrame: 0,
+				readyPairBSameFrame: 0,
+				readyFramesTotal: 0,
+				readyMessagesTotal: 0,
+				readySetupConnections: 0,
 				phaseCpu: new Map(),
 				phaseWaiters: new Map(),
 			};
@@ -196,10 +211,9 @@ await withServer(
 				),
 				serverCpuSeconds:
 					processCpuSeconds(server.process.pid) - serverCpuStart,
-				threadCpu: diffThreadCpu(
-					threadsStart,
-					readThreadCpu(server.process.pid),
-				),
+				threadCpu: internal
+					? diffThreadCpu(threadsStart, readThreadCpu(server.process.pid))
+					: [],
 			};
 
 			if (process.env.COMBO_SETUP_ONLY === "1") {
@@ -231,7 +245,26 @@ await withServer(
 				return performance.now() - start;
 			};
 
+			let lastStats = statsReady;
 			const measurePhase = async (name: string): Promise<PhaseSample> => {
+				if (!internal) {
+					const ms = await phase(name);
+					const after = await readStats(server.port);
+					const sample: PhaseSample = {
+						ms,
+						sent: after.messages.sent_total - lastStats.messages.sent_total,
+						received:
+							after.messages.received_total - lastStats.messages.received_total,
+						generatorCpuMs: workers.reduce(
+							(sum, worker) => sum + (worker.phaseCpu.get(name) ?? 0),
+							0,
+						),
+						serverCpuSeconds: 0,
+						threadCpu: [],
+					};
+					lastStats = after;
+					return sample;
+				}
 				const before = await readStats(server.port);
 				const serverCpuBefore = processCpuSeconds(server.process.pid);
 				const threadsBefore = readThreadCpu(server.process.pid);
@@ -292,21 +325,35 @@ await withServer(
 					(shards > 1 ? ` (${shards} isolated shards)` : "") +
 					` in ${Math.round(totalMs)}ms`,
 			);
-			console.log(
-				`  phases ms: setup=${Math.round(setupMs)}, ` +
-					`store-create=${Math.round(createMs)}, store-update=${Math.round(updateMs)}, ` +
-					`presence-user=${Math.round(presenceUserMs)}, presence-shared=${Math.round(presenceSharedMs)}, ` +
-					`converge=${Math.round(convergeMs)}, ` +
-					(shards > 1 ? `isolation=${Math.round(isolationMs)}, ` : "") +
-					`cleanup=${Math.round(cleanupMs)}`,
-			);
-			console.log(
-				`  cpu cores: host=${hostCpus}, server=${serverCores.toFixed(2)}, ` +
-					`generator=${generatorCores.toFixed(2)}, total=${totalCores.toFixed(2)} (co-located)`,
-			);
-			console.log(
-				`  connections=${results.reduce((sum, r) => sum + r.connections, 0)}`,
-			);
+			const phaseParts = [
+				`setup=${Math.round(setupMs)}`,
+				`store-create=${Math.round(createMs)}`,
+				`store-update=${Math.round(updateMs)}`,
+				`presence-user=${Math.round(presenceUserMs)}`,
+				`presence-shared=${Math.round(presenceSharedMs)}`,
+				`converge=${Math.round(convergeMs)}`,
+			];
+			if (internal) {
+				if (shards > 1) {
+					phaseParts.push(`isolation=${Math.round(isolationMs)}`);
+				}
+				phaseParts.push(`cleanup=${Math.round(cleanupMs)}`);
+			}
+			console.log(`  phases ms: ${phaseParts.join(", ")}`);
+			if (internal) {
+				console.log(
+					`  cpu cores: host=${hostCpus}, server=${serverCores.toFixed(2)}, ` +
+						`generator=${generatorCores.toFixed(2)}, total=${totalCores.toFixed(2)} (co-located)`,
+				);
+				console.log(
+					`  connections=${results.reduce((sum, r) => sum + r.connections, 0)}`,
+				);
+			} else {
+				console.log(
+					`  cpu: host=${hostCpus} cores, server=${serverCores.toFixed(2)} ` +
+						`(load generator co-located)`,
+				);
+			}
 			reportMessages({
 				setup: setupSample,
 				phases: {
@@ -320,20 +367,24 @@ await withServer(
 				storeWrites: 100 * processesPerShard * shards,
 				presenceSets: 100 * 3 * processesPerShard * shards,
 				clients: processCount * clientsPerProcess,
+				internal,
 			});
-			reportSetupStages(workers);
-			reportCpu({
-				serverPid: server.process.pid,
-				setup: setupSample,
-				phases: {
-					"store-create": create,
-					"store-update": update,
-					"presence-user": presenceUser,
-					"presence-shared": presenceShared,
-					converge,
-				},
-			});
-			reportShards(workers, results, clientsPerProcess);
+			if (internal) {
+				reportSetupStages(workers);
+				reportSetupCoalescing(workers);
+				reportCpu({
+					serverPid: server.process.pid,
+					setup: setupSample,
+					phases: {
+						"store-create": create,
+						"store-update": update,
+						"presence-user": presenceUser,
+						"presence-shared": presenceShared,
+						converge,
+					},
+				});
+			}
+			reportShards(workers, results, clientsPerProcess, internal);
 		} finally {
 			for (const worker of workers) {
 				worker.stopping = true;
@@ -376,6 +427,47 @@ function reportSetupStages(workers: WorkerState[]): void {
 				`max=${stat.maxMs.toFixed(1)}`,
 		);
 	}
+}
+
+function reportSetupCoalescing(workers: WorkerState[]): void {
+	const pairA: number[] = [];
+	const pairB: number[] = [];
+	let sameA = 0;
+	let sameB = 0;
+	let frames = 0;
+	let messages = 0;
+	let connections = 0;
+	for (const worker of workers) {
+		pairA.push(...worker.readyPairAGaps);
+		pairB.push(...worker.readyPairBGaps);
+		sameA += worker.readyPairASameFrame;
+		sameB += worker.readyPairBSameFrame;
+		frames += worker.readyFramesTotal;
+		messages += worker.readyMessagesTotal;
+		connections += worker.readySetupConnections;
+	}
+	if (connections === 0) return;
+	const percentile = (values: number[], p: number) => {
+		if (values.length === 0) return 0;
+		const sorted = [...values].sort((a, b) => a - b);
+		return sorted[
+			Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)
+		];
+	};
+	const share = (count: number, total: number) =>
+		total === 0 ? "0" : ((count / total) * 100).toFixed(1);
+	console.log(
+		`  setup coalescing: frames/conn=${(frames / connections).toFixed(2)}, ` +
+			`messages/conn=${(messages / connections).toFixed(2)}`,
+	);
+	console.log(
+		`    pair A (store sub / presence ns): p50=${percentile(pairA, 0.5).toFixed(2)}ms ` +
+			`p95=${percentile(pairA, 0.95).toFixed(2)}ms same-frame=${share(sameA, pairA.length)}%`,
+	);
+	console.log(
+		`    pair B (presence sub / shared):  p50=${percentile(pairB, 0.5).toFixed(2)}ms ` +
+			`p95=${percentile(pairB, 0.95).toFixed(2)}ms same-frame=${share(sameB, pairB.length)}%`,
+	);
 }
 
 function reportCpu(args: {
@@ -450,8 +542,17 @@ function reportMessages(args: {
 	storeWrites: number;
 	presenceSets: number;
 	clients: number;
+	internal: boolean;
 }): void {
-	const { setup, phases, results, storeWrites, presenceSets, clients } = args;
+	const {
+		setup,
+		phases,
+		results,
+		storeWrites,
+		presenceSets,
+		clients,
+		internal,
+	} = args;
 	const formatCount = (value: number) =>
 		Math.round(value).toLocaleString("en-US");
 	const formatRate = (value: number) =>
@@ -462,10 +563,16 @@ function reportMessages(args: {
 
 	console.log(
 		`  setup: ${formatCount(clients)} connections in ${(setup.ms / 1000).toFixed(1)}s ` +
-			`(${formatRate(clients / setupSeconds)}); server sent=${formatCount(setup.sent)}, ` +
-			`received=${formatCount(setup.received)}`,
+			`(${formatRate(clients / setupSeconds)})` +
+			(internal
+				? `; server sent=${formatCount(setup.sent)}, received=${formatCount(setup.received)}`
+				: ""),
 	);
-	console.log("  server messages (phase averages):");
+	console.log(
+		internal
+			? "  server messages (phase averages):"
+			: "  fanout messages (phase averages):",
+	);
 
 	const row = (
 		label: string,
@@ -476,26 +583,40 @@ function reportMessages(args: {
 		const seconds = sample.ms / 1000;
 		const fanout = Math.max(0, sample.sent - ops);
 		const frameCount = frames(label);
-		const perOp =
-			ops > 0 ? ` fanout/${opName}=${(fanout / ops).toFixed(1)}` : "";
-		const perFrame =
-			frameCount > 0
-				? ` msgs/frame=${(sample.sent / frameCount).toFixed(1)}`
-				: "";
-		const opsText = ops > 0 ? ` ops=${formatCount(ops)}` : "";
-		console.log(
-			`    ${label.padEnd(16)} sent=${formatCount(sample.sent).padStart(10)} ` +
-				`(${formatRate(sample.sent / seconds)})  ` +
-				`fanout=${formatCount(fanout).padStart(10)} ` +
-				`(${formatRate(fanout / seconds)})${opsText}${perOp}${perFrame}`,
-		);
+		if (internal) {
+			const perOp =
+				ops > 0 ? ` fanout/${opName}=${(fanout / ops).toFixed(1)}` : "";
+			const perFrame =
+				frameCount > 0
+					? ` msgs/frame=${(sample.sent / frameCount).toFixed(1)}`
+					: "";
+			const opsText = ops > 0 ? ` ops=${formatCount(ops)}` : "";
+			console.log(
+				`    ${label.padEnd(16)} sent=${formatCount(sample.sent).padStart(10)} ` +
+					`(${formatRate(sample.sent / seconds)})  ` +
+					`fanout=${formatCount(fanout).padStart(10)} ` +
+					`(${formatRate(fanout / seconds)})${opsText}${perOp}${perFrame}`,
+			);
+		} else {
+			const perOp =
+				ops > 0 ? `  ${(fanout / ops).toFixed(1)} per ${opName}` : "";
+			console.log(
+				`    ${label.padEnd(16)} ${formatCount(fanout).padStart(10)} ` +
+					`(${formatRate(fanout / seconds)})${perOp}`,
+			);
+		}
 	};
+
+	const fanoutOf = (sample: PhaseSample, ops: number) =>
+		Math.max(0, sample.sent - ops);
 
 	row("store-create", phases["store-create"], storeWrites, "write");
 	row("store-update", phases["store-update"], storeWrites, "write");
-	row("presence-user", phases["presence-user"], presenceSets, "set");
-	row("presence-shared", phases["presence-shared"], presenceSets, "set");
-	row("converge", phases.converge, 0, "");
+	if (internal) {
+		row("presence-user", phases["presence-user"], presenceSets, "set");
+		row("presence-shared", phases["presence-shared"], presenceSets, "set");
+		row("converge", phases.converge, 0, "");
+	}
 
 	const labels = [
 		"store-create",
@@ -510,22 +631,42 @@ function reportMessages(args: {
 	const totalOps = storeWrites * 2 + presenceSets * 2;
 	const totalFanout = Math.max(0, totalSent - totalOps);
 	const totalFrames = labels.reduce((sum, label) => sum + frames(label), 0);
-	console.log(
-		`    ${"workload".padEnd(16)} sent=${formatCount(totalSent).padStart(10)} ` +
-			`(${formatRate(totalSent / (totalMs / 1000))})  ` +
-			`fanout=${formatCount(totalFanout).padStart(10)} ` +
-			`(${formatRate(totalFanout / (totalMs / 1000))})` +
-			` msgs/frame=${(totalSent / Math.max(1, totalFrames)).toFixed(1)}`,
-	);
-	console.log(
-		"    note: fanout = sent - acks; phase numbers are averages and may include spillover",
-	);
+	const storeFanout =
+		fanoutOf(phases["store-create"], storeWrites) +
+		fanoutOf(phases["store-update"], storeWrites);
+	const storeMs = phases["store-create"].ms + phases["store-update"].ms;
+	const presenceFanout = Math.max(0, totalFanout - storeFanout);
+
+	if (internal) {
+		console.log(
+			`    ${"workload".padEnd(16)} sent=${formatCount(totalSent).padStart(10)} ` +
+				`(${formatRate(totalSent / (totalMs / 1000))})  ` +
+				`fanout=${formatCount(totalFanout).padStart(10)} ` +
+				`(${formatRate(totalFanout / (totalMs / 1000))})` +
+				` msgs/frame=${(totalSent / Math.max(1, totalFrames)).toFixed(1)}`,
+		);
+		console.log(
+			"    note: fanout = sent - acks; phase numbers are averages and may include spillover",
+		);
+	} else {
+		console.log(
+			`    ${"store total".padEnd(16)} ${formatCount(storeFanout).padStart(10)} ` +
+				`(${formatRate(storeFanout / (storeMs / 1000))})`,
+		);
+		console.log(
+			`    ${"presence total".padEnd(16)} ${formatCount(presenceFanout).padStart(10)}`,
+		);
+		console.log(
+			`    ${"workload total".padEnd(16)} ${formatCount(totalFanout).padStart(10)}`,
+		);
+	}
 }
 
 function reportShards(
 	workers: WorkerState[],
 	results: WorkerResult[],
 	clientsPerProcess: number,
+	internal: boolean,
 ): void {
 	const shardCount = Math.max(...workers.map((worker) => worker.shard)) + 1;
 	for (let shard = 0; shard < shardCount; shard++) {
@@ -534,8 +675,10 @@ function reportShards(
 		const bytes = members.reduce((sum, r) => sum + r.bytes, 0);
 		console.log(
 			`  shard ${shard}: clients=${members.length * clientsPerProcess}, ` +
-				`closed=${members.reduce((sum, r) => sum + r.closed, 0)}, ` +
-				`frames=${frames}, bytes=${(bytes / 1e6).toFixed(1)}MB`,
+				`closed=${members.reduce((sum, r) => sum + r.closed, 0)}` +
+				(internal
+					? `, frames=${frames}, bytes=${(bytes / 1e6).toFixed(1)}MB`
+					: ""),
 		);
 		const stages = new Set<string>();
 		for (const r of members) {
@@ -666,6 +809,13 @@ type WorkerMessage = {
 	bytes?: number;
 	phaseFrames?: Record<string, number>;
 	stages?: Record<string, { count: number; totalMs: number; maxMs: number }>;
+	pairAGaps?: number[];
+	pairBGaps?: number[];
+	pairASameFrame?: number;
+	pairBSameFrame?: number;
+	setupFramesTotal?: number;
+	setupMessagesTotal?: number;
+	setupConnections?: number;
 	shard?: number;
 	setupFail?: Record<string, number>;
 };
@@ -676,8 +826,7 @@ function handleMessage(state: WorkerState, message: unknown): void {
 	if (handleProbeMessage(state, record)) return;
 	switch (record.type) {
 		case "ready":
-			state.readyCpuMs = record.cpuMs ?? 0;
-			state.readyStages = record.stages ?? {};
+			applyReady(state, record);
 			state.ready.resolve();
 			break;
 		case "phase-done":
@@ -697,6 +846,18 @@ function handleMessage(state: WorkerState, message: unknown): void {
 			fail(state, new Error(record.message ?? "worker failed"));
 			break;
 	}
+}
+
+function applyReady(state: WorkerState, record: WorkerMessage): void {
+	state.readyCpuMs = record.cpuMs ?? 0;
+	state.readyStages = record.stages ?? {};
+	state.readyPairAGaps = record.pairAGaps ?? [];
+	state.readyPairBGaps = record.pairBGaps ?? [];
+	state.readyPairASameFrame = record.pairASameFrame ?? 0;
+	state.readyPairBSameFrame = record.pairBSameFrame ?? 0;
+	state.readyFramesTotal = record.setupFramesTotal ?? 0;
+	state.readyMessagesTotal = record.setupMessagesTotal ?? 0;
+	state.readySetupConnections = record.setupConnections ?? 0;
 }
 
 function toWorkerResult(

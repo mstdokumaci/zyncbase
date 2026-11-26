@@ -126,6 +126,21 @@ function bytesOf(data: unknown): Uint8Array | null {
 	return null;
 }
 
+function messageId(value: unknown): number | undefined {
+	if (Array.isArray(value)) {
+		return typeof value[1] === "number" ? value[1] : undefined;
+	}
+	if (value instanceof Map) {
+		const id = value.get("id");
+		return typeof id === "number" ? id : undefined;
+	}
+	if (value && typeof value === "object") {
+		const id = (value as Record<string, unknown>).id;
+		return typeof id === "number" ? id : undefined;
+	}
+	return undefined;
+}
+
 function messageType(value: unknown): number | undefined {
 	if (Array.isArray(value)) {
 		return typeof value[0] === "number" ? value[0] : undefined;
@@ -153,6 +168,8 @@ export class RawConnection {
 	closeCode = 0;
 	firstFrame: Uint8Array | null = null;
 	lastFrame: Uint8Array | null = null;
+	messageTimes = new Map<number, number>();
+	messageFrames = new Map<number, number>();
 	private waiters: Waiter[] = [];
 	private messageWaiters: MessageWaiter[] = [];
 	private ackWaiters: AckWaiter[] = [];
@@ -182,11 +199,9 @@ export class RawConnection {
 		this.lastFrame = bytes;
 		if (this.countMessages || this.countAcks) {
 			try {
+				const at = performance.now();
 				for (const message of decodeMulti(bytes)) {
-					if (this.countMessages) {
-						this.messages++;
-						if (messageType(message) === 0x01) this.errors++;
-					}
+					if (this.countMessages) this.recordMessage(message, at);
 					if (this.countAcks && messageType(message) === 0x19) this.acks++;
 				}
 			} catch {
@@ -294,6 +309,15 @@ export class RawConnection {
 
 	close(): void {
 		this.ws.close();
+	}
+
+	private recordMessage(message: unknown, at: number): void {
+		this.messages++;
+		if (messageType(message) === 0x01) this.errors++;
+		const id = messageId(message);
+		if (id === undefined) return;
+		this.messageTimes.set(id, at);
+		this.messageFrames.set(id, this.frames);
 	}
 
 	private resolveWaiters(): void {
