@@ -926,15 +926,13 @@ pub const ZyncBaseServer = struct {
                             break :blk null;
                         };
                     }
-                }
-                if (self.connection_manager.countForLoop(loop.id) == 0) {
+                } else {
                     loop.app_closed = true;
-                    loop.websocket_server.close();
+                    closeLoop(loop);
                 }
             } else if (!loop.app_closed and self.connection_manager.countForLoop(loop.id) == 0) {
-                uws_timer.stopTimer(&loop.shutdown_timer);
                 loop.app_closed = true;
-                loop.websocket_server.close();
+                closeLoop(loop);
             }
             return;
         }
@@ -950,17 +948,7 @@ pub const ZyncBaseServer = struct {
         const loop = uws_timer.extractPtr(EventLoopContext, timer);
         if (loop.app_closed) return;
         loop.app_closed = true;
-        const self = loop.server;
-        self.connection_manager.stopTokenSweepTimerForLoop(loop.id);
-        if (loop.id == 0) {
-            self.actions_service.stopSweepTimer();
-            if (self.jwks) |jc| jc.stopRefreshTimer();
-        }
-        if (loop.websocket_server.listen_socket) |ls| {
-            uws_c.us_listen_socket_close(if (loop.websocket_server.ssl) 1 else 0, ls);
-            loop.websocket_server.listen_socket = null;
-        }
-        loop.websocket_server.close();
+        closeLoop(loop);
     }
     fn verifyTicketCallback(user_data: ?*anyopaque, ticket: []const u8, allocator: std.mem.Allocator) anyerror!Session {
         if (user_data == null) return error.AuthFailed;
@@ -969,6 +957,25 @@ pub const ZyncBaseServer = struct {
         return te.verifyTicket(allocator, ticket);
     }
 };
+
+/// Final reactor close: stop every timer the loop owns, then close its listener
+/// and sockets. Application timers are non-fallthrough polls, so `us_loop_run`
+/// cannot return while one is still open — including the grace timer whose own
+/// callback runs this.
+fn closeLoop(loop: *EventLoopContext) void {
+    const self = loop.server;
+    self.connection_manager.stopTokenSweepTimerForLoop(loop.id);
+    if (loop.id == 0) {
+        self.actions_service.stopSweepTimer();
+        if (self.jwks) |jc| jc.stopRefreshTimer();
+    }
+    if (loop.websocket_server.listen_socket) |ls| {
+        uws_c.us_listen_socket_close(if (loop.websocket_server.ssl) 1 else 0, ls);
+        loop.websocket_server.listen_socket = null;
+    }
+    loop.websocket_server.close();
+    uws_timer.stopTimer(&loop.shutdown_timer);
+}
 
 /// Signal handler for SIGTERM and SIGINT.
 /// ASYNC-SIGNAL-SAFE: atomics, sigaction and raise only.
