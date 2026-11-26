@@ -117,7 +117,7 @@ pub fn flushUpsertsNow(engine: *StorageEngine, namespace_id: i64, upserts: []con
     }
     for (upserts, 0..) |pending, i| {
         const columns = try cloneColumns(allocator, pending.columns);
-        const ack: ?WriteAck = if (pending.conn_id) |conn_id| .{ .conn_id = conn_id, .msg_id = i + 1 } else null;
+        const ack: ?WriteAck = if (pending.conn_id) |conn_id| .{ .conn_id = conn_id, .loop_id = 0, .msg_id = i + 1 } else null;
         batch.append(allocator, .{ .upsert = .{
             .table_index = pending.table_index,
             .id = pending.id,

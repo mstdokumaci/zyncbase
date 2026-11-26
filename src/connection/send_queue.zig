@@ -12,7 +12,7 @@ const ArenaHandle = memory_strategy.ArenaHandle;
 pub const Delivery = struct {
     conn_id: u64,
     data: []const u8,
-    loop_id: u8 = 0,
+    loop_id: u8,
 };
 pub const Entry = struct {
     conn_id: u64,

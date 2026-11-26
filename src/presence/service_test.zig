@@ -36,6 +36,7 @@ fn makePermissiveSession(claims: *const std.StringHashMapUnmanaged(typed.Value),
     return .{
         .request = .{
             .conn_id = 100,
+            .loop_id = 0,
             .user_doc_id = 1,
             .external_user_id = "external-test-user",
             .session_claims = claims,

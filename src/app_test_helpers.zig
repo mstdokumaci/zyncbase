@@ -501,8 +501,8 @@ pub const AppTestContext = struct {
     /// the onClose callbacks for all mock WebSockets, since the test environment
     /// lacks the asynchronous event loop that would normally handle this.
     pub fn closeAllConnections(self: *AppTestContext) void {
-        // Close all active connections (inlined from ConnectionManager since it
-        // is test-only logic; production shutdown uses sendDisconnectToAll instead).
+        // Close all active connections (inlined: the test context has no event
+        // loops, so production shutdown cannot be reused here).
         self.connection_manager.mutex.lockUncancelable(self.connection_manager.io);
         {
             var it = self.connection_manager.map.valueIterator();

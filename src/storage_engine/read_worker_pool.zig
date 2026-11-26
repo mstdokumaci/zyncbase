@@ -211,6 +211,7 @@ pub const ReadWorker = struct {
             // SAFETY: Table metadata is undefined because the table index was not found.
             return .{
                 .conn_id = req.conn_id,
+                .loop_id = req.loop_id,
                 .msg_id = req.msg_id,
                 .table = undefined,
                 .records = &[_]Record{},
@@ -233,6 +234,7 @@ pub const ReadWorker = struct {
                 req.deinit(self.allocator);
                 return .{
                     .conn_id = req.conn_id,
+                    .loop_id = req.loop_id,
                     .msg_id = req.msg_id,
                     .table = table_metadata,
                     .records = &[_]Record{},
@@ -382,6 +384,7 @@ pub const ReadWorker = struct {
             const records = self.read_arena.allocator().alloc(Record, 1) catch {
                 return .{
                     .conn_id = request.conn_id,
+                    .loop_id = request.loop_id,
                     .msg_id = request.msg_id,
                     .table = table_metadata,
                     .records = &[_]Record{},
@@ -392,6 +395,7 @@ pub const ReadWorker = struct {
             records[0] = record;
             return .{
                 .conn_id = request.conn_id,
+                .loop_id = request.loop_id,
                 .msg_id = request.msg_id,
                 .table = table_metadata,
                 .records = records,
@@ -401,6 +405,7 @@ pub const ReadWorker = struct {
         }
         return .{
             .conn_id = request.conn_id,
+            .loop_id = request.loop_id,
             .msg_id = request.msg_id,
             .table = table_metadata,
             .records = &[_]Record{},

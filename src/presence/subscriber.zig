@@ -6,7 +6,7 @@ const Allocator = std.mem.Allocator;
 pub const Subscriber = struct {
     conn_id: u64,
     sub_id: u64,
-    loop_id: u8 = 0,
+    loop_id: u8,
 };
 
 /// A namespace-indexed table of subscriber lists.

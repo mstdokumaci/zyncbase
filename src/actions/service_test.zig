@@ -30,6 +30,7 @@ fn flushAndDrain(app: *AppTestContext) void {
 fn connectionContext(conn: anytype) RequestContext {
     return .{
         .conn_id = conn.id,
+        .loop_id = 0,
         .user_doc_id = conn.user_doc_id,
         .external_user_id = conn.getExternalUserId() orelse "",
         .session_claims = conn.getSessionClaimsPtr(),
@@ -81,6 +82,7 @@ fn makeClaims(allocator: std.mem.Allocator, role: []const u8) !std.StringHashMap
 fn workerCtx(conn_id: u64, user_id: typed_doc_id.DocId, claims: ?*const std.StringHashMapUnmanaged(typed.Value)) RequestContext {
     return .{
         .conn_id = conn_id,
+        .loop_id = 0,
         .user_doc_id = user_id,
         .external_user_id = "worker",
         .session_claims = claims,
@@ -94,6 +96,7 @@ fn workerCtx(conn_id: u64, user_id: typed_doc_id.DocId, claims: ?*const std.Stri
 fn callerCtx(conn_id: u64, user_id: typed_doc_id.DocId) RequestContext {
     return .{
         .conn_id = conn_id,
+        .loop_id = 0,
         .user_doc_id = user_id,
         .external_user_id = "caller",
         .store_namespace = "public",

@@ -104,6 +104,7 @@ test "WriteWorker: shutdown drain completes immediate ops" {
     const session_op = storage_mod.WriteOp{
         .resolve_session = .{
             .conn_id = 0,
+            .loop_id = 0,
             .msg_id = 1,
             .scope_seq = 0,
             .namespace = namespace_name,

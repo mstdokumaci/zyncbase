@@ -59,9 +59,9 @@ test "OutcomeFence: publishes in add order once the last reference drops" {
     defer h.deinit();
 
     const fence = try h.create();
-    fence.add(.{ .conn_id = 7, .msg_id = 3 }, null, null);
-    fence.add(.{ .conn_id = 7, .msg_id = 1 }, error.PermissionDenied, 0);
-    fence.add(.{ .conn_id = 7, .msg_id = 2 }, null, null);
+    fence.add(.{ .conn_id = 7, .loop_id = 0, .msg_id = 3 }, null, null);
+    fence.add(.{ .conn_id = 7, .loop_id = 0, .msg_id = 1 }, error.PermissionDenied, 0);
+    fence.add(.{ .conn_id = 7, .loop_id = 0, .msg_id = 2 }, null, null);
     fence.retain(); // two change jobs
     fence.retain();
 
@@ -85,7 +85,7 @@ test "OutcomeFence: concurrent releases publish exactly once" {
     const job_count = 8;
     for (0..100) |_| {
         const fence = try h.create();
-        fence.add(.{ .conn_id = 7, .msg_id = 1 }, null, null);
+        fence.add(.{ .conn_id = 7, .loop_id = 0, .msg_id = 1 }, null, null);
         for (0..job_count) |_| fence.retain();
 
         var threads: [job_count]std.Thread = undefined;

@@ -436,7 +436,7 @@ pub const SubscriptionEngine = struct {
         connection_id: u64,
         subscription_id: SubscriptionId,
         op: MatchOp,
-        loop_id: u8 = 0,
+        loop_id: u8,
     };
 
     inline fn appendSubscriberMatches(

@@ -22,6 +22,7 @@ fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
     return .{
         .request = .{
             .conn_id = 1,
+            .loop_id = 0,
             .user_doc_id = typed_doc_id.zero,
             .store_namespace = "public",
             .store_namespace_id = namespace_id,
@@ -34,6 +35,7 @@ fn readCtx(namespace_id: i64) store_service.StoreService.ReadContext {
     return .{
         .request = .{
             .conn_id = 1,
+            .loop_id = 0,
             .user_doc_id = typed_doc_id.zero,
             .store_namespace = "public",
             .store_namespace_id = namespace_id,

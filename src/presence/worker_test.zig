@@ -255,6 +255,7 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
         .op = .{ .subscribe_user = .{
             .namespace_id = namespace_id,
             .conn_id = conn_id,
+            .loop_id = 0,
             .sub_id = sub_id,
             .msg_id = msg_id,
         } },

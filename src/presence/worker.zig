@@ -53,14 +53,14 @@ pub const PresenceOp = struct {
         subscribe_user: struct {
             namespace_id: i64,
             conn_id: u64,
-            loop_id: u8 = 0,
+            loop_id: u8,
             sub_id: u64,
             msg_id: u64,
         },
         subscribe_shared: struct {
             namespace_id: i64,
             conn_id: u64,
-            loop_id: u8 = 0,
+            loop_id: u8,
             sub_id: u64,
             msg_id: u64,
         },

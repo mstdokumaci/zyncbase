@@ -60,7 +60,7 @@ pub fn getOpTarget(op: WriteOp) ?OpTarget {
 /// The connection and request id a write outcome is reported to.
 pub const WriteAck = struct {
     conn_id: u64,
-    loop_id: u8 = 0,
+    loop_id: u8,
     msg_id: u64,
 };
 
@@ -97,7 +97,7 @@ pub const WriteOp = union(enum) {
     },
     resolve_session: struct {
         conn_id: u64,
-        loop_id: u8 = 0,
+        loop_id: u8,
         msg_id: u64,
         scope_seq: u64,
         namespace: []const u8,

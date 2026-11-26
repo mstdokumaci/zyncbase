@@ -114,7 +114,6 @@ pub const ZyncBaseServer = struct {
     jwt_validator: ?JwtValidator = null,
     shutdown_mutex: std.Io.Mutex = .init,
     workers_stopped: bool = false,
-    startup_logged: bool = false,
 
     /// Initialize the ZyncBase server with all components
     pub fn init(io: std.Io, environ: std.process.Environ, allocator: std.mem.Allocator, custom_config_path: ?[]const u8) !*ZyncBaseServer {
@@ -291,7 +290,6 @@ pub const ZyncBaseServer = struct {
         self.shutdown_mutex = .init;
         self.shutdown_requested = std.atomic.Value(bool).init(false);
         self.workers_stopped = false;
-        self.startup_logged = false;
 
         return self;
     }
@@ -670,6 +668,7 @@ pub const ZyncBaseServer = struct {
             return err;
         };
         if (self.ws(0).loop.load(.acquire)) |reactor| self.connection_manager.setLoopWake(0, reactor);
+        std.log.info("Server started successfully", .{});
 
         self.ws(0).run();
         self.connection_manager.clearLoopWake(0);
@@ -896,10 +895,6 @@ pub const ZyncBaseServer = struct {
         if (ctx == null) return;
         const loop: *EventLoopContext = @ptrCast(@alignCast(ctx.?));
         const self = loop.server;
-        if (loop.id == 0 and !self.startup_logged) {
-            self.startup_logged = true;
-            std.log.info("Server started successfully", .{});
-        }
         if (self.shutdown_requested.load(.acquire)) {
             if (!loop.shutdown_started) {
                 loop.shutdown_started = true;

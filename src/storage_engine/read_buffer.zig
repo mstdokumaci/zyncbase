@@ -10,7 +10,7 @@ const Record = typed.Record;
 
 pub const ReadRequest = struct {
     conn_id: u64,
-    loop_id: u8 = 0,
+    loop_id: u8,
     msg_id: u64,
     table_index: usize,
     namespace_id: i64,
@@ -24,7 +24,7 @@ pub const ReadRequest = struct {
 
 pub const ReadResponse = struct {
     conn_id: u64,
-    loop_id: u8 = 0,
+    loop_id: u8,
     msg_id: u64,
     table: *const schema_types.Table,
     records: []Record,

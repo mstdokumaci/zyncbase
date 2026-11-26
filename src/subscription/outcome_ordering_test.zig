@@ -58,7 +58,7 @@ const Fixture = struct {
 
     fn enqueueUpsert(self: *Fixture, request_id: u64) !void {
         const columns = self.valColumns(request_id);
-        try sth.enqueueUpsert(&self.ctx.engine, self.table_index, @intCast(request_id), namespace_id, typed_doc_id.zero, &columns, null, .{ .conn_id = conn_id, .msg_id = request_id });
+        try sth.enqueueUpsert(&self.ctx.engine, self.table_index, @intCast(request_id), namespace_id, typed_doc_id.zero, &columns, null, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = request_id });
     }
 
     fn enqueueBatch(self: *Fixture, request_id: u64) !void {
@@ -83,7 +83,7 @@ const Fixture = struct {
         }
         try self.ctx.engine.enqueueWriteOp(.{ .batch = .{
             .entries = entries,
-            .ack = .{ .conn_id = conn_id, .msg_id = request_id },
+            .ack = .{ .conn_id = conn_id, .loop_id = 0, .msg_id = request_id },
         } });
     }
 

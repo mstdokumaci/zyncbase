@@ -23,6 +23,7 @@ const schema_json =
 fn connectionContext(conn: anytype) RequestContext {
     return .{
         .conn_id = conn.id,
+        .loop_id = 0,
         .user_doc_id = conn.user_doc_id,
         .external_user_id = conn.getExternalUserId() orelse "",
         .session_claims = conn.getSessionClaimsPtr(),

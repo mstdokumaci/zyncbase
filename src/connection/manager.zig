@@ -428,10 +428,6 @@ pub const ConnectionManager = struct {
         }
     }
 
-    /// Send ServerDisconnect message to all active connections and initiate socket close
-    pub fn sendDisconnectToAll(self: *ConnectionManager, code: []const u8, message: []const u8, close_code: u16) void {
-        self.sendDisconnectToAllFiltered(null, code, message, close_code);
-    }
     /// Send ServerDisconnect only to connections owned by one event loop.
     pub fn sendDisconnectToAllForLoop(self: *ConnectionManager, loop_id: u8, code: []const u8, message: []const u8, close_code: u16) void {
         self.sendDisconnectToAllFiltered(loop_id, code, message, close_code);

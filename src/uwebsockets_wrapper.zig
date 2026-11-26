@@ -315,19 +315,10 @@ fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*any
         server.listen_socket = listen_socket;
         const loop = c.uws_get_loop();
         server.loop.store(loop, .release);
-
-        // A storage-engine wakeup or a shutdown request that raced ahead of
-        // loop publish left its flag set with no loop to wake. Recheck both
-        // now so the first post-handler iteration runs immediately instead of
-        // waiting for the next sweep timer tick.
-
         c.uws_loop_addPostHandler(loop, server, postHandler);
     }
 }
 
-fn bootstrapTimerCallback(timer: ?*c.struct_us_timer_t) callconv(.c) void {
-    if (timer) |t| c.us_timer_close(t);
-}
 fn postHandler(ctx: ?*anyopaque, loop_ptr: ?*anyopaque) callconv(.c) void {
     if (ctx == null) return;
     const server: *WebSocketServer = @ptrCast(@alignCast(ctx.?));
