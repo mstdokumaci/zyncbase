@@ -5,7 +5,7 @@ const msgpack = @import("../msgpack_utils.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const wire_encode = @import("../wire/encode.zig");
 const th = @import("test_helpers.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const PresenceManager = @import("manager.zig").PresenceManager;
 const PresenceWorker = @import("worker.zig").PresenceWorker;
@@ -72,7 +72,7 @@ fn runIteration(
     allocator: std.mem.Allocator,
     worker: *PresenceWorker,
     manager: *PresenceManager,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     patch: msgpack.Payload,
 ) !IterationResult {
     var last_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds();
@@ -171,7 +171,7 @@ test "PresenceWorker: batched user update fanout throughput" {
     manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
         while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
@@ -263,7 +263,7 @@ test "PresenceWorker: sparse update latency" {
     manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
         while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();

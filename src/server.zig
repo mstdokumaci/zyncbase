@@ -24,7 +24,7 @@ const JwtValidator = @import("authentication/jwt_validator.zig").JwtValidator;
 const CheckpointWorker = @import("checkpoint_worker.zig").CheckpointWorker;
 const ConfigLoader = @import("config/loader.zig").ConfigLoader;
 const Config = @import("config/state.zig").Config;
-const send_queue_type = @import("connection/send_queue.zig").send_queue;
+const SendQueueType = @import("connection/send_queue.zig").SendQueue;
 const DataLock = @import("data_lock.zig").DataLock;
 const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("message_handler.zig").MessageHandler;
@@ -39,6 +39,7 @@ const ChangeQueue = @import("subscription/change_queue.zig").ChangeQueue;
 const SubscriptionEngine = @import("subscription/engine.zig").SubscriptionEngine;
 const SubscriptionWorkerPool = @import("subscription/worker_pool.zig").SubscriptionWorkerPool;
 const ThreadBudget = @import("thread_budget.zig").ThreadBudget;
+const event_loop_count = @import("thread_budget.zig").event_loop_count;
 const MessageType = @import("uwebsockets_wrapper.zig").MessageType;
 const WebSocket = @import("uwebsockets_wrapper.zig").WebSocket;
 const WebSocketServer = @import("uwebsockets_wrapper.zig").WebSocketServer;
@@ -54,6 +55,7 @@ const Schema = schema_types.Schema;
 // Atomic global server reference for signal handlers (written once before registration,
 // read from signal handler thread). Explicit acquire/release atomics are required as
 // plain pointer loads on AArch64 are not guaranteed to be atomic.
+
 var global_server: std.atomic.Value(?*ZyncBaseServer) = std.atomic.Value(?*ZyncBaseServer).init(null);
 
 // A termination signal that arrived before the server was published. The handler
@@ -64,7 +66,6 @@ pub var pending_signal: std.atomic.Value(bool) = std.atomic.Value(bool).init(fal
 // Set by the first termination signal; the next one skips the graceful path.
 pub var signal_seen: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
-const event_loop_count = @import("thread_budget.zig").event_loop_count;
 const EventLoopContext = struct {
     server: *ZyncBaseServer,
     id: u8,
@@ -100,7 +101,7 @@ pub const ZyncBaseServer = struct {
     presence_worker: ?*PresenceWorker,
     presence_service: PresenceService,
     actions_service: ActionsService,
-    send_queue: send_queue_type,
+    send_queue: SendQueueType,
     message_handler: MessageHandler,
     server_metrics: ServerMetrics,
     http_context: http_handlers.HttpContext,
@@ -139,6 +140,7 @@ pub const ZyncBaseServer = struct {
             loop.* = .{
                 .server = self,
                 .id = @intCast(index),
+                // SAFETY: initLoopWrapper calls WebSocketServer.init on this field before any loop thread touches it.
                 .websocket_server = undefined,
                 .thread = null,
                 .ready = std.atomic.Value(bool).init(index == 0),
@@ -320,7 +322,7 @@ pub const ZyncBaseServer = struct {
     }
 
     fn initQueues(self: *ZyncBaseServer) !void {
-        self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
+        self.send_queue = try SendQueueType.init(self.memory_strategy.generalAllocator());
         errdefer self.send_queue.deinit();
         self.change_queue = try ChangeQueue.init(
             self.io,
@@ -658,7 +660,7 @@ pub const ZyncBaseServer = struct {
         try self.activateSignalHandling();
 
         self.event_loops[1].thread = try std.Thread.spawn(.{}, eventLoopThread, .{self});
-        while (!self.event_loops[1].ready.load(.acquire)) std.Thread.yield() catch {};
+        while (!self.event_loops[1].ready.load(.acquire)) try std.Thread.yield();
 
         self.ws(0).listen() catch |err| {
             // Loop 1 is already listening; stop and join it before unwinding.

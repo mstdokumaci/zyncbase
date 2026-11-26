@@ -6,7 +6,7 @@ const test_helpers = @import("test_helpers.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("../wire/message_type.zig").MessageType;
 const max_pending_group_bytes = @import("manager.zig").max_pending_group_bytes;
-const send_queue_type = @import("send_queue.zig").send_queue;
+const SendQueueType = @import("send_queue.zig").SendQueue;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
@@ -313,7 +313,7 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
 
     // Local queue: the queue is a pointer-linked structure, so copies
     // would share nodes with the source — build one of our own.
-    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    var queue = try SendQueueType.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // Two entries for one connection — concatenated into a single frame:
@@ -360,7 +360,7 @@ test "ConnectionManager: drain drops and closes a connection that exceeds the pe
     defer app.connection_manager.onClose(&ws_b, 1000, "");
     recorder_b.reset();
 
-    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    var queue = try SendQueueType.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // Entry payloads for the over-cap connection. Only .len is ever read on the
@@ -427,7 +427,7 @@ test "ConnectionManager: drain delivers a lone entry larger than the pending byt
     defer app.connection_manager.onClose(&ws, 1000, "");
     recorder.reset();
 
-    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    var queue = try SendQueueType.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // A single message larger than the cap is a large snapshot, not a
@@ -463,7 +463,7 @@ test "ConnectionManager: drain closes a connection whose group mixes an oversize
     defer app.connection_manager.onClose(&ws, 1000, "");
     recorder.reset();
 
-    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    var queue = try SendQueueType.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // A subscription delta can land before its snapshot in the same pass, but an
@@ -505,7 +505,7 @@ test "ConnectionManager: drain closes a connection with repeated oversized entri
     defer app.connection_manager.onClose(&ws, 1000, "");
     recorder.reset();
 
-    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    var queue = try SendQueueType.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // Two oversized entries must not slip through the cap as a single-message

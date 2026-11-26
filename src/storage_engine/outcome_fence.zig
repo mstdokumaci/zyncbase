@@ -2,7 +2,7 @@ const std = @import("std");
 
 const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const Notifier = @import("../threading/notifier.zig").Notifier;
@@ -20,7 +20,7 @@ pub const OutcomeFence = struct {
     handle: ArenaHandle,
     pending: std.atomic.Value(u32),
     entries: std.ArrayListUnmanaged(Outcome),
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     notifier: Notifier,
 
     const Outcome = struct {
@@ -30,7 +30,7 @@ pub const OutcomeFence = struct {
     };
 
     /// Returns a fence holding the writer's reference.
-    pub fn create(ms: *MemoryStrategy, send_queue: *send_queue_type, notifier: Notifier) !*OutcomeFence {
+    pub fn create(ms: *MemoryStrategy, send_queue: *SendQueueType, notifier: Notifier) !*OutcomeFence {
         const handle = try ms.acquireArenaDeferred();
         errdefer handle.release();
         const self = try handle.allocator().create(OutcomeFence);

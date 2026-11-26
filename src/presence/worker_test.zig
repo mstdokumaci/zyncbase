@@ -3,7 +3,7 @@ const std = @import("std");
 const msgpack = @import("../msgpack_utils.zig");
 const typed = @import("../typed/doc_id.zig");
 const th = @import("test_helpers.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const MessageType = @import("../wire/message_type.zig").MessageType;
 const PresenceManager = @import("manager.zig").PresenceManager;
@@ -34,7 +34,7 @@ fn setupWorker(
     allocator: std.mem.Allocator,
     memory_strategy: *MemoryStrategy,
     presence_manager: *PresenceManager,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     notifier: *TestNotifier,
 ) !*PresenceWorker {
     return setupWorkerWithBatch(allocator, memory_strategy, presence_manager, send_queue, notifier, .{});
@@ -44,7 +44,7 @@ fn setupWorkerWithBatch(
     allocator: std.mem.Allocator,
     memory_strategy: *MemoryStrategy,
     presence_manager: *PresenceManager,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     notifier: *TestNotifier,
     batch: BatchConfig,
 ) !*PresenceWorker {
@@ -79,7 +79,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
         while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
@@ -182,7 +182,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
         while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
@@ -230,7 +230,7 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
         while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
@@ -288,7 +288,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
         while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
@@ -396,7 +396,7 @@ test "PresenceWorker: pending-update cap splits broadcasts" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
         while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
@@ -484,7 +484,7 @@ test "PresenceWorker: window absorbs ops that arrive across producer gaps" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
         while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
@@ -557,7 +557,7 @@ test "PresenceWorker: zero timeout flushes after every op" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
         while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
@@ -632,7 +632,7 @@ test "PresenceWorker: dispatchBatches shares message buffer for same sub_id" {
     presence_manager.init(testing.io, allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
         while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();

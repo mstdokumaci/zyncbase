@@ -7,7 +7,7 @@ const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const tth = @import("../typed/test_helpers.zig");
 const typed = @import("../typed/types.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
@@ -21,7 +21,7 @@ const TestContext = struct {
     memory_strategy: MemoryStrategy,
     change_queue: ChangeQueue,
     subscription_engine: SubscriptionEngine,
-    send_queue: send_queue_type,
+    send_queue: SendQueueType,
     schema: sth.Schema,
     notifier_called: std.atomic.Value(u32),
 
@@ -32,7 +32,7 @@ const TestContext = struct {
         try self.memory_strategy.init();
         self.change_queue = try ChangeQueue.init(testing.io, allocator, 1);
         self.subscription_engine = SubscriptionEngine.init(testing.io, allocator);
-        self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
+        self.send_queue = try SendQueueType.init(self.memory_strategy.generalAllocator());
         self.schema = try sth.createSchema(allocator, &.{
             schema_helpers.makeTable("items", &.{
                 schema_helpers.makeField("status", .text),

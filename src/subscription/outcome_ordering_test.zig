@@ -6,7 +6,7 @@ const schema_helpers = @import("../schema/test_helpers.zig");
 const storage_mod = @import("../storage_engine.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MessageType = @import("../wire/message_type.zig").MessageType;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
@@ -29,7 +29,7 @@ const Fixture = struct {
     ctx: sth.EngineTestContext,
     subscriptions: SubscriptionEngine,
     change_queue: *ChangeQueue,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     table_index: usize,
     val_index: usize,
 

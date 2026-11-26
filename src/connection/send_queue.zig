@@ -1,8 +1,11 @@
 const std = @import("std");
-const thread_budget = @import("../thread_budget.zig");
+
 const memory_strategy = @import("../memory/strategy.zig");
+const thread_budget = @import("../thread_budget.zig");
 const mpscQueue = @import("../queues/mpsc_queue.zig").mpscQueue;
+
 const ArenaHandle = memory_strategy.ArenaHandle;
+
 /// One delivery inside a batched subscription-fanout entry. `loop_id` is the
 /// event loop that owns the connection; it lets the producer split a change
 /// into one batch per loop without a global lookup.
@@ -32,16 +35,17 @@ pub const Entry = struct {
 /// Per-loop send queues. Each queue has exactly one consumer (its event loop).
 /// Producers pass the owning loop explicitly; there is no conn-id tag or global
 /// lookup on the push path.
-pub const send_queue = struct {
+pub const SendQueue = struct {
     const event_loop_count = thread_budget.event_loop_count;
-    const InnerQueue = mpscQueue(Entry, ArenaHandle);
-    queues: [event_loop_count]InnerQueue = undefined,
+    const inner_queue = mpscQueue(Entry, ArenaHandle);
+    queues: [event_loop_count]inner_queue,
     pub fn init(allocator: std.mem.Allocator) !@This() {
+        // SAFETY: every queue is initialized in the loop below before return.
         var self: @This() = undefined;
         var initialized: usize = 0;
         errdefer for (0..initialized) |i| self.queues[i].deinit();
         for (0..event_loop_count) |i| {
-            self.queues[i] = try InnerQueue.init(allocator);
+            self.queues[i] = try inner_queue.init(allocator);
             initialized += 1;
         }
         return self;
@@ -93,7 +97,7 @@ pub const send_queue = struct {
         var positions = [_]usize{0} ** event_loop_count;
         for (items) |delivery| {
             const idx = delivery.loop_id;
-            slices[idx].?[positions[idx]] = delivery;
+            (slices[idx] orelse unreachable)[positions[idx]] = delivery;
             positions[idx] += 1;
         }
         var pushed: usize = 0;

@@ -16,7 +16,7 @@ const write_queue = @import("storage_engine/write_queue.zig");
 const write_worker_mod = @import("storage_engine/write_worker.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const SessionResolver = @import("authorization/session_resolver.zig").SessionResolver;
-const send_queue_type = @import("connection/send_queue.zig").send_queue;
+const SendQueueType = @import("connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const ChangeQueue = @import("subscription/change_queue.zig").ChangeQueue;
 const managedThread = @import("threading/managed_thread.zig").managedThread;
@@ -367,7 +367,7 @@ pub const StorageEngine = struct {
     /// Once called, the schema is locked and only data operations are permitted.
     pub fn start(
         self: *StorageEngine,
-        send_queue: *send_queue_type,
+        send_queue: *SendQueueType,
         change_queue: ?*ChangeQueue,
         session_resolver: ?*SessionResolver,
     ) !void {

@@ -17,7 +17,7 @@ const sql = @import("sql.zig");
 const write_queue = @import("write_queue.zig");
 const SessionResolver = @import("../authorization/session_resolver.zig").SessionResolver;
 const PerformanceConfig = @import("../config/state.zig").Config.PerformanceConfig;
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
@@ -96,7 +96,7 @@ pub const WriteWorker = struct {
     /// consume `change_queue`. Null means no outcome waits for deltas.
     subscription_count: ?*const std.atomic.Value(usize) = null,
     session_resolver: ?*SessionResolver,
-    send_queue: ?*send_queue_type,
+    send_queue: ?*SendQueueType,
     notifier: Notifier,
     document_cache: *storage_cache.document_cache_type,
     namespace_cache: *storage_cache.namespace_cache_type,

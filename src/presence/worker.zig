@@ -3,7 +3,7 @@ const std = @import("std");
 const msgpack = @import("../msgpack_utils.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const wire_encode = @import("../wire/encode.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const spscQueue = @import("../queues/spsc_queue.zig").spscQueue;
@@ -94,7 +94,7 @@ pub const PresenceWorker = struct {
     allocator: Allocator,
     memory_strategy: *MemoryStrategy,
     presence_manager: *PresenceManager,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     notifier: Notifier,
     thread: managedThread(PresenceWorker),
     pool: MemoryStrategy.AllocPool(work_queue_type.Node),
@@ -107,7 +107,7 @@ pub const PresenceWorker = struct {
         allocator: Allocator,
         memory_strategy: *MemoryStrategy,
         presence_manager: *PresenceManager,
-        send_queue: *send_queue_type,
+        send_queue: *SendQueueType,
         batch: BatchConfig,
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,

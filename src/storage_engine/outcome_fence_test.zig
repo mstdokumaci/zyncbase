@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const OutcomeFence = @import("outcome_fence.zig").OutcomeFence;
@@ -10,13 +10,13 @@ const testing = std.testing;
 
 const Harness = struct {
     ms: MemoryStrategy,
-    send_queue: send_queue_type,
+    send_queue: SendQueueType,
     notified: std.atomic.Value(u32),
 
     fn init(self: *Harness) !void {
         try self.ms.init();
         errdefer self.ms.deinit();
-        self.send_queue = try send_queue_type.init(self.ms.generalAllocator());
+        self.send_queue = try SendQueueType.init(self.ms.generalAllocator());
         self.notified = .init(0);
     }
 

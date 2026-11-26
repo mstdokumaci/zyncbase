@@ -6,7 +6,7 @@ const schema_types = @import("../schema/types.zig");
 const typed = @import("../typed/types.zig");
 const wire_encode = @import("../wire/encode.zig");
 const Delivery = @import("../connection/send_queue.zig").Delivery;
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const ArenaHandle = @import("../memory/strategy.zig").ArenaHandle;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
@@ -29,7 +29,7 @@ pub const SubscriptionWorkerPool = struct {
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
     schema: *const schema_types.Schema,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     notifier: Notifier,
     allocator: Allocator,
 
@@ -40,7 +40,7 @@ pub const SubscriptionWorkerPool = struct {
         subscription_engine: *SubscriptionEngine,
         memory_strategy: *MemoryStrategy,
         schema: *const schema_types.Schema,
-        send_queue: *send_queue_type,
+        send_queue: *SendQueueType,
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
     ) !SubscriptionWorkerPool {
@@ -93,7 +93,7 @@ pub const SubscriptionWorker = struct {
     subscription_engine: *SubscriptionEngine,
     memory_strategy: *MemoryStrategy,
     schema: *const schema_types.Schema,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     notifier: Notifier,
 
     pub fn init(
@@ -102,7 +102,7 @@ pub const SubscriptionWorker = struct {
         subscription_engine: *SubscriptionEngine,
         memory_strategy: *MemoryStrategy,
         schema: *const schema_types.Schema,
-        send_queue: *send_queue_type,
+        send_queue: *SendQueueType,
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
     ) SubscriptionWorker {

@@ -803,7 +803,7 @@ test "StorageEngine: increment rejects NULL and overflowing results" {
     try testing.expectEqual(std.math.minInt(i64), rec3.?.values[balance_idx].scalar.integer);
 }
 
-fn drainOutcomes(sq: *send_queue_mod.send_queue) ![]SendQueueEntry {
+fn drainOutcomes(sq: *send_queue_mod.SendQueue) ![]SendQueueEntry {
     var entries = std.ArrayListUnmanaged(SendQueueEntry).empty;
     errdefer {
         for (entries.items) |entry| entry.deinit();
@@ -2466,6 +2466,6 @@ test "foreign key startup rejects legacy orphaned rows" {
     );
     _ = try setup_conn.pragma(void, .{}, "foreign_keys", "on");
 
-    test_context.send_queue = try send_queue_mod.send_queue.init(allocator);
+    test_context.send_queue = try send_queue_mod.SendQueue.init(allocator);
     try testing.expectError(error.ForeignKeyViolation, engine.start(&test_context.send_queue.?, null, null));
 }

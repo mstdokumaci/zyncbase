@@ -12,7 +12,7 @@ const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
 const read_mod = @import("reader.zig");
 const sql = @import("sql.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
@@ -52,7 +52,7 @@ pub const ReadWorker = struct {
     thread: managedThread(ReadWorker),
     node: *ReaderNode,
     request_queue: *req_queue_type,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     schema: *const schema_types.Schema,
     document_cache: *document_cache_type,
     writer_version: *std.atomic.Value(u64),
@@ -68,7 +68,7 @@ pub const ReadWorker = struct {
         memory_strategy: *MemoryStrategy,
         node: *ReaderNode,
         request_queue: *req_queue_type,
-        send_queue: *send_queue_type,
+        send_queue: *SendQueueType,
         schema: *const schema_types.Schema,
         document_cache: *document_cache_type,
         writer_version: *std.atomic.Value(u64),
@@ -420,7 +420,7 @@ pub const ReadWorkerPool = struct {
         memory_strategy: *MemoryStrategy,
         reader_nodes: []ReaderNode,
         request_queue: *req_queue_type,
-        send_queue: *send_queue_type,
+        send_queue: *SendQueueType,
         schema: *const schema_types.Schema,
         document_cache: *document_cache_type,
         writer_version: *std.atomic.Value(u64),

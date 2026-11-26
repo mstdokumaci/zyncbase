@@ -8,12 +8,12 @@ const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
 const ServerMetrics = @import("../observability/metrics.zig").ServerMetrics;
 const Schema = @import("../schema/types.zig").Schema;
+const event_loop_count = @import("../thread_budget.zig").event_loop_count;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const c = @import("../uwebsockets_wrapper.zig").c;
-const event_loop_count = @import("../thread_budget.zig").event_loop_count;
-const send_queue_type = @import("send_queue.zig").send_queue;
+const SendQueueType = @import("send_queue.zig").SendQueue;
 const Connection = @import("state.zig").Connection;
 
 const Allocator = std.mem.Allocator;
@@ -86,7 +86,7 @@ pub const ConnectionManager = struct {
 
     /// uWS timers for periodic token expiry sweeps (one per event loop).
     token_sweep_timers: [event_loop_count]?*c.struct_us_timer_t = .{null} ** event_loop_count,
-    token_sweep_ctx: [event_loop_count]TokenSweepCtx = undefined,
+    token_sweep_ctx: [event_loop_count]TokenSweepCtx,
 
     /// Reactor pointers by loop id, used to detect cross-loop sends.
     loop_ptrs: [event_loop_count]?*c.struct_us_loop_t = .{null} ** event_loop_count,
@@ -142,6 +142,8 @@ pub const ConnectionManager = struct {
                 std.heap.ArenaAllocator.init(allocator),
             },
             .metrics = null,
+            // SAFETY: populated for every loop in the loop below before any timer uses it.
+            .token_sweep_ctx = undefined,
         };
         for (0..event_loop_count) |i| {
             self.token_sweep_ctx[i] = .{ .manager = self, .loop_id = @intCast(i) };
@@ -340,7 +342,7 @@ pub const ConnectionManager = struct {
         };
         job.* = .{ .manager = self, .conn_id = conn_id, .data = copy };
         if (conn.release()) self.memory_strategy.releaseConnection(conn);
-        c.uws_loop_defer(target.?, job, deferredSendCallback);
+        c.uws_loop_defer(target orelse unreachable, job, deferredSendCallback);
     }
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
     /// Called in notifyPostHandler after dispatcher polls.
@@ -349,7 +351,7 @@ pub const ConnectionManager = struct {
     /// The client decodes multiple messages per frame (decodeMulti).
     /// A connection that accumulates more than `max_pending_group_bytes` in one
     /// pass is dropped and closed with BACKPRESSURE_LIMIT.
-    pub fn drainSendQueue(self: *ConnectionManager, send_queue: *send_queue_type, loop_id: usize) void {
+    pub fn drainSendQueue(self: *ConnectionManager, send_queue: *SendQueueType, loop_id: usize) void {
         std.debug.assert(loop_id < self.drain_arenas.len);
         _ = self.drain_arenas[loop_id].reset(.retain_capacity);
         const alloc = self.drain_arenas[loop_id].allocator();
