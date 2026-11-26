@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-// Captures WebSocket traffic without touching the SDK: one NDJSON file per
-// process, client->server frames plus the first server->client frame (SchemaSync).
+// Captures WebSocket traffic: one NDJSON file per process, client->server
+// frames plus the first server->client frame (SchemaSync).
 const captureDir = process.env.ZYNCBASE_COMBO_CAPTURE_DIR;
 if (captureDir) {
 	fs.mkdirSync(captureDir, { recursive: true });

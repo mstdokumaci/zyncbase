@@ -32,9 +32,9 @@
 		"typecheck": "bun run generate:check && bun run typecheck:sdk && bun run typecheck:e2e && bun run typecheck:examples && bun run typecheck:benchmark",
 		"bench:capture": "bun benchmark/capture/run.ts",
 		"bench:corpus": "bun benchmark/capture/build-corpus.ts",
-		"bench:combo": "bun benchmark/raw/combo.ts",
-		"bench:combo:50k": "bun benchmark/raw/combo.ts --shards 5",
-		"bench": "bun benchmark/raw/combo.ts"
+		"bench:combo": "bun benchmark/load/combo.ts",
+		"bench:combo:50k": "bun benchmark/load/combo.ts --shards 5",
+		"bench": "bun benchmark/load/combo.ts"
 	},
 	"dependencies": {
 		"@zyncbase/client": "workspace:*",

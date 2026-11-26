@@ -1,29 +1,47 @@
-# Raw combo benchmark
+# Combo server load test
 
-A server-side replay of `tests/e2e/src/test-combo-stress.ts` that uses the
-captured wire frames verbatim and no TypeScript SDK. Each 10,000-client unit
-runs the same topology and phase sequence as the e2e combo, so the wall clock is
-the combo load without the client SDK's encode/decode work.
+This test drives the workload from `tests/e2e/src/test-combo-stress.ts` against
+one ZyncBase server. The clients are WebSocket load generators. They exist only
+to put the same load on the server from the same machine; nothing here measures
+client behavior.
 
-## Pipeline
+The measured claim is:
 
-1. **Capture** — run the 10k e2e combo with a Bun `--preload` hook that appends
-   every client->server frame to NDJSON, plus the first `SchemaSync`.
-2. **Corpus** — preserve the captured frames: store namespace, store
-   subscriptions A/B per table, presence namespaces per room, presence
-   subscriptions, 400 individual store creates, 400 store updates, 400 user
-   presence writers × 3 ticks, and 100 shared writers × 3 ticks per room.
-3. **Replay** — four raw client processes × 2,500 connections per shard, each
-   assigned the e2e role/table/room/filter for its local ID. Store phases await
-   `WriteCommitted`; passive clients only drain. Convergence waits for inbound
-   frames to go quiet for 100 ms.
+> On a 12-logical-CPU host, with the load generator sharing that host, ZyncBase
+> handled 50,000 concurrent clients across five isolated shards, each with its
+> own store and presence namespaces. The server used about 1.1 of the host's
+> 12 cores; host CPU was not the constraint. The workload moved about 11.2M
+> server messages at roughly 1.5–1.9M messages/s during active phases, with
+> 1,875 messages per store create and 3,375 per update. It was a burst, not a
+> sustained throughput or p99 test.
 
-The replay sends **individual `StoreSet` frames**, not `StoreBatch`, and it uses
-the real A/B filters. There is no match-all mode.
+## Workload
+
+Each 10,000-client unit is four processes × 2,500 clients:
+
+- two rooms, two tables (`items`, `events`)
+- filters A/B per table
+- 100 creators, 100 updaters, 100 user-presence writers, 100 shared-presence
+  writers, and 2,100 passive subscribers per process
+- individual `StoreSet` frames, not batches
+- store phases await `WriteCommitted`
+- three presence ticks, with full tick 0 and partial ticks 1/2
+- convergence waits for 100 ms with no inbound frames
+
+The corpus is captured from the current combo test. Store creates and updates
+are individual frames; the load generator replays them unchanged.
+
+## Message measurement
+
+The benchmark samples the server's `GET /stats` endpoint before and after each
+phase. `messages.sent_total` counts every message inside a coalesced frame, so
+the report is in messages, not bytes. Fanout is `sent - write/set acks`.
+Per-phase numbers are averages and can include spillover from the previous
+phase; workload totals are the stable measurement.
 
 ## Sharding
 
-`--shards N` runs N independent 10k combo units under one server:
+`--shards N` runs N independent 10k units under one server:
 
 ```
 shard 0: 4 processes × 2,500 clients → public, presence-combo-room-{0,1}
@@ -31,8 +49,8 @@ shard 1: 4 processes × 2,500 clients → public-s1, presence-combo-s1-room-{0,1
 ...
 ```
 
-Each shard still does one 10k combo's work per process. Three details
-make the isolation real:
+Each shard still does one 10k unit's work per process. Three details make the
+isolation real:
 
 - **Namespaces per shard.** Store and presence namespaces are rewritten into the
   captured namespace frames; all other frames are reused unchanged.
@@ -43,12 +61,11 @@ make the isolation real:
   every shard's rows distinct.
 - **Loopback IP per shard.** Each shard connects to `127.0.0.(shard+1)` on the
   same listener. This keeps the source-port tuple space separate; without it the
-  50k localhost sockets exhaust the ephemeral port range and connections fail
-  during setup.
+  50k localhost sockets exhaust the ephemeral port range during setup.
 
 After the workload, an isolation probe has shard 0 write one store document and
 one user-presence update. It then asserts shard 0 sees fanout and shards 1..N
-see **zero** frames. The probe runs after the measured phases, so it does not
+see zero frames. The probe runs after the measured phases, so it does not
 pollute the workload counters.
 
 Transient localhost connection resets during the connect burst are retried up to
@@ -59,68 +76,155 @@ fails the run.
 
 ```sh
 zig build -Doptimize=ReleaseFast
-bun run --filter @zyncbase/client build
 
-bun run bench:capture    # 10k e2e combo capture + corpus build
+bun run bench:capture    # capture the combo workload and build the corpus
 bun run bench:corpus     # rebuild corpus from benchmark/corpus/raw
-bun run bench:combo      # 10k raw replay
-bun run bench:combo:50k  # 50k raw replay = 5 isolated shards
-bun test benchmark/raw/protocol.test.ts  # namespace/doc-id rewrite checks
+bun run bench:combo      # 10k clients
+bun run bench:combo:50k  # 50k clients = 5 isolated shards
+bun test benchmark/load/protocol.test.ts  # namespace/doc-id rewrite checks
 ```
 
 The corpus is generated and gitignored under `benchmark/corpus/`. Regenerate it
-after schema, protocol, or combo-test changes. The 2,500 clients per process is
-fixed by the captured global IDs.
+after schema or protocol changes. The 2,500 clients per process is fixed by the
+captured global IDs.
 
 ## Baseline — 2026-11-26
 
-Machine: AMD Ryzen 5 3600, 12 logical CPUs, WSL2. Server: Zig ReleaseFast.
-Raw numbers are the median of 3 runs. SDK combo is one run of the current e2e
-test on the same server.
+Machine: AMD Ryzen 5 3600, 12 logical CPUs, 32 GB RAM, WSL2. Server:
+Zig ReleaseFast. The load generator and server share the same host. Values are
+the observed range across runs.
 
-| | 10k raw | 50k raw (5 shards) | 10k SDK combo |
+| | 10k | 50k (5 × 10k) |
+|---|---:|---:|
+| total wall | ~4.8 s (4.4–5.1) | ~26 s (24–28.4) |
+| setup / connect | ~2.1 s | ~11.5 s |
+| store phases | ~1.1 s | ~5.7–7.1 s |
+| presence phases | ~110 ms | ~125 ms |
+| clients | 10,000 | 50,000 |
+| shards | 1 | 5 |
+| server CPU | ~1.0 cores | ~1.1 cores |
+| load generator CPU | ~1.6 cores | ~1.9–2.0 cores |
+| total host CPU | ~2.7 of 12 | ~3.0 of 12 |
+| store messages | 2.1 M | 10.5 M |
+| store messages per create | 1,875 | 1,875 |
+| store messages per update | 3,375 | 3,375 |
+| store fanout rate | ~1.5–1.9 M/s | ~1.5–1.9 M/s |
+| presence messages | ~0.03–0.04 M | ~0.75–0.83 M |
+| workload messages | 2.13–2.14 M | ~11.2–11.3 M |
+| workload message rate | ~1.3–1.5 M/s | ~1.5–1.9 M/s |
+| messages per client frame | 44–56 | 76–105 |
+| store payload per shard | 155.2 MB | 155.2 MB |
+| total payload per shard | ~315 MB | ~270–297 MB |
+
+Setup: 50,000 connections in ~11.5 s (~4,300/s); the server sent 300k messages
+and received 250k messages during setup.
+
+Message counts are server-side messages accepted for delivery. Store counts are
+stable across runs and scale linearly: 2.1M at 10k, 10.5M at 50k. Presence
+messages are coalesced and vary with load, so presence totals per shard are not
+directly comparable across scales.
+
+Bytes are secondary. A store-only replay delivers 155.2 MB per shard at both
+scales; the remaining payload is presence traffic. Thread count is not core
+usage: the server configured 12 threads on this host, but used about 1.1 cores.
+
+## Server CPU profile — 50k
+
+The benchmark samples server CPU per phase and per thread. On the 50k run:
+
+| phase | wall | server cores | main thread |
 |---|---:|---:|---:|
-| total wall | **4,690 ms** (4,083–5,143) | **24,692 ms** (23,711–25,529) | **7,004 ms** |
-| setup / connect | 2,442 ms | 12,232 ms | 2,945 ms |
-| store create | 476 ms | 3,208 ms | 691 ms |
-| store update | 688 ms | 3,231 ms | 896 ms |
-| presence user | 55 ms | 62 ms | 536 ms |
-| presence shared | 55 ms | 59 ms | 146 ms |
-| convergence | 952 ms | 6,236 ms | 607 ms (max) |
-| cleanup | 46 ms | 194 ms | ~123 ms |
-| clients | 10,000 (4×2,500) | 50,000 (20×2,500) | 10,000 (4×2,500) |
-| filters | A/B, 2 rooms, 2 tables | A/B, 2 rooms, 2 tables per shard | A/B, 2 rooms, 2 tables |
-| server CPU | 0.97 cores | 1.12 cores | included in wall |
-| client CPU | 7.4 s total, max 2.0 s | 52.1 s total, max 2.9 s | SDK decode included |
-| per-shard payload | 315 MB (store 155.2 + presence) | 269–276 MB each (store 155.2 + coalesced presence) | — |
+| setup | ~11.4 s | ~1.15 | ~0.96 |
+| store create | ~3 s | ~1.2 | ~1.0 |
+| store update | ~3 s | ~1.2 | ~1.0 |
+| presence | ~0.12 s | ~1.3 | ~0.9–1.0 |
+| converge | ~0.1 s | idle | idle |
 
-Scaling 5× the load costs 5.3× the wall time. The server's single event loop is
-the limit at about 1.1 cores of CPU; client processes use about 2.1 cores total,
-so the run is not client-bound. Per-shard payload bytes stay within ~2.5% across
-shards, which is the equality check for the sharded workload.
+The four subscription workers, writer, readers, checkpoint thread, and presence
+thread each use roughly 0.01–0.04 cores. The main event-loop thread is more than
+90% of server CPU.
 
-Store fanout is identical at every scale: a store-only replay delivers
-**155.2 MB per shard** at both 10k and 50k. The rest of the payload is presence
-broadcasts. The presence worker merges pending updates when it falls behind, so
-50k shards show fewer presence bytes while converging to the same presence
-state.
+Setup breaks down roughly as:
 
-The 10k raw replay is about 33% faster than the SDK combo for the same server
-load: it removes the client SDK's decode/callback work, not any server work. The
-store writes are committed to SQLite before fan-out; the replay includes that
-path.
+- **~6.6 s** for ticket, WebSocket upgrade, schema sync, and store namespace
+  - ticket issuance alone is ~2.2 s for 50k tickets
+- **~4.8 s** for the store and presence subscription setup
 
-## Scope
+`perf` samples of the user-space stacks show where the event-loop CPU goes:
 
-- This is a **server-side** benchmark. Client SDK cost is excluded by design,
-  like a database benchmark's load generator; in production the SDK runs on the
-  users' browsers.
-- The replay uses captured frames from the current combo test and the same
-  topology; it does not verify store/presence convergence like the e2e test.
-  The e2e test remains the correctness gate.
-- Store deltas can be coalesced into fewer WebSocket frames, but their payload
-  bytes are stable (155.2 MB per shard). Presence broadcasts are merged when the
-  presence worker falls behind, so presence bytes are lower under 50k load.
-  Per-shard store payload and the total wall are the stable measurements.
-- 50k on this 12-core machine is bounded by the server event loop. Use a larger
-  box or separate client hosts to find the server's ceiling above 50k.
+| phase | dominant user-space cost |
+|---|---|
+| setup | `send` syscalls ~39%, SQLite/JWT/JSON spread behind it |
+| store fanout | `send` syscalls ~62%, `memcpy` ~19%, grouping ~2–3% |
+
+The store path is not primarily append/grouping CPU. It is dominated by sending
+already-coalesced frames and copying their payloads. The setup path is also
+send-heavy, with a long tail of ticket, SQLite, JSON, and allocation work.
+
+This means:
+
+- Adding cores will not improve this workload; the event loop is the ceiling.
+- Micro-optimizing `appendToGroup` alone will not move the result much.
+- The useful directions are fewer sends/frames, fewer bytes on the wire, or
+  parallelizing/offloading the event-loop send path.
+- Setup is the larger wall segment, and it is also send/round-trip heavy.
+
+## What this result proves
+
+- 50,000 concurrent WebSocket clients connected and completed the workload.
+- Five shards remained isolated: the probe saw fanout in shard 0 and zero
+  frames in every other shard.
+- Store fanout scaled linearly in messages: 2.1M at 10k and 10.5M at 50k, with
+  1,875 messages per create and 3,375 per update.
+- The server accepted roughly 1.5–1.9M messages/s during active phases at 50k.
+- Setup accepted about 4,300 connections/s and exchanged 300k server messages /
+  250k client messages.
+- Store payload was consistent across shards: 155.2 MB per 10k unit.
+- No connections dropped and no server warnings were logged in these runs.
+- The server used about 1.1 of 12 cores, so host CPU capacity was not the
+  constraint. The main event-loop thread used about 1.0 core in every phase;
+  all other server threads stayed below 0.05 cores each.
+
+## What this result does not prove
+
+- It is not a sustained throughput measurement. The store and presence work is a
+  burst; the rest is setup and convergence.
+- Message counts are server-side messages accepted for delivery, not client
+  callbacks or client-decoded messages.
+- Phase message rates are averages. Fanout can spill from one phase into the
+  next, and presence coalescing changes presence totals.
+- It has no p50/p95/p99 latency numbers.
+- It is not a clean separate-host server measurement. The load generator shares
+  the host, which is conservative on CPU and optimistic on network (loopback).
+- It is not a core-count result. The thread budget changes with CPU count, so no
+  claim is made about how the same load behaves on 8 or 16 cores.
+- Per-thread CPU is sampled from `/proc`; it shows the main event-loop thread is
+  the ceiling. The profile is co-located with the load generator, so syscall and
+  network costs are specific to loopback on this host.
+- It is not a general capacity rating for other schemas, fanout ratios, document
+  sizes, or read patterns.
+- The send path is single-threaded by design. More host cores do not raise this
+  fanout ceiling without a server-side change.
+
+## Sizing guidance
+
+Use this as a reference point, not a guarantee. If your app has a similar shape
+— filtered subscriptions, presence, moderate writes, fanout to thousands of
+subscribers, single-node deployment — 50k concurrent clients is a measured point
+on this host.
+
+For your own project, estimate:
+
+- peak concurrent connections
+- writes per second
+- matching subscribers per write (fanout)
+- average update size
+- presence users per room and update rate
+
+If your expected peak is close to or above this workload, adapt the schema,
+filters, and rates in this harness and run it on your hardware. If it is far
+below, this result is a useful lower-bound data point.
+
+This test does not establish a connection ceiling beyond 50k, a sustained write
+rate, or a latency bound. Those require the scaling and overload tests described
+in the benchmark plan.

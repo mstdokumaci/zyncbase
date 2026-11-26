@@ -113,6 +113,13 @@ type AckWaiter = {
 	timer: ReturnType<typeof setTimeout>;
 };
 
+type MessageWaiter = {
+	messages: number;
+	resolve: () => void;
+	reject: (error: Error) => void;
+	timer: ReturnType<typeof setTimeout>;
+};
+
 function bytesOf(data: unknown): Uint8Array | null {
 	if (data instanceof ArrayBuffer) return new Uint8Array(data);
 	if (data instanceof Uint8Array) return data;
@@ -130,10 +137,16 @@ function messageType(value: unknown): number | undefined {
 	return undefined;
 }
 
+export type OpenTiming = {
+	ticketMs?: number;
+	wsMs?: number;
+};
+
 export class RawConnection {
 	readonly ws: WebSocket;
 	frames = 0;
 	messages = 0;
+	errors = 0;
 	acks = 0;
 	bytes = 0;
 	closed = false;
@@ -141,8 +154,9 @@ export class RawConnection {
 	firstFrame: Uint8Array | null = null;
 	lastFrame: Uint8Array | null = null;
 	private waiters: Waiter[] = [];
+	private messageWaiters: MessageWaiter[] = [];
 	private ackWaiters: AckWaiter[] = [];
-	private readonly countMessages: boolean;
+	countMessages: boolean;
 	private readonly countAcks: boolean;
 
 	private constructor(
@@ -169,7 +183,10 @@ export class RawConnection {
 		if (this.countMessages || this.countAcks) {
 			try {
 				for (const message of decodeMulti(bytes)) {
-					if (this.countMessages) this.messages++;
+					if (this.countMessages) {
+						this.messages++;
+						if (messageType(message) === 0x01) this.errors++;
+					}
 					if (this.countAcks && messageType(message) === 0x19) this.acks++;
 				}
 			} catch {
@@ -177,6 +194,7 @@ export class RawConnection {
 			}
 		}
 		this.resolveWaiters();
+		this.resolveMessageWaiters();
 		this.resolveAckWaiters();
 	}
 
@@ -185,6 +203,10 @@ export class RawConnection {
 		this.closeCode = code;
 		const error = new Error(`socket closed (${code})`);
 		for (const waiter of this.waiters.splice(0)) {
+			clearTimeout(waiter.timer);
+			waiter.reject(error);
+		}
+		for (const waiter of this.messageWaiters.splice(0)) {
 			clearTimeout(waiter.timer);
 			waiter.reject(error);
 		}
@@ -201,13 +223,18 @@ export class RawConnection {
 		expectedSchema?: Uint8Array,
 		countMessages = false,
 		countAcks = false,
+		timing?: OpenTiming,
 	): Promise<RawConnection> {
+		const ticketStart = performance.now();
 		const ticket = await acquireTicket(host, port, jwt);
+		if (timing) timing.ticketMs = performance.now() - ticketStart;
+		const wsStart = performance.now();
 		const url = new URL(`ws://${host}:${port}/v1/ws`);
 		url.searchParams.set("ticket", ticket);
 		const ws = new WebSocket(url.toString());
 		const conn = new RawConnection(ws, countMessages, countAcks);
 		await conn.waitFor(1);
+		if (timing) timing.wsMs = performance.now() - wsStart;
 		if (expectedSchema && conn.firstFrame) {
 			if (!buffersEqual(conn.firstFrame, expectedSchema)) {
 				conn.close();
@@ -226,6 +253,20 @@ export class RawConnection {
 				reject(new Error(`timed out waiting for frame ${frames}`));
 			}, timeoutMs);
 			this.waiters.push({ frames, resolve, reject, timer });
+		});
+	}
+
+	waitForMessages(messages: number, timeoutMs = 20_000): Promise<void> {
+		if (this.messages >= messages) return Promise.resolve();
+		if (this.closed) return Promise.reject(new Error("socket is closed"));
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				this.messageWaiters = this.messageWaiters.filter(
+					(waiter) => waiter.timer !== timer,
+				);
+				reject(new Error(`timed out waiting for message ${messages}`));
+			}, timeoutMs);
+			this.messageWaiters.push({ messages, resolve, reject, timer });
 		});
 	}
 
@@ -259,6 +300,20 @@ export class RawConnection {
 		const ready = this.waiters.filter((waiter) => this.frames >= waiter.frames);
 		if (ready.length === 0) return;
 		this.waiters = this.waiters.filter((waiter) => this.frames < waiter.frames);
+		for (const waiter of ready) {
+			clearTimeout(waiter.timer);
+			waiter.resolve();
+		}
+	}
+
+	private resolveMessageWaiters(): void {
+		const ready = this.messageWaiters.filter(
+			(waiter) => this.messages >= waiter.messages,
+		);
+		if (ready.length === 0) return;
+		this.messageWaiters = this.messageWaiters.filter(
+			(waiter) => this.messages < waiter.messages,
+		);
 		for (const waiter of ready) {
 			clearTimeout(waiter.timer);
 			waiter.resolve();

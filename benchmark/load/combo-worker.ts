@@ -4,6 +4,7 @@ import {
 	fromBase64,
 	loadComboCorpus,
 	makeJwt,
+	type OpenTiming,
 	RawConnection,
 	rebaseDocId,
 	rebaseNamespace,
@@ -82,6 +83,19 @@ type Phase =
 
 let connections: RawConnection[] = [];
 const setupFail: Record<string, number> = {};
+type StageStat = { count: number; totalMs: number; maxMs: number };
+const setupStages: Record<string, StageStat> = {};
+
+function recordStage(name: string, ms: number): void {
+	let stat = setupStages[name];
+	if (!stat) {
+		stat = { count: 0, totalMs: 0, maxMs: 0 };
+		setupStages[name] = stat;
+	}
+	stat.count++;
+	stat.totalMs += ms;
+	stat.maxMs = Math.max(stat.maxMs, ms);
+}
 
 function noteSetup(stage: string, conn: RawConnection): void {
 	if (frameType(conn.lastFrame) !== 0x00) {
@@ -92,6 +106,7 @@ function noteSetup(stage: string, conn: RawConnection): void {
 async function connectWithStoreScope(
 	subject: string,
 	countAcks: boolean,
+	timing: OpenTiming,
 ): Promise<RawConnection> {
 	let conn: RawConnection | null = null;
 	try {
@@ -100,12 +115,17 @@ async function connectWithStoreScope(
 			port,
 			makeJwt(secret, subject),
 			expectedSchema,
-			false,
+			true,
 			countAcks,
+			timing,
 		);
+		const namespaceStart = performance.now();
 		conn.sendBase64(storeNamespace);
 		await conn.waitFor(2);
 		noteSetup("store-namespace", conn);
+		recordStage("ticket", timing.ticketMs ?? 0);
+		recordStage("ws", timing.wsMs ?? 0);
+		recordStage("store-namespace", performance.now() - namespaceStart);
 		return conn;
 	} catch (error) {
 		conn?.close();
@@ -125,6 +145,7 @@ async function connectLocal(localId: number): Promise<RawConnection> {
 			return await connectWithStoreScope(
 				subject,
 				localId < 200, // creators/updaters need write acks
+				{},
 			);
 		} catch (error) {
 			lastError = error;
@@ -156,26 +177,33 @@ try {
 	await Promise.all(Array.from({ length: 250 }, connector));
 	if (failure) throw failure;
 
-	// Match the e2e subscribe phase: all clients subscribe after every store
-	// scope exists. Keep each connection's subscription sequence ordered so the
-	// server cannot coalesce setup responses into fewer frames.
-	await Promise.all(
-		connections.map(async (conn, localId) => {
-			const filter = localId < clientsPerProcess / 2 ? "A" : "B";
-			conn.sendBase64(corpus.setup.storeSubscribes[table][filter]);
-			await conn.waitFor(3);
-			noteSetup("store-subscribe", conn);
-			conn.sendBase64(presenceNamespace);
-			await conn.waitFor(4);
-			noteSetup("presence-namespace", conn);
-			conn.sendBase64(corpus.setup.presenceSubscribe);
-			await conn.waitFor(5);
-			noteSetup("presence-subscribe", conn);
-			conn.sendBase64(corpus.setup.presenceSubscribeShared);
-			await conn.waitFor(6);
-			noteSetup("presence-subscribe-shared", conn);
-		}),
-	);
+	const setupOnly = process.env.COMBO_SETUP_ONLY === "1";
+	// Match the client setup pipeline: the store subscription and presence
+	// namespace are sent together; the two presence subscriptions are sent
+	// together once the presence scope is ready. Wait on messages, not frames,
+	// because the server may coalesce setup responses.
+	if (!setupOnly)
+		await Promise.all(
+			connections.map(async (conn, localId) => {
+				const filter = localId < clientsPerProcess / 2 ? "A" : "B";
+				let stageStart = performance.now();
+				conn.sendBase64(corpus.setup.storeSubscribes[table][filter]);
+				conn.sendBase64(presenceNamespace);
+				await conn.waitForMessages(4);
+				recordStage("store-sub+presence-ns", performance.now() - stageStart);
+
+				stageStart = performance.now();
+				conn.sendBase64(corpus.setup.presenceSubscribe);
+				conn.sendBase64(corpus.setup.presenceSubscribeShared);
+				await conn.waitForMessages(6);
+				recordStage("presence-subs", performance.now() - stageStart);
+
+				if (conn.errors > 0) {
+					setupFail.subscriptions = (setupFail.subscriptions ?? 0) + 1;
+				}
+				conn.countMessages = false;
+			}),
+		);
 } catch (error) {
 	process.send?.({
 		type: "error",
@@ -193,10 +221,13 @@ if (failedSetup.length > 0) {
 	throw new Error(message);
 }
 
+const setupCpu = process.cpuUsage(cpuStart);
 process.send?.({
 	type: "ready",
 	process: processIndex,
 	connections: connections.length,
+	cpuMs: (setupCpu.user + setupCpu.system) / 1000,
+	stages: setupStages,
 });
 
 function phaseCreates(): Promise<void> {
@@ -317,15 +348,18 @@ process.on("message", (message: unknown) => {
 	if (!message || typeof message !== "object") return;
 	const record = message as { type?: string; phase?: Phase };
 	if (record.type === "phase" && record.phase) {
+		const phaseCpuStart = process.cpuUsage();
 		runPhase(record.phase)
-			.then(() =>
+			.then(() => {
+				const phaseCpu = process.cpuUsage(phaseCpuStart);
 				process.send?.({
 					type: "phase-done",
 					process: processIndex,
 					shard,
 					phase: record.phase,
-				}),
-			)
+					cpuMs: (phaseCpu.user + phaseCpu.system) / 1000,
+				});
+			})
 			.catch((error: unknown) => {
 				process.send?.({
 					type: "error",
@@ -368,9 +402,9 @@ process.on("message", (message: unknown) => {
 			shard,
 			connections: connections.length,
 			closed,
+			phaseFrames,
 			frames: workloadFrames >= 0 ? workloadFrames : totalFrames(),
 			bytes: workloadBytes >= 0 ? workloadBytes : totalBytes(),
-			phaseFrames,
 			setupFail,
 			cpuMs: (cpu.user + cpu.system) / 1000,
 		});
