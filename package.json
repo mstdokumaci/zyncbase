@@ -28,7 +28,13 @@
 		"typecheck:sdk": "tsc -p sdk/typescript/tsconfig.json --noEmit",
 		"typecheck:e2e": "tsc -p tests/e2e/tsconfig.json",
 		"typecheck:examples": "tsc -p examples/tsconfig.json",
-		"typecheck": "bun run generate:check && bun run typecheck:sdk && bun run typecheck:e2e && bun run typecheck:examples"
+		"typecheck:benchmark": "tsc -p benchmark/tsconfig.json",
+		"typecheck": "bun run generate:check && bun run typecheck:sdk && bun run typecheck:e2e && bun run typecheck:examples && bun run typecheck:benchmark",
+		"bench:capture": "bun benchmark/capture/run.ts",
+		"bench:corpus": "bun benchmark/capture/build-corpus.ts",
+		"bench:combo": "bun benchmark/raw/combo.ts",
+		"bench:combo:50k": "bun benchmark/raw/combo.ts --shards 5",
+		"bench": "bun benchmark/raw/combo.ts"
 	},
 	"dependencies": {
 		"@zyncbase/client": "workspace:*",
@@ -37,6 +43,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.4.10",
 		"@happy-dom/global-registrator": "^21.0.4",
+		"@msgpack/msgpack": "^3.1.3",
 		"@testing-library/dom": "^10",
 		"@testing-library/react": "^16",
 		"@tiptap/core": "^3",

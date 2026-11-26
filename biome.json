@@ -9,6 +9,9 @@
 		"includes": [
 			"sdk/typescript/**",
 			"tests/e2e/**",
+			"benchmark/**",
+			"!!benchmark/corpus",
+			"!!benchmark/artifacts",
 			"examples/cordon-off/**",
 			"examples/quorum/**",
 			"!!examples/cordon-off/land.json",

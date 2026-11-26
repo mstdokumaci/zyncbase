@@ -83,6 +83,7 @@ export type ServerHandle = {
 	port: number;
 	configPath: string;
 	dataDir: string;
+	process: Bun.Subprocess;
 };
 
 function captureLines(target: string[], text: string) {
@@ -590,6 +591,7 @@ export async function withServer<T>(
 			port: ctx.port,
 			configPath,
 			dataDir: options.dataDir,
+			process: server.process,
 		});
 	} finally {
 		await stopServer(server);
