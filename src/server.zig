@@ -667,7 +667,13 @@ pub const ZyncBaseServer = struct {
             if (self.event_loops[1].thread) |thread| thread.join();
             return err;
         };
-        if (self.ws(0).loop.load(.acquire)) |reactor| self.connection_manager.setLoopWake(0, reactor);
+        if (self.ws(0).loop.load(.acquire)) |reactor| {
+            self.connection_manager.setLoopWake(0, reactor);
+            // A signal parked before the loop existed was replayed into
+            // shutdown_requested with no loop to wake; kick the first poll so
+            // the shutdown does not wait for the sweep timer tick.
+            if (self.shutdown_requested.load(.acquire)) uws_c.us_wakeup_loop(reactor);
+        }
         std.log.info("Server started successfully", .{});
 
         self.ws(0).run();
@@ -714,7 +720,10 @@ pub const ZyncBaseServer = struct {
             std.log.err("Failed to listen on event loop 1: {}", .{err});
             std.process.exit(1);
         };
-        if (loop.websocket_server.loop.load(.acquire)) |reactor| self.connection_manager.setLoopWake(1, reactor);
+        if (loop.websocket_server.loop.load(.acquire)) |reactor| {
+            self.connection_manager.setLoopWake(1, reactor);
+            if (self.shutdown_requested.load(.acquire)) uws_c.us_wakeup_loop(reactor);
+        }
         loop.ready.store(true, .release);
         loop.websocket_server.run();
         self.connection_manager.clearLoopWake(1);
