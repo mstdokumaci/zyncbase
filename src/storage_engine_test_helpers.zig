@@ -103,6 +103,8 @@ pub const PendingUpsert = struct {
     columns: []const ColumnValue,
     /// Tracked when set; the outcome's request id is the upsert's 1-based position.
     conn_id: ?u64 = null,
+    /// Owning reactor of `conn_id`; ignored when `conn_id` is null.
+    loop_id: u8 = 0,
 };
 
 /// Flush `upserts` in one transaction on the calling thread. Bypasses the write
@@ -117,7 +119,7 @@ pub fn flushUpsertsNow(engine: *StorageEngine, namespace_id: i64, upserts: []con
     }
     for (upserts, 0..) |pending, i| {
         const columns = try cloneColumns(allocator, pending.columns);
-        const ack: ?WriteAck = if (pending.conn_id) |conn_id| .{ .conn_id = conn_id, .loop_id = 0, .msg_id = i + 1 } else null;
+        const ack: ?WriteAck = if (pending.conn_id) |conn_id| .{ .conn_id = conn_id, .loop_id = pending.loop_id, .msg_id = i + 1 } else null;
         batch.append(allocator, .{ .upsert = .{
             .table_index = pending.table_index,
             .id = pending.id,

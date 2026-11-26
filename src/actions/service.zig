@@ -451,9 +451,13 @@ pub const ActionsService = struct {
             const pending = self.removePending(exec_id) orelse continue;
             self.sendError(pending.caller_conn_id, pending.req_id, wire_errors.getWireError(error.RequestSuperseded));
         }
+    }
 
-        // Everything above was queued on the owning reactor. Send it now so it
-        // precedes the scope-change response the handler sends after we return.
+    /// Deliver frames already queued for the connection's reactor. Must be
+    /// called without this service's mutex held; used after invalidateScope so
+    /// the flushed forwards and superseded errors it queued precede the
+    /// scope-change response the handler sends.
+    pub fn drainOwningLoop(self: *ActionsService, conn_id: u64) void {
         if (self.connection_manager) |cm| cm.drainOwningLoop(conn_id);
     }
 

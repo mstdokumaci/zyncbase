@@ -318,9 +318,13 @@ pub const MessageHandler = struct {
         transferred = true;
         const scope_seq = conn.scope_seq;
         self.unsubscribeDetached(conn, detached);
-        self.actions_service.lock();
-        defer self.actions_service.unlock();
-        self.actions_service.invalidateScope(conn.id, .store);
+        {
+            self.actions_service.lock();
+            defer self.actions_service.unlock();
+            self.actions_service.invalidateScope(conn.id, .store);
+        }
+        // Drain after releasing the mutex, before the caller sends the response.
+        self.actions_service.drainOwningLoop(conn.id);
         return scope_seq;
     }
 
@@ -859,9 +863,13 @@ pub const MessageHandler = struct {
         if (old_ns != connection_mod.unset_namespace_id) {
             self.presence_service.removeAllForConnection(old_ns, old_user, conn.id);
         }
-        self.actions_service.lock();
-        defer self.actions_service.unlock();
-        self.actions_service.invalidateScope(conn.id, .presence);
+        {
+            self.actions_service.lock();
+            defer self.actions_service.unlock();
+            self.actions_service.invalidateScope(conn.id, .presence);
+        }
+        // Drain after releasing the mutex, before the caller sends the response.
+        self.actions_service.drainOwningLoop(conn.id);
 
         return scope_seq;
     }
