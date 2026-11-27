@@ -61,7 +61,7 @@ test "PresenceManager - nil patch clears a user field in the snapshot" {
     defer clear_patch.free(allocator);
     try manager.setUser(1, user_id, 1, clear_patch);
 
-    var snapshot = try manager.onSubscribeUser(1, 100, 1);
+    var snapshot = try manager.onSubscribeUser(1, 100, 1, 0);
     defer snapshot.deinit(allocator);
     try testing.expectEqual(@as(usize, 1), snapshot.users.items.len);
     const value = snapshot.users.items[0].data.values[0];
@@ -243,7 +243,7 @@ test "PresenceManager - onSubscribeUser returns snapshot" {
     defer patch.free(allocator);
     try manager.setUser(1, user_id, 1, patch);
 
-    var snapshot = try manager.onSubscribeUser(1, 100, 1);
+    var snapshot = try manager.onSubscribeUser(1, 100, 1, 0);
     defer snapshot.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), snapshot.users.items.len);
@@ -271,7 +271,7 @@ test "PresenceManager - onSubscribeShared returns current state" {
     defer set_patch.free(allocator);
     try manager.setShared(1, set_patch, 42);
 
-    var shared = try manager.onSubscribeShared(1, 200, 1);
+    var shared = try manager.onSubscribeShared(1, 200, 1, 0);
     try testing.expect(shared != null);
     if (shared) |*rec| {
         defer rec.deinit(allocator);
@@ -293,7 +293,7 @@ test "PresenceManager - onSubscribeShared returns null when no state" {
     manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    const shared = try manager.onSubscribeShared(1, 200, 1);
+    const shared = try manager.onSubscribeShared(1, 200, 1, 0);
     try testing.expect(shared == null);
 }
 
@@ -308,8 +308,8 @@ test "PresenceManager - onUnsubscribeUser removes subscriber" {
     manager.init(testing.io, allocator, user_fields, shared_fields);
     defer manager.deinit();
 
-    _ = try manager.onSubscribeUser(1, 100, 1);
-    _ = try manager.onSubscribeUser(1, 200, 2);
+    _ = try manager.onSubscribeUser(1, 100, 1, 0);
+    _ = try manager.onSubscribeUser(1, 200, 2, 0);
 
     {
         const subs = manager.user_subscribers.get(1) orelse return error.TestExpectedValue;
@@ -385,7 +385,7 @@ test "PresenceManager - multiple users in same namespace" {
     const ns_map = manager.user_state.get(1) orelse return error.TestExpectedValue;
     try testing.expectEqual(@as(usize, 2), ns_map.count());
 
-    var snapshot = try manager.onSubscribeUser(1, 300, 1);
+    var snapshot = try manager.onSubscribeUser(1, 300, 1, 0);
     defer snapshot.deinit(allocator);
     try testing.expectEqual(@as(usize, 2), snapshot.users.items.len);
 }
@@ -510,7 +510,7 @@ test "PresenceManager - snapshot includes joined_at" {
     defer patch.free(allocator);
     try manager.setUser(1, user_id, 1, patch);
 
-    var snapshot = try manager.onSubscribeUser(1, 100, 1);
+    var snapshot = try manager.onSubscribeUser(1, 100, 1, 0);
     defer snapshot.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), snapshot.users.items.len);

@@ -16,7 +16,7 @@ const Diagnostics = @import("../migration/diagnostics.zig").Diagnostics;
 const StorageEngine = @import("../storage_engine.zig").StorageEngine;
 const ChangeQueue = @import("../subscription/change_queue.zig").ChangeQueue;
 
-const send_queue_type = send_queue_mod.send_queue;
+const SendQueueType = send_queue_mod.SendQueue;
 const Schema = schema_types.Schema;
 
 /// Runs the production startup migration against `db`. Schemas built in code
@@ -253,7 +253,7 @@ pub const TestContext = struct {
     test_dir: []const u8,
     /// False for a directory borrowed from the caller; deinit then keeps it.
     owns_dir: bool = true,
-    send_queue: ?send_queue_type = null,
+    send_queue: ?SendQueueType = null,
     change_queue: ?ChangeQueue = null,
 
     pub fn init(allocator: std.mem.Allocator, prefix: []const u8) !TestContext {
@@ -287,8 +287,8 @@ pub const TestContext = struct {
 
     pub fn deinit(self: *TestContext) void {
         if (self.send_queue) |*sq| {
-            while (sq.pop()) |entry| {
-                entry.deinit();
+            for (0..sq.queues.len) |loop_index| {
+                while (sq.popFrom(loop_index)) |entry| entry.deinit();
             }
             sq.deinit();
             self.send_queue = null;
@@ -579,7 +579,7 @@ pub fn setupTestEngineWithJson(
 
     try runTestMigrations(allocator, try engine.getSetupConn(), schema, schema_json);
 
-    context.send_queue = try send_queue_type.init(allocator);
+    context.send_queue = try SendQueueType.init(allocator);
     errdefer {
         context.send_queue.?.deinit();
         context.send_queue = null;

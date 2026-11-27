@@ -40,7 +40,7 @@ test "Integration: All components properly wired" {
     try testing.expect(@intFromPtr(&server.subscription_engine) != 0);
     try testing.expect(@intFromPtr(&server.checkpoint_manager) != 0);
     try testing.expect(@intFromPtr(&server.storage_engine) != 0);
-    try testing.expect(@intFromPtr(&server.websocket_server) != 0);
+    try testing.expect(@intFromPtr(&server.event_loops[0].websocket_server) != 0);
     try testing.expect(@intFromPtr(&server.message_handler) != 0);
 
     // Verify message handler's component wiring
@@ -83,8 +83,8 @@ test "Integration: Graceful shutdown propagation" {
     const server = try setupTestServer(allocator, &context, "schema_shutdown.json");
     defer server.deinit();
 
-    // Initiate shutdown via server protocol
-    try server.shutdown();
+    // Initiate shutdown via the server flag; no reactors are running here.
+    server.shutdown_requested.store(true, .release);
 
     // Verify shutdown signal was propagated
     try testing.expect(server.shutdown_requested.load(.acquire) == true);
@@ -103,7 +103,7 @@ test "Integration: WebSocket callback wiring" {
     defer server.deinit();
 
     // Verify WebSocket server component is present
-    try testing.expect(@intFromPtr(&server.websocket_server) != 0);
+    try testing.expect(@intFromPtr(&server.event_loops[0].websocket_server) != 0);
 
     // Verify critical callback dependencies
     try testing.expect(@intFromPtr(&server.message_handler) != 0);

@@ -23,6 +23,7 @@ const schema_json =
 fn connectionContext(conn: anytype) RequestContext {
     return .{
         .conn_id = conn.id,
+        .loop_id = 0,
         .user_doc_id = conn.user_doc_id,
         .external_user_id = conn.getExternalUserId() orelse "",
         .session_claims = conn.getSessionClaimsPtr(),
@@ -50,7 +51,7 @@ fn makePairs(allocator: std.mem.Allocator, pairs: []const Pair) !msgpack.Payload
 // one concatenated frame per worker. Stages:
 //   A: call() × burst_size — authorization, schema validation, exec-id
 //      allocation, forward encoding, and staging into the outbox.
-//   B: flushOutbox() — one send per worker per burst.
+//   B: flushOutbox() + drain — one frame per worker per burst.
 //   C: encodeActionForward() alone — attribution reference for A.
 // Pre-batching baseline for the same 1-worker path: call=347 ns/call,
 // frames/call=1.0 (ReleaseFast).
@@ -95,6 +96,7 @@ test "ActionsService: async forward dispatch throughput (1 worker)" {
             );
         }
         app.actions_service.flushOutbox();
+        if (app.test_context.send_queue) |*sq| app.connection_manager.drainSendQueue(sq, 0);
     }
     recorder.reset();
 
@@ -107,6 +109,7 @@ test "ActionsService: async forward dispatch throughput (1 worker)" {
         }
         const flush_start_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds();
         app.actions_service.flushOutbox();
+        if (app.test_context.send_queue) |*sq| app.connection_manager.drainSendQueue(sq, 0);
         const flush_end_ns = std.Io.Clock.awake.now(testing.io).toNanoseconds();
         total_call_ns += @intCast(flush_start_ns - call_start_ns);
         total_flush_ns += @intCast(flush_end_ns - flush_start_ns);

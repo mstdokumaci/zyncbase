@@ -104,6 +104,7 @@ test "WriteWorker: shutdown drain completes immediate ops" {
     const session_op = storage_mod.WriteOp{
         .resolve_session = .{
             .conn_id = 0,
+            .loop_id = 0,
             .msg_id = 1,
             .scope_seq = 0,
             .namespace = namespace_name,
@@ -221,7 +222,7 @@ test "WriteWorker: resolution queued after a write waits for that write" {
 
     var id_buf: [32]u8 = undefined;
     const external_user_id = typed_doc_id.hexSlice(user_id, &id_buf);
-    try ctx.engine.enqueueSessionResolution(0, 1, 0, "resolution-order", external_user_id, false);
+    try ctx.engine.enqueueSessionResolution(0, 1, 0, 0, "resolution-order", external_user_id, false);
     try ctx.engine.flushPendingWrites();
 
     try testing.expect(ctx.engine.documentExists(users_index, user_id));

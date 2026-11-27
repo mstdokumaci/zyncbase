@@ -471,7 +471,7 @@ test "Namespace success: cached and asynchronous scope responses return the inte
         try testing.expect((try routeWithArenaOptional(&app.handler, allocator, sc.conn, msg)) == null);
         try app.storage_engine.flushPendingWrites();
 
-        const entry = app.test_context.send_queue.?.pop() orelse return error.MissingAsyncResponse;
+        const entry = app.test_context.send_queue.?.popFrom(0) orelse return error.MissingAsyncResponse;
         defer entry.deinit();
         try testing.expectEqual(sc.conn.id, entry.conn_id);
         try expectScopeSuccess(entry.data, 2, sc.conn.user_doc_id);
@@ -483,7 +483,7 @@ test "Namespace success: cached and asynchronous scope responses return the inte
         try testing.expect((try routeWithArenaOptional(&app.handler, allocator, sc.conn, msg)) == null);
         try app.storage_engine.flushPendingWrites();
 
-        const entry = app.test_context.send_queue.?.pop() orelse return error.MissingAsyncResponse;
+        const entry = app.test_context.send_queue.?.popFrom(0) orelse return error.MissingAsyncResponse;
         defer entry.deinit();
         try testing.expectEqual(sc.conn.id, entry.conn_id);
         try expectScopeSuccess(entry.data, 3, sc.conn.user_doc_id);
@@ -532,7 +532,7 @@ test "NamespaceSwitch: a store switch keeps the connection's user id for the rea
     try testing.expectEqual(user_doc_id, sc.conn.user_doc_id);
 
     try app.storage_engine.flushPendingWrites();
-    const entry = app.test_context.send_queue.?.pop() orelse return error.MissingAsyncResponse;
+    const entry = app.test_context.send_queue.?.popFrom(0) orelse return error.MissingAsyncResponse;
     defer entry.deinit();
     try expectScopeSuccess(entry.data, 2, user_doc_id);
 }
@@ -749,7 +749,7 @@ fn expectWriteCommitted(app: *AppTestContext, conn_id: u64, expected_ids: []cons
 
     var ids = std.ArrayListUnmanaged(u64).empty;
     defer ids.deinit(allocator);
-    while (app.test_context.send_queue.?.pop()) |entry| {
+    while (app.test_context.send_queue.?.popFrom(0)) |entry| {
         defer entry.deinit();
         if (entry.conn_id != conn_id) continue;
         try expectResponseType(allocator, entry.data, MessageType.write_committed);
@@ -988,7 +988,7 @@ test "message: concurrent routed requests release response allocations" {
     try app.storage_engine.flushPendingWrites();
     var outcomes = std.ArrayListUnmanaged(Outcome).empty;
     defer outcomes.deinit(allocator);
-    while (app.test_context.send_queue.?.pop()) |entry| {
+    while (app.test_context.send_queue.?.popFrom(0)) |entry| {
         defer entry.deinit();
         try expectResponseType(allocator, entry.data, MessageType.write_committed);
         const parsed = try decodeResponse(allocator, entry.data);

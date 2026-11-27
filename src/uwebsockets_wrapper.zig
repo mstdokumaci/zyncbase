@@ -29,6 +29,8 @@ pub const WebSocketServer = struct {
     max_payload_length: usize,
     max_backpressure: usize,
     idle_timeout: u16,
+    /// Event loop that owns every socket accepted by this wrapper.
+    loop_id: u8 = 0,
     handlers: WebSocketHandlers = .{},
     user_data: ?*anyopaque = null,
     listen_socket: ?*c.struct_us_listen_socket_t = null,
@@ -38,10 +40,6 @@ pub const WebSocketServer = struct {
     post_handler: ?*const fn (?*anyopaque) void = null,
     post_handler_ctx: ?*anyopaque = null,
     verify_ticket_cb: ?*const fn (user_data: ?*anyopaque, ticket: []const u8, allocator: Allocator) anyerror!Session = null,
-    wakeup_pending_check: ?*const fn (?*anyopaque) bool = null,
-    wakeup_pending_check_ctx: ?*anyopaque = null,
-    /// Test-only counter for the listenCallback wakeup recheck; null in production.
-    test_wakeup_count: ?*std.atomic.Value(u64) = null,
     on_loop_ready: ?*const fn (?*anyopaque, ?*c.struct_us_loop_t) void = null,
     on_loop_ready_ctx: ?*anyopaque = null,
     loop_ready_fired: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -112,6 +110,7 @@ pub const WebSocketServer = struct {
         self.max_payload_length = config.max_payload_length;
         self.max_backpressure = config.max_backpressure;
         self.idle_timeout = config.idle_timeout;
+        self.loop_id = 0;
         self.handlers = .{};
         self.user_data = null;
         self.listen_socket = null;
@@ -120,9 +119,6 @@ pub const WebSocketServer = struct {
         self.is_closing = std.atomic.Value(bool).init(false);
         self.post_handler = null;
         self.post_handler_ctx = null;
-        self.wakeup_pending_check = null;
-        self.wakeup_pending_check_ctx = null;
-        self.test_wakeup_count = null;
         self.verify_ticket_cb = null;
         self.on_loop_ready = null;
         self.on_loop_ready_ctx = null;
@@ -245,6 +241,8 @@ pub const WebSocket = struct {
     ssl: bool,
     user_data: ?*anyopaque = null,
     session: ?Session = null,
+    /// Owning event loop, encoded into getConnId().
+    loop_id: u8 = 0,
     /// Test-only send observer (fn pointer + opaque ctx); zero-sized in
     /// production builds, where the invocation compiles out entirely.
     test_send_observer: if (builtin.is_test) ?*const fn (?*anyopaque, []const u8) void else void = if (builtin.is_test) null else {},
@@ -317,20 +315,6 @@ fn listenCallback(listen_socket: ?*c.struct_us_listen_socket_t, user_data: ?*any
         server.listen_socket = listen_socket;
         const loop = c.uws_get_loop();
         server.loop.store(loop, .release);
-
-        // A storage-engine wakeup or a shutdown request that raced ahead of
-        // loop publish left its flag set with no loop to wake. Recheck both
-        // now so the first post-handler iteration runs immediately instead of
-        // waiting for the next sweep timer tick.
-        if (server.wakeup_pending_check) |check| {
-            if (check(server.wakeup_pending_check_ctx)) {
-                c.us_wakeup_loop(loop);
-                if (server.test_wakeup_count) |count| {
-                    _ = count.fetchAdd(1, .monotonic);
-                }
-            }
-        }
-
         c.uws_loop_addPostHandler(loop, server, postHandler);
     }
 }
@@ -390,7 +374,7 @@ fn onOpen(ws: ?*c.uws_websocket_t, is_ssl: bool) void {
     const server = socket_data.server;
     const session = socket_data.session;
     socket_data.session = null;
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .session = session };
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = session };
     defer if (zig_ws.session) |*sess| sess.deinit(server.allocator);
     if (server.handlers.on_open) |handler| handler(&zig_ws, server.user_data);
 }
@@ -399,7 +383,7 @@ fn onMessage(ws: ?*c.uws_websocket_t, message: [*c]const u8, length: usize, opco
     if (ws == null or message == null) return;
     const socket_data = getSocketUserData(ws, is_ssl) orelse return;
     const server = socket_data.server;
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .session = socket_data.session };
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = socket_data.session };
     const msg_type: MessageType = if (opcode == c.UWS_OPCODE_TEXT) .text else .binary;
     if (server.handlers.on_message) |handler| handler(&zig_ws, message[0..length], msg_type, server.user_data);
 }
@@ -410,7 +394,7 @@ fn onClose(ws: ?*c.uws_websocket_t, code: c_int, message: [*c]const u8, length: 
     const server = socket_data.server;
     const session = socket_data.session;
     socket_data.session = null;
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .session = session };
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = session };
     defer if (zig_ws.session) |*sess| sess.deinit(server.allocator);
     const msg_slice = if (message != null) message[0..length] else "";
     if (server.handlers.on_close) |handler| handler(&zig_ws, code, msg_slice, server.user_data);

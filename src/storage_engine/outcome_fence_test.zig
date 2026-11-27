@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const msgpack = @import("../msgpack_utils.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const OutcomeFence = @import("outcome_fence.zig").OutcomeFence;
@@ -10,18 +10,18 @@ const testing = std.testing;
 
 const Harness = struct {
     ms: MemoryStrategy,
-    send_queue: send_queue_type,
+    send_queue: SendQueueType,
     notified: std.atomic.Value(u32),
 
     fn init(self: *Harness) !void {
         try self.ms.init();
         errdefer self.ms.deinit();
-        self.send_queue = try send_queue_type.init(self.ms.generalAllocator());
+        self.send_queue = try SendQueueType.init(self.ms.generalAllocator());
         self.notified = .init(0);
     }
 
     fn deinit(self: *Harness) void {
-        while (self.send_queue.pop()) |entry| entry.deinit();
+        while (self.send_queue.popFrom(0)) |entry| entry.deinit();
         self.send_queue.deinit();
         self.ms.deinit();
     }
@@ -38,7 +38,7 @@ const Harness = struct {
     /// Pops every queued outcome into `out` as its request id and releases it.
     fn drainIds(self: *Harness, out: []u64) !usize {
         var n: usize = 0;
-        while (self.send_queue.pop()) |entry| {
+        while (self.send_queue.popFrom(0)) |entry| {
             defer entry.deinit();
             var reader: std.Io.Reader = .fixed(entry.data);
             const outcome = try msgpack.decode(testing.allocator, &reader);
@@ -59,9 +59,9 @@ test "OutcomeFence: publishes in add order once the last reference drops" {
     defer h.deinit();
 
     const fence = try h.create();
-    fence.add(.{ .conn_id = 7, .msg_id = 3 }, null, null);
-    fence.add(.{ .conn_id = 7, .msg_id = 1 }, error.PermissionDenied, 0);
-    fence.add(.{ .conn_id = 7, .msg_id = 2 }, null, null);
+    fence.add(.{ .conn_id = 7, .loop_id = 0, .msg_id = 3 }, null, null);
+    fence.add(.{ .conn_id = 7, .loop_id = 0, .msg_id = 1 }, error.PermissionDenied, 0);
+    fence.add(.{ .conn_id = 7, .loop_id = 0, .msg_id = 2 }, null, null);
     fence.retain(); // two change jobs
     fence.retain();
 
@@ -85,7 +85,7 @@ test "OutcomeFence: concurrent releases publish exactly once" {
     const job_count = 8;
     for (0..100) |_| {
         const fence = try h.create();
-        fence.add(.{ .conn_id = 7, .msg_id = 1 }, null, null);
+        fence.add(.{ .conn_id = 7, .loop_id = 0, .msg_id = 1 }, null, null);
         for (0..job_count) |_| fence.retain();
 
         var threads: [job_count]std.Thread = undefined;

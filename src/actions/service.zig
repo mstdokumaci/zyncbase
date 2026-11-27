@@ -82,6 +82,9 @@ pub const ActionsService = struct {
     outbox: std.AutoHashMapUnmanaged(u64, StagedForwards) = .{},
     next_exec_id: u64 = 1,
     sweep_timer: ?*c.struct_us_timer_t = null,
+    /// Serializes access from the two reactors. The service is low-rate; all
+    /// external entry points take this lock at the call site.
+    mutex: std.Io.Mutex = .init,
 
     pub fn init(
         allocator: Allocator,
@@ -99,6 +102,12 @@ pub const ActionsService = struct {
 
     pub fn setConnectionManager(self: *ActionsService, connection_manager: *ConnectionManager) void {
         self.connection_manager = connection_manager;
+    }
+    pub fn lock(self: *ActionsService) void {
+        self.mutex.lockUncancelable(self.io);
+    }
+    pub fn unlock(self: *ActionsService) void {
+        self.mutex.unlock(self.io);
     }
 
     pub fn deinit(self: *ActionsService) void {
@@ -131,6 +140,8 @@ pub const ActionsService = struct {
     fn sweepTimerCallback(t: ?*c.struct_us_timer_t) callconv(.c) void {
         const timer = t orelse return;
         const self = uws_timer.extractPtr(ActionsService, timer);
+        self.lock();
+        defer self.unlock();
         self.sweepDeadlines();
     }
 
@@ -440,6 +451,14 @@ pub const ActionsService = struct {
             const pending = self.removePending(exec_id) orelse continue;
             self.sendError(pending.caller_conn_id, pending.req_id, wire_errors.getWireError(error.RequestSuperseded));
         }
+    }
+
+    /// Deliver frames already queued for the connection's reactor. Must be
+    /// called without this service's mutex held; used after invalidateScope so
+    /// the flushed forwards and superseded errors it queued precede the
+    /// scope-change response the handler sends.
+    pub fn drainOwningLoop(self: *ActionsService, conn_id: u64) void {
+        if (self.connection_manager) |cm| cm.drainOwningLoop(conn_id);
     }
 
     /// Re-evaluate every registration of a refreshed session. Registrations

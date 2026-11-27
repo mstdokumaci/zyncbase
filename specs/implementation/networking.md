@@ -62,7 +62,7 @@ TLS is provided by OpenSSL through usockets when configured. Config shape is own
 
 | Route | Response |
 |-------|----------|
-| `/health` | `200` with `{"status":"ok"}` while the event loop is responsive and the storage writer is alive; `503` with `{"status":"unhealthy"}` once the write engine has degraded (terminal, restart the process). |
+| `/health` | `200` with `{"status":"ok"}` while the owning reactor is responsive and the storage writer is alive; `503` with `{"status":"unhealthy"}` once the write engine has degraded (terminal, restart the process). |
 | `/stats` | `200` with JSON counters and `Cache-Control: no-store`: `uptime_seconds`, `connections`, `messages`, `errors`, `storage`. |
 
 Both routes are public by design: they carry no ticket check and expose only aggregate server diagnostics (counters and storage gauges) — never user data or schema. `messages_sent_total` counts each message inside a concatenated frame, not frames. A deployment that must keep load metadata private has to block `/stats` at its proxy.
@@ -148,7 +148,7 @@ uWebSockets treats `idleTimeout` as one total inbound-idle budget: it sends a na
 
 µSockets sweeps socket timeouts once per second at the end of the loop iteration, after that iteration's inbound frames have been dispatched. A timeout reset by a frame consumed in the same iteration — a Pong, for example — is deferred one tick at the cost of one extra second of slack, so the sweep never reaps a socket that just refreshed it. Expiry is aligned to sweep ticks, so a 2-second timeout closes an unresponsive connection roughly 1–2 seconds after its last inbound frame. Each sweep scans every socket, so sweep cost scales with connection count.
 
-The C bridge adds `uws_ws_end`, wrapping the vendored `WebSocket::end(code)`, and the Zig `WebSocket` wrapper exposes it. On the owning event loop, classified closes best-effort send `ServerDisconnect` and then call `end(code)` so the close frame carries the mapped code. Keep `uws_ws_close` for raw, unclassified transport closes.
+The C bridge adds `uws_ws_end`, wrapping the vendored `WebSocket::end(code)`, and the Zig `WebSocket` wrapper exposes it. On the owning reactor, classified closes best-effort send `ServerDisconnect` and then call `end(code)` so the close frame carries the mapped code. Keep `uws_ws_close` for raw, unclassified transport closes.
 
 ## Pinned Upgrade Rules
 
@@ -186,7 +186,7 @@ Local changes that must be re-applied after that copy:
 
 | Property | Value | Notes |
 |----------|-------|-------|
-| Subscription ID pre-alloc | 16 | Pre-allocated capacity to avoid heap allocs on event loop. |
+| Subscription ID pre-alloc | 16 | Pre-allocated capacity to avoid heap allocs on reactor. |
 
 ### MessagePack Parse Limits
 

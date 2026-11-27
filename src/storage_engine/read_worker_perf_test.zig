@@ -75,7 +75,7 @@ fn insertRow(
         var j = job;
         j.deinit(allocator);
     }
-    while (ctx.test_context.send_queue.?.pop()) |entry| entry.deinit();
+    while (ctx.test_context.send_queue.?.popFrom(0)) |entry| entry.deinit();
 }
 
 /// Construct a multi-column upsert WriteOp for the query_table (name, priority, active, tags).
@@ -148,7 +148,7 @@ fn insertQueryRows(
         var j = job;
         j.deinit(allocator);
     }
-    while (ctx.test_context.send_queue.?.pop()) |entry| entry.deinit();
+    while (ctx.test_context.send_queue.?.popFrom(0)) |entry| entry.deinit();
 }
 
 /// Return a ReadWorker from the pool's first worker (pool must be running).

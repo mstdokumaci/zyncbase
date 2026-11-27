@@ -31,7 +31,7 @@ test "SubscriptionEngine: concurrent subscribe and handleRecordChange" {
             var i: u32 = 0;
             while (i < sub_count) : (i += 1) {
                 const conn_id = start_id + i;
-                _ = engine_ptr.subscribe(1, 0, filter, conn_id, 1) catch @panic("subscribe failed");
+                _ = engine_ptr.subscribe(1, 0, filter, conn_id, 1, 0) catch @panic("subscribe failed");
             }
         }
     }.run;
@@ -118,7 +118,7 @@ test "SubscriptionEngine: concurrent unsubscribe with multi-group contention" {
             var i: u32 = 0;
             while (i < sub_count) : (i += 1) {
                 const conn_id = start_id + i;
-                _ = engine_ptr.subscribe(1, 0, filter, conn_id, 1) catch @panic("subscribe failed");
+                _ = engine_ptr.subscribe(1, 0, filter, conn_id, 1, 0) catch @panic("subscribe failed");
             }
         }
     }.run;

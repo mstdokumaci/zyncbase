@@ -91,7 +91,7 @@ pub const MessageHandler = struct {
         if (!isSecurityError(err)) return false;
         if (!try self.violation_tracker.recordViolation(conn.id)) return false;
         std.log.warn("Closing connection {} due to repeated security violations", .{conn.id});
-        conn.ws.close();
+        conn.close();
         return true;
     }
 
@@ -297,7 +297,11 @@ pub const MessageHandler = struct {
         const detached = conn.detachSubscriptionsLocked();
         conn.resetSessionLocked();
         self.unsubscribeDetached(conn, detached);
-        self.actions_service.removeAllForConnection(conn.id);
+        {
+            self.actions_service.lock();
+            defer self.actions_service.unlock();
+            self.actions_service.removeAllForConnection(conn.id);
+        }
 
         if (presence_ns != connection_mod.unset_namespace_id) {
             self.presence_service.removeAllForConnection(presence_ns, presence_user, conn.id);
@@ -314,7 +318,13 @@ pub const MessageHandler = struct {
         transferred = true;
         const scope_seq = conn.scope_seq;
         self.unsubscribeDetached(conn, detached);
-        self.actions_service.invalidateScope(conn.id, .store);
+        {
+            self.actions_service.lock();
+            defer self.actions_service.unlock();
+            self.actions_service.invalidateScope(conn.id, .store);
+        }
+        // Drain after releasing the mutex, before the caller sends the response.
+        self.actions_service.drainOwningLoop(conn.id);
         return scope_seq;
     }
 
@@ -343,6 +353,7 @@ pub const MessageHandler = struct {
     fn baseCtx(conn: *Connection) RequestContext {
         return .{
             .conn_id = conn.id,
+            .loop_id = conn.loop_id,
             .user_doc_id = conn.user_doc_id,
             .external_user_id = conn.getExternalUserId(),
             .session_claims = conn.getSessionClaimsPtr(),
@@ -419,6 +430,9 @@ pub const MessageHandler = struct {
 
         const scope_seq = try self.resetStoreScopeAndClearSubscriptions(conn, req.namespace);
         errdefer _ = conn.resetScopeIfSeq(scope_seq, false);
+        // The namespace change drains the queue, which can close this
+        // connection; skip the success response in that case.
+        if (!conn.isOpen()) return null;
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
             try authorization_evaluate.authorizeNamespace(arena_allocator, self.auth_config, req.namespace, scope.user_doc_id, external_user_id, conn.getSessionClaimsPtr(), false);
             if (conn.setScopeIfSeq(scope_seq, scope.namespace_id, scope.user_doc_id, false)) {
@@ -427,7 +441,7 @@ pub const MessageHandler = struct {
             return error.RequestSuperseded;
         }
 
-        try self.store_service.enqueueResolveScope(conn.id, msg_id, scope_seq, req.namespace, external_user_id, false);
+        try self.store_service.enqueueResolveScope(conn.id, msg_id, conn.loop_id, scope_seq, req.namespace, external_user_id, false);
         return null;
     }
 
@@ -570,6 +584,7 @@ pub const MessageHandler = struct {
             read_req.filter,
             conn.id,
             sub_id,
+            conn.loop_id,
         );
         errdefer self.subscription_engine.unsubscribe(conn.id, sub_id);
         try conn.addSubscription(sub_id);
@@ -643,6 +658,8 @@ pub const MessageHandler = struct {
         validated.claims = .{};
         validated.deinit(conn.allocator);
         conn.updateSessionClaims(claims, expires_at);
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         self.actions_service.reauthorizeRegistrations(try requireActionCtx(conn));
 
         return try wire_encode.encodeOkWithSession(arena_allocator, msg_id, conn.getSessionClaimsPtr());
@@ -666,6 +683,9 @@ pub const MessageHandler = struct {
         const external_user_id = try conn.dupeExternalUserId(arena_allocator);
         const scope_seq = try self.resetPresenceScopeAndClearSubscriptions(conn, req.namespace);
         errdefer _ = conn.resetScopeIfSeq(scope_seq, true);
+        // The namespace change drains the queue, which can close this
+        // connection; skip the success response in that case.
+        if (!conn.isOpen()) return null;
 
         if (try self.store_service.tryResolveScopeCached(req.namespace, external_user_id)) |scope| {
             try authorization_evaluate.authorizeNamespace(
@@ -683,7 +703,7 @@ pub const MessageHandler = struct {
             return error.RequestSuperseded;
         }
 
-        try self.store_service.enqueueResolveScope(conn.id, msg_id, scope_seq, req.namespace, external_user_id, true);
+        try self.store_service.enqueueResolveScope(conn.id, msg_id, conn.loop_id, scope_seq, req.namespace, external_user_id, true);
         return null;
     }
 
@@ -849,7 +869,13 @@ pub const MessageHandler = struct {
         if (old_ns != connection_mod.unset_namespace_id) {
             self.presence_service.removeAllForConnection(old_ns, old_user, conn.id);
         }
-        self.actions_service.invalidateScope(conn.id, .presence);
+        {
+            self.actions_service.lock();
+            defer self.actions_service.unlock();
+            self.actions_service.invalidateScope(conn.id, .presence);
+        }
+        // Drain after releasing the mutex, before the caller sends the response.
+        self.actions_service.drainOwningLoop(conn.id);
 
         return scope_seq;
     }
@@ -866,6 +892,8 @@ pub const MessageHandler = struct {
         const req = try wire_decode.extractActionCallFast(message, arena_allocator);
         const ctx = try requireActionCtx(conn);
 
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         const outcome = try self.actions_service.call(ctx, msg_id, req.action_id, &req.params, req.timeoutMs);
         return switch (outcome) {
             .accepted => try wire_encode.encodeSuccess(arena_allocator, msg_id),
@@ -888,6 +916,8 @@ pub const MessageHandler = struct {
             action_ids[i] = msgpack.extractPayloadUsize(item) orelse return error.InvalidPayload;
         }
 
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         try self.actions_service.register(try requireActionCtx(conn), action_ids);
         return try wire_encode.encodeSuccess(arena_allocator, msg_id);
     }
@@ -901,12 +931,15 @@ pub const MessageHandler = struct {
     ) !?[]const u8 {
         _ = msg_id;
         const req = try wire_decode.extractActionReplyFast(message, arena_allocator);
+        self.actions_service.lock();
+        defer self.actions_service.unlock();
         self.actions_service.resolveReply(conn.id, req.execId, req.ok, &req.payload);
         return null;
     }
 
     pub fn sendServerDisconnectAndClose(self: *MessageHandler, conn: *Connection, code: []const u8, msg: []const u8, close_code: u16) void {
-        defer conn.ws.end(close_code);
+        if (!conn.isOpen()) return;
+        defer conn.end(close_code);
         const disconnect_msg = wire_encode.encodeServerDisconnect(self.allocator, code, msg) catch return;
         defer self.allocator.free(disconnect_msg);
         if (conn.send(disconnect_msg)) {

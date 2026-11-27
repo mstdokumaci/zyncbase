@@ -6,7 +6,7 @@ const test_helpers = @import("test_helpers.zig");
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const MessageType = @import("../wire/message_type.zig").MessageType;
 const max_pending_group_bytes = @import("manager.zig").max_pending_group_bytes;
-const send_queue_type = @import("send_queue.zig").send_queue;
+const SendQueueType = @import("send_queue.zig").SendQueue;
 
 const testing = std.testing;
 const AppTestContext = helpers.AppTestContext;
@@ -313,7 +313,7 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
 
     // Local queue: the queue is a pointer-linked structure, so copies
     // would share nodes with the source — build one of our own.
-    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    var queue = try SendQueueType.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // Two entries for one connection — concatenated into a single frame:
@@ -323,12 +323,12 @@ test "ConnectionManager: drain sends one concatenated frame per connection" {
     const msg1 = try arena_alloc.dupe(u8, "first-message");
     const msg2 = try arena_alloc.dupe(u8, "second-message");
     handle.retain();
-    try queue.push(.{ .conn_id = conn_id, .data = msg1, .arena = handle });
+    try queue.push(0, .{ .conn_id = conn_id, .data = msg1, .arena = handle });
     handle.retain();
-    try queue.push(.{ .conn_id = conn_id, .data = msg2, .arena = handle });
+    try queue.push(0, .{ .conn_id = conn_id, .data = msg2, .arena = handle });
     handle.release();
 
-    app.connection_manager.drainSendQueue(&queue);
+    app.connection_manager.drainSendQueue(&queue, 0);
 
     // One ws.send for the whole group — entries are concatenated into a
     // single frame in queue order per connection per drain pass.
@@ -360,7 +360,7 @@ test "ConnectionManager: drain drops and closes a connection that exceeds the pe
     defer app.connection_manager.onClose(&ws_b, 1000, "");
     recorder_b.reset();
 
-    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    var queue = try SendQueueType.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // Entry payloads for the over-cap connection. Only .len is ever read on the
@@ -375,7 +375,7 @@ test "ConnectionManager: drain drops and closes a connection that exceeds the pe
     const handle_a = try app.memory_strategy.acquireArenaDeferred();
     for (0..entry_count) |_| {
         handle_a.retain();
-        try queue.push(.{ .conn_id = ws_a.getConnId(), .data = chunk, .arena = handle_a });
+        try queue.push(0, .{ .conn_id = ws_a.getConnId(), .data = chunk, .arena = handle_a });
     }
     handle_a.release(); // producer hold; the entries hold the rest
 
@@ -386,12 +386,12 @@ test "ConnectionManager: drain drops and closes a connection that exceeds the pe
     const msg1 = try alloc_b.dupe(u8, "first");
     const msg2 = try alloc_b.dupe(u8, "second");
     handle_b.retain();
-    try queue.push(.{ .conn_id = ws_b.getConnId(), .data = msg1, .arena = handle_b });
+    try queue.push(0, .{ .conn_id = ws_b.getConnId(), .data = msg1, .arena = handle_b });
     handle_b.retain();
-    try queue.push(.{ .conn_id = ws_b.getConnId(), .data = msg2, .arena = handle_b });
+    try queue.push(0, .{ .conn_id = ws_b.getConnId(), .data = msg2, .arena = handle_b });
     handle_b.release();
 
-    app.connection_manager.drainSendQueue(&queue);
+    app.connection_manager.drainSendQueue(&queue, 0);
 
     try testing.expect(!queue.hasItems());
 
@@ -427,7 +427,7 @@ test "ConnectionManager: drain delivers a lone entry larger than the pending byt
     defer app.connection_manager.onClose(&ws, 1000, "");
     recorder.reset();
 
-    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    var queue = try SendQueueType.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // A single message larger than the cap is a large snapshot, not a
@@ -438,10 +438,10 @@ test "ConnectionManager: drain delivers a lone entry larger than the pending byt
 
     const handle = try app.memory_strategy.acquireArenaDeferred();
     handle.retain();
-    try queue.push(.{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
+    try queue.push(0, .{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
     handle.release();
 
-    app.connection_manager.drainSendQueue(&queue);
+    app.connection_manager.drainSendQueue(&queue, 0);
 
     try testing.expect(!queue.hasItems());
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
@@ -463,7 +463,7 @@ test "ConnectionManager: drain closes a connection whose group mixes an oversize
     defer app.connection_manager.onClose(&ws, 1000, "");
     recorder.reset();
 
-    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    var queue = try SendQueueType.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // A subscription delta can land before its snapshot in the same pass, but an
@@ -476,12 +476,12 @@ test "ConnectionManager: drain closes a connection whose group mixes an oversize
     const handle = try app.memory_strategy.acquireArenaDeferred();
     const small = try handle.allocator().dupe(u8, "sm");
     handle.retain();
-    try queue.push(.{ .conn_id = ws.getConnId(), .data = small, .arena = handle });
+    try queue.push(0, .{ .conn_id = ws.getConnId(), .data = small, .arena = handle });
     handle.retain();
-    try queue.push(.{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
+    try queue.push(0, .{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
     handle.release();
 
-    app.connection_manager.drainSendQueue(&queue);
+    app.connection_manager.drainSendQueue(&queue, 0);
 
     try testing.expect(!queue.hasItems());
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
@@ -505,7 +505,7 @@ test "ConnectionManager: drain closes a connection with repeated oversized entri
     defer app.connection_manager.onClose(&ws, 1000, "");
     recorder.reset();
 
-    var queue = try send_queue_type.init(app.memory_strategy.generalAllocator());
+    var queue = try SendQueueType.init(app.memory_strategy.generalAllocator());
     defer queue.deinit();
 
     // Two oversized entries must not slip through the cap as a single-message
@@ -517,11 +517,11 @@ test "ConnectionManager: drain closes a connection with repeated oversized entri
     const handle = try app.memory_strategy.acquireArenaDeferred();
     for (0..2) |_| {
         handle.retain();
-        try queue.push(.{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
+        try queue.push(0, .{ .conn_id = ws.getConnId(), .data = payload, .arena = handle });
     }
     handle.release();
 
-    app.connection_manager.drainSendQueue(&queue);
+    app.connection_manager.drainSendQueue(&queue, 0);
 
     try testing.expect(!queue.hasItems());
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
@@ -548,11 +548,11 @@ test "ConnectionManager: token sweep expires JWT sessions but preserves anonymou
     app.connection_manager.token_grace_period_seconds = 30;
     session.token_expires_at = std.Io.Clock.real.now(std.testing.io).toSeconds();
     session.is_anonymous = true;
-    app.connection_manager.sweepExpiredTokens();
+    app.connection_manager.sweepExpiredTokens(0);
     try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
 
     session.is_anonymous = false;
-    app.connection_manager.sweepExpiredTokens();
+    app.connection_manager.sweepExpiredTokens(0);
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
     const notification = try helpers.parseResponse(std.heap.smp_allocator, recorder.bytes());
     defer if (notification.code) |code| std.heap.smp_allocator.free(code);
@@ -562,12 +562,12 @@ test "ConnectionManager: token sweep expires JWT sessions but preserves anonymou
     defer notification_map.free(std.heap.smp_allocator);
     try testing.expect((try notification_map.mapGet("id")) == null);
 
-    app.connection_manager.sweepExpiredTokens();
+    app.connection_manager.sweepExpiredTokens(0);
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
 
     app.connection_manager.token_grace_period_seconds = 0;
     recorder.reset();
-    app.connection_manager.sweepExpiredTokens();
+    app.connection_manager.sweepExpiredTokens(0);
     try testing.expectEqual(@as(u64, 1), recorder.send_count.load(.monotonic));
     const terminal = try helpers.parseResponse(std.heap.smp_allocator, recorder.bytes());
     defer if (terminal.code) |code| std.heap.smp_allocator.free(code);
@@ -645,4 +645,76 @@ test "ConnectionManager: generated IDs are unique under concurrent opens" {
 
     try testing.expectEqual(@as(usize, expected_count), seen.count());
     try testing.expectEqual(@as(usize, 0), connectionCount(&app));
+}
+
+test "ConnectionManager: sendToConnection queues on the owning loop" {
+    var app: AppTestContext = undefined;
+    try app.init(std.heap.smp_allocator, "conn-mgr-send-route", &.{});
+    defer app.deinit();
+
+    var sent_buf: [64]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&sent_buf);
+    var ws = createMockWebSocket(app.memory_strategy.generalAllocator());
+    ws.loop_id = 1;
+    ws.test_send_observer = helpers.sendRecorderObserver;
+    ws.test_send_observer_ctx = &recorder;
+    try app.connection_manager.onOpen(&ws);
+    defer app.connection_manager.onClose(&ws, 1000, "");
+    recorder.reset();
+
+    app.connection_manager.sendToConnection(ws.getConnId(), "hello");
+
+    // Nothing is sent inline, and the other loop's queue stays empty.
+    try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
+    try testing.expect(app.test_context.send_queue.?.popFrom(0) == null);
+
+    // No wake registry is wired in tests: a missing reactor must not crash a send.
+    const entry = app.test_context.send_queue.?.popFrom(1) orelse return error.TestExpectedValue;
+    defer entry.deinit();
+    try testing.expectEqual(ws.getConnId(), entry.conn_id);
+    try testing.expectEqualStrings("hello", entry.data);
+}
+
+test "ConnectionManager: token sweep only touches its own loop" {
+    var app: AppTestContext = undefined;
+    try app.init(std.heap.smp_allocator, "conn-mgr-sweep-shard", &.{});
+    defer app.deinit();
+
+    var buf0: [256]u8 = undefined;
+    var buf1: [256]u8 = undefined;
+    var recorder0 = helpers.SendRecorder.init(&buf0);
+    var recorder1 = helpers.SendRecorder.init(&buf1);
+    var ws0 = createMockWebSocket(app.memory_strategy.generalAllocator());
+    var ws1 = createMockWebSocket(app.memory_strategy.generalAllocator());
+    ws0.test_send_observer = helpers.sendRecorderObserver;
+    ws0.test_send_observer_ctx = &recorder0;
+    ws1.loop_id = 1;
+    ws1.test_send_observer = helpers.sendRecorderObserver;
+    ws1.test_send_observer_ctx = &recorder1;
+    try app.connection_manager.onOpen(&ws0);
+    defer app.connection_manager.onClose(&ws0, 1000, "");
+    try app.connection_manager.onOpen(&ws1);
+    defer app.connection_manager.onClose(&ws1, 1000, "");
+
+    const now = std.Io.Clock.real.now(std.testing.io).toSeconds();
+    const conn0 = try app.connection_manager.acquireConnection(ws0.getConnId());
+    defer app.releaseConnection(conn0);
+    (conn0.session orelse return error.MissingSession).token_expires_at = now;
+    const conn1 = try app.connection_manager.acquireConnection(ws1.getConnId());
+    defer app.releaseConnection(conn1);
+    (conn1.session orelse return error.MissingSession).token_expires_at = now;
+
+    recorder0.reset();
+    recorder1.reset();
+    app.connection_manager.token_grace_period_seconds = 0;
+    app.connection_manager.sweepExpiredTokens(1);
+
+    // Zero grace sends the expiry notification and the disconnect, both to the
+    // loop that owns the connection and never to the other one.
+    try testing.expectEqual(@as(u64, 0), recorder0.send_count.load(.monotonic));
+    try testing.expectEqual(@as(u64, 2), recorder1.send_count.load(.monotonic));
+
+    // The untouched shard expires on its own sweep.
+    app.connection_manager.sweepExpiredTokens(0);
+    try testing.expectEqual(@as(u64, 2), recorder0.send_count.load(.monotonic));
 }

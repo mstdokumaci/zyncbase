@@ -52,7 +52,7 @@ test "Subscription Consistency: write-before-subscribe is captured and delivered
     filter.predicate.conditions = conditions;
     defer filter.deinit(allocator);
 
-    _ = try sub_engine.subscribe(1, (ctx.schema.table("items") orelse return error.TestExpectedValue).index, filter, 42, 101);
+    _ = try sub_engine.subscribe(1, (ctx.schema.table("items") orelse return error.TestExpectedValue).index, filter, 42, 101, 0);
 
     // 4) Flush queued writes into DB + change queue.
     try engine.flushPendingWrites();
@@ -185,7 +185,7 @@ fn expectDeltasAgreeWithSnapshot(
 
     var sub_engine = SubscriptionEngine.init(testing.io, allocator);
     defer sub_engine.deinit();
-    try sub_engine.subscribe(1, items.index, filter.*, 42, 1);
+    try sub_engine.subscribe(1, items.index, filter.*, 42, 1, 0);
 
     for (stored) |record| {
         const matches = try sub_engine.handleRecordChange(.{

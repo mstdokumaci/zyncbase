@@ -3,7 +3,7 @@ const std = @import("std");
 const msgpack = @import("../msgpack_utils.zig");
 const typed = @import("../typed/doc_id.zig");
 const th = @import("test_helpers.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const MessageType = @import("../wire/message_type.zig").MessageType;
 const PresenceManager = @import("manager.zig").PresenceManager;
@@ -34,7 +34,7 @@ fn setupWorker(
     allocator: std.mem.Allocator,
     memory_strategy: *MemoryStrategy,
     presence_manager: *PresenceManager,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     notifier: *TestNotifier,
 ) !*PresenceWorker {
     return setupWorkerWithBatch(allocator, memory_strategy, presence_manager, send_queue, notifier, .{});
@@ -44,7 +44,7 @@ fn setupWorkerWithBatch(
     allocator: std.mem.Allocator,
     memory_strategy: *MemoryStrategy,
     presence_manager: *PresenceManager,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     notifier: *TestNotifier,
     batch: BatchConfig,
 ) !*PresenceWorker {
@@ -79,9 +79,9 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
-        while (send_queue.pop()) |entry| entry.deinit();
+        while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -96,9 +96,9 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     const namespace_id: i64 = 1;
 
     // Subscribe synchronously so the worker has subscribers to broadcast to
-    var snapshot_a = try presence_manager.onSubscribeUser(namespace_id, conn_a, sub_a);
+    var snapshot_a = try presence_manager.onSubscribeUser(namespace_id, conn_a, sub_a, 0);
     defer snapshot_a.deinit(allocator);
-    var snapshot_b = try presence_manager.onSubscribeUser(namespace_id, conn_b, sub_b);
+    var snapshot_b = try presence_manager.onSubscribeUser(namespace_id, conn_b, sub_b, 0);
     defer snapshot_b.deinit(allocator);
 
     const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier);
@@ -134,7 +134,7 @@ test "PresenceWorker: set_user op produces broadcast to send_queue" {
     // Drain both entries only after dispatch completed; decode each while its
     // arena retain is live.
     var routed: usize = 0;
-    while (send_queue.pop()) |entry| {
+    while (send_queue.popFrom(0)) |entry| {
         defer entry.deinit();
 
         var reader: std.Io.Reader = .fixed(entry.data);
@@ -182,9 +182,9 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
-        while (send_queue.pop()) |entry| entry.deinit();
+        while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -195,7 +195,7 @@ test "PresenceWorker: no ops enqueued does not push to send_queue" {
     const namespace_id: i64 = 1;
 
     // Add a subscriber but enqueue no ops
-    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
+    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id, 0);
     defer snapshot.deinit(allocator);
 
     const worker = try setupWorker(allocator, &memory_strategy, &presence_manager, &send_queue, &notifier);
@@ -230,9 +230,9 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
-        while (send_queue.pop()) |entry| entry.deinit();
+        while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -255,6 +255,7 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
         .op = .{ .subscribe_user = .{
             .namespace_id = namespace_id,
             .conn_id = conn_id,
+            .loop_id = 0,
             .sub_id = sub_id,
             .msg_id = msg_id,
         } },
@@ -268,9 +269,8 @@ test "PresenceWorker: subscribe_user op sends snapshot via send_queue" {
     try testing.expect(notifier.called.load(.monotonic) > 0);
 
     // Drain and release
-    if (send_queue.pop()) |entry| {
-        entry.deinit();
-    }
+    const entry = send_queue.popFrom(0) orelse return error.MissingResponse;
+    defer entry.deinit();
 }
 
 test "PresenceWorker: multiple ops batched into single flush" {
@@ -288,9 +288,9 @@ test "PresenceWorker: multiple ops batched into single flush" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
-        while (send_queue.pop()) |entry| entry.deinit();
+        while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -302,7 +302,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
     const user_id: typed.DocId = 42;
 
     // Subscribe synchronously
-    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
+    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id, 0);
     defer snapshot.deinit(allocator);
 
     const worker = try allocator.create(PresenceWorker);
@@ -345,7 +345,7 @@ test "PresenceWorker: multiple ops batched into single flush" {
     try notifier.completion.waitTimeout(testing.io, completion_timeout);
 
     var broadcast_count: usize = 0;
-    while (send_queue.pop()) |entry| {
+    while (send_queue.popFrom(0)) |entry| {
         defer entry.deinit();
         var reader: std.Io.Reader = .fixed(entry.data);
         const decoded = try msgpack.decode(allocator, &reader);
@@ -372,13 +372,13 @@ test "PresenceWorker: multiple ops batched into single flush" {
     });
     worker.stop();
 
-    const final_entry = send_queue.pop() orelse return error.MissingFinalBroadcast;
+    const final_entry = send_queue.popFrom(0) orelse return error.MissingFinalBroadcast;
     defer final_entry.deinit();
     var final_reader: std.Io.Reader = .fixed(final_entry.data);
     const final_decoded = try msgpack.decode(allocator, &final_reader);
     defer final_decoded.free(allocator);
     try testing.expectEqual(@as(f64, 5.0), final_decoded.arr[2].arr[0].arr[2].arr[1].float);
-    try testing.expect(send_queue.pop() == null);
+    try testing.expect(send_queue.popFrom(0) == null);
 }
 
 test "PresenceWorker: pending-update cap splits broadcasts" {
@@ -396,9 +396,9 @@ test "PresenceWorker: pending-update cap splits broadcasts" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
-        while (send_queue.pop()) |entry| entry.deinit();
+        while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -407,7 +407,7 @@ test "PresenceWorker: pending-update cap splits broadcasts" {
     const sub_id: u64 = 200;
     const namespace_id: i64 = 1;
 
-    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
+    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id, 0);
     defer snapshot.deinit(allocator);
 
     // Only the count cap and age window can flush; every op targets a distinct
@@ -452,7 +452,7 @@ test "PresenceWorker: pending-update cap splits broadcasts" {
 
     var broadcasts: [8]usize = undefined;
     var broadcast_count: usize = 0;
-    while (send_queue.pop()) |entry| {
+    while (send_queue.popFrom(0)) |entry| {
         defer entry.deinit();
         var reader: std.Io.Reader = .fixed(entry.data);
         const decoded = try msgpack.decode(allocator, &reader);
@@ -484,9 +484,9 @@ test "PresenceWorker: window absorbs ops that arrive across producer gaps" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
-        while (send_queue.pop()) |entry| entry.deinit();
+        while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -495,7 +495,7 @@ test "PresenceWorker: window absorbs ops that arrive across producer gaps" {
     const sub_id: u64 = 200;
     const namespace_id: i64 = 1;
 
-    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id);
+    var snapshot = try presence_manager.onSubscribeUser(namespace_id, conn_id, sub_id, 0);
     defer snapshot.deinit(allocator);
 
     // A generous window makes the 5 ms producer gaps land well inside it.
@@ -531,7 +531,7 @@ test "PresenceWorker: window absorbs ops that arrive across producer gaps" {
     try waitForNotifierCalls(&notifier, 1);
 
     var broadcast_count: usize = 0;
-    while (send_queue.pop()) |entry| {
+    while (send_queue.popFrom(0)) |entry| {
         defer entry.deinit();
         var reader: std.Io.Reader = .fixed(entry.data);
         const decoded = try msgpack.decode(allocator, &reader);
@@ -557,16 +557,16 @@ test "PresenceWorker: zero timeout flushes after every op" {
     try memory_strategy.init();
     defer memory_strategy.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
-        while (send_queue.pop()) |entry| entry.deinit();
+        while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
     }
 
     var notifier: TestNotifier = .{};
     const namespace_id: i64 = 1;
 
-    var snapshot = try presence_manager.onSubscribeUser(namespace_id, 100, 200);
+    var snapshot = try presence_manager.onSubscribeUser(namespace_id, 100, 200, 0);
     defer snapshot.deinit(allocator);
 
     const worker = try allocator.create(PresenceWorker);
@@ -606,7 +606,7 @@ test "PresenceWorker: zero timeout flushes after every op" {
     try waitForNotifierCalls(&notifier, 3);
 
     var broadcast_count: usize = 0;
-    while (send_queue.pop()) |entry| {
+    while (send_queue.popFrom(0)) |entry| {
         defer entry.deinit();
         var reader: std.Io.Reader = .fixed(entry.data);
         const decoded = try msgpack.decode(allocator, &reader);
@@ -632,9 +632,9 @@ test "PresenceWorker: dispatchBatches shares message buffer for same sub_id" {
     presence_manager.init(testing.io, allocator, user_fields, shared_fields);
     defer presence_manager.deinit();
 
-    var send_queue = try send_queue_type.init(allocator);
+    var send_queue = try SendQueueType.init(allocator);
     defer {
-        while (send_queue.pop()) |entry| entry.deinit();
+        while (send_queue.popFrom(0)) |entry| entry.deinit();
         send_queue.deinit();
     }
 
@@ -649,11 +649,11 @@ test "PresenceWorker: dispatchBatches shares message buffer for same sub_id" {
     const namespace_id: i64 = 1;
 
     // 3 subscribers: two share sub_id=1, one has sub_id=2
-    var s1 = try presence_manager.onSubscribeUser(namespace_id, 10, 1);
+    var s1 = try presence_manager.onSubscribeUser(namespace_id, 10, 1, 0);
     defer s1.deinit(allocator);
-    var s2 = try presence_manager.onSubscribeUser(namespace_id, 20, 1);
+    var s2 = try presence_manager.onSubscribeUser(namespace_id, 20, 1, 0);
     defer s2.deinit(allocator);
-    var s3 = try presence_manager.onSubscribeUser(namespace_id, 30, 2);
+    var s3 = try presence_manager.onSubscribeUser(namespace_id, 30, 2, 0);
     defer s3.deinit(allocator);
 
     const patch = try makePresencePatch(allocator, &.{
@@ -678,7 +678,7 @@ test "PresenceWorker: dispatchBatches shares message buffer for same sub_id" {
     var entry_2: ?SendQueueEntry = null;
     var entry_3: ?SendQueueEntry = null;
 
-    while (send_queue.pop()) |entry| {
+    while (send_queue.popFrom(0)) |entry| {
         switch (entry.conn_id) {
             10 => entry_1 = entry,
             20 => entry_2 = entry,

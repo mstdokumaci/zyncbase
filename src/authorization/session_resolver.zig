@@ -18,6 +18,7 @@ pub const SessionResolver = struct {
 
     pub const ResolutionOutcome = struct {
         conn_id: u64,
+        loop_id: u8,
         data: []const u8,
         arena: ArenaHandle,
     };
@@ -39,6 +40,7 @@ pub const SessionResolver = struct {
         self: *SessionResolver,
         conn_id: u64,
         msg_id: u64,
+        loop_id: u8,
         scope_seq: u64,
         namespace_id: i64,
         user_doc_id: DocId,
@@ -62,18 +64,18 @@ pub const SessionResolver = struct {
 
         if (resolution_err) |err| {
             const final_err = if (conn.isScopeSeqCurrentFor(scope_seq, is_presence)) err else error.RequestSuperseded;
-            return makeErrorOutcome(handle, conn_id, msg_id, final_err);
+            return makeErrorOutcome(handle, conn_id, loop_id, msg_id, final_err);
         }
 
         const pending_namespace = conn.dupePendingNamespaceIfSeq(handle.allocator(), scope_seq, is_presence) catch |err| {
-            return makeErrorOutcome(handle, conn_id, msg_id, err);
+            return makeErrorOutcome(handle, conn_id, loop_id, msg_id, err);
         } orelse {
-            return makeErrorOutcome(handle, conn_id, msg_id, error.RequestSuperseded);
+            return makeErrorOutcome(handle, conn_id, loop_id, msg_id, error.RequestSuperseded);
         };
 
         const external_user_id = conn.dupeExternalUserId(handle.allocator()) catch |err| {
             _ = conn.resetScopeIfSeq(scope_seq, is_presence);
-            return makeErrorOutcome(handle, conn_id, msg_id, err);
+            return makeErrorOutcome(handle, conn_id, loop_id, msg_id, err);
         };
 
         authorization_evaluate.authorizeNamespace(
@@ -86,11 +88,11 @@ pub const SessionResolver = struct {
             is_presence,
         ) catch |err| {
             _ = conn.resetScopeIfSeq(scope_seq, is_presence);
-            return makeErrorOutcome(handle, conn_id, msg_id, err);
+            return makeErrorOutcome(handle, conn_id, loop_id, msg_id, err);
         };
 
         if (!conn.setScopeIfSeq(scope_seq, namespace_id, user_doc_id, is_presence)) {
-            return makeErrorOutcome(handle, conn_id, msg_id, error.RequestSuperseded);
+            return makeErrorOutcome(handle, conn_id, loop_id, msg_id, error.RequestSuperseded);
         }
 
         const msg = wire_encode.encodeScopeSuccess(handle.allocator(), msg_id, user_doc_id) catch |encode_err| {
@@ -100,6 +102,7 @@ pub const SessionResolver = struct {
         handle.retain();
         return .{
             .conn_id = conn_id,
+            .loop_id = loop_id,
             .data = msg,
             .arena = handle,
         };
@@ -113,6 +116,7 @@ pub const SessionResolver = struct {
 fn makeErrorOutcome(
     handle: ArenaHandle,
     conn_id: u64,
+    loop_id: u8,
     msg_id: u64,
     err: anyerror,
 ) ?SessionResolver.ResolutionOutcome {
@@ -124,6 +128,7 @@ fn makeErrorOutcome(
     handle.retain();
     return .{
         .conn_id = conn_id,
+        .loop_id = loop_id,
         .data = msg,
         .arena = handle,
     };

@@ -15,7 +15,7 @@ ZyncBase acts as a **resource server**, not an identity provider. It validates i
 | `src/authentication/session.zig` | Runtime base session type shared by ticket exchange, connections, and authorization. |
 | `src/authentication/base64_utils.zig` | Base64url helpers used by JWT and ticket parsing. |
 | `src/server.zig` | Registers HTTP `/auth/ticket`, WebSocket upgrade ticket verification, token sweep, and JWKS refresh timers. |
-| `src/authorization/session_resolver.zig` | Completes background namespace/user resolution on the event loop. |
+| `src/authorization/session_resolver.zig` | Completes background namespace/user resolution on the owning reactor. |
 | `src/authorization/evaluate.zig` | Evaluates projected `$session` variables against auth rules. |
 
 ## Important Types

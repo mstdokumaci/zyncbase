@@ -82,7 +82,7 @@ fn runBatchSweep(
             var j = job;
             j.deinit(allocator);
         }
-        while (ctx.test_context.send_queue.?.pop()) |entry| entry.deinit();
+        while (ctx.test_context.send_queue.?.popFrom(0)) |entry| entry.deinit();
     }
 
     // Warmup assertion: confirm last doc-id is present in SQLite.
@@ -133,7 +133,7 @@ fn runBatchSweep(
         total_drain += @intCast(now_ns - last_ns);
 
         // Drain SendQueue (outcomes) to prevent arena leak.
-        while (ctx.test_context.send_queue.?.pop()) |entry| entry.deinit();
+        while (ctx.test_context.send_queue.?.popFrom(0)) |entry| entry.deinit();
     }
 
     const inv_iters: f64 = 1.0 / @as(f64, @floatFromInt(iterations));
@@ -238,7 +238,7 @@ test "WriteWorker: session resolutions commit in batches" {
     for (0..resolution_count) |i| {
         var user_buf: [32]u8 = undefined;
         const user = try std.fmt.bufPrint(&user_buf, "resolve-user-{d}", .{i});
-        try ctx.engine.enqueueSessionResolution(@intCast(i + 1), @intCast(i + 1), 0, "resolve-perf", user, false);
+        try ctx.engine.enqueueSessionResolution(@intCast(i + 1), @intCast(i + 1), 0, 0, "resolve-perf", user, false);
     }
     try ctx.engine.flushPendingWrites();
     const elapsed_ms = @as(f64, @floatFromInt(started.untilNow(std.testing.io, .awake).toNanoseconds())) / std.time.ns_per_ms;

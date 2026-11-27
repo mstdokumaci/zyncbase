@@ -16,7 +16,7 @@ const write_queue = @import("storage_engine/write_queue.zig");
 const write_worker_mod = @import("storage_engine/write_worker.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const SessionResolver = @import("authorization/session_resolver.zig").SessionResolver;
-const send_queue_type = @import("connection/send_queue.zig").send_queue;
+const SendQueueType = @import("connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("memory/strategy.zig").MemoryStrategy;
 const ChangeQueue = @import("subscription/change_queue.zig").ChangeQueue;
 const managedThread = @import("threading/managed_thread.zig").managedThread;
@@ -367,7 +367,7 @@ pub const StorageEngine = struct {
     /// Once called, the schema is locked and only data operations are permitted.
     pub fn start(
         self: *StorageEngine,
-        send_queue: *send_queue_type,
+        send_queue: *SendQueueType,
         change_queue: ?*ChangeQueue,
         session_resolver: ?*SessionResolver,
     ) !void {
@@ -545,6 +545,7 @@ pub const StorageEngine = struct {
         self: *StorageEngine,
         conn_id: u64,
         msg_id: u64,
+        loop_id: u8,
         scope_seq: u64,
         namespace: []const u8,
         external_user_id: []const u8,
@@ -560,6 +561,7 @@ pub const StorageEngine = struct {
         const op = WriteOp{
             .resolve_session = .{
                 .conn_id = conn_id,
+                .loop_id = loop_id,
                 .msg_id = msg_id,
                 .scope_seq = scope_seq,
                 .namespace = namespace_owned,
