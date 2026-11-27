@@ -18,7 +18,8 @@ export const COUNTRY_CHUNK_HEIGHT = 25;
 export const COUNTRY_COLUMNS = WIDTH / COUNTRY_CHUNK_WIDTH;
 export const COUNTRY_ROWS = HEIGHT / COUNTRY_CHUNK_HEIGHT;
 export const COUNTRY_CHUNK_CELLS = COUNTRY_CHUNK_WIDTH * COUNTRY_CHUNK_HEIGHT;
-// Run-length pairs (count 1..255, color index): worst case every cell flips.
+// RLE tokens: a single cell is one byte (0x80 | index), longer runs are a
+// count (2..127) plus index. Worst case every cell flips to its own token.
 export const COUNTRY_COLOR_INDEXES_MAX = COUNTRY_CHUNK_CELLS * 2;
 // User chunks: player coordinates on a 10x10 grid of 200x100-cell chunks. A
 // movement only rewrites its chunk's row, so the grid is coarse on purpose.
@@ -234,7 +235,8 @@ export const WATER_COUNTRY_CHUNKS = (() => {
 	return water;
 })();
 
-/** RLE-encode a chunk's palette codes as (count 1..255, index) pairs. */
+/** RLE-encode a chunk's palette codes. A single cell is one byte
+ * (`0x80 | index`); longer runs are a count (2..127) followed by the index. */
 export function encodeColorIndexes(codes: Uint8Array) {
 	const encoded = new Uint8Array(codes.length * 2);
 	let out = 0;
@@ -242,10 +244,13 @@ export function encodeColorIndexes(codes: Uint8Array) {
 	while (i < codes.length) {
 		const index = codes[i];
 		let run = 1;
-		while (run < 255 && i + run < codes.length && codes[i + run] === index)
+		while (run < 127 && i + run < codes.length && codes[i + run] === index)
 			run++;
-		encoded[out++] = run;
-		encoded[out++] = index;
+		if (run === 1) encoded[out++] = 0x80 | index;
+		else {
+			encoded[out++] = run;
+			encoded[out++] = index;
+		}
 		i += run;
 	}
 	return encoded.slice(0, out);
@@ -321,21 +326,23 @@ export function movementPaints(
 
 /** Decode an RLE color-index chunk; rejects any stream that is not exact. */
 export function readColorIndexes(bytes: Uint8Array) {
-	if (bytes.length % 2 !== 0) throw new Error("Invalid chunk size");
 	const codes = new Uint8Array(COUNTRY_CHUNK_CELLS);
 	let out = 0;
-	for (let i = 0; i < bytes.length; i += 2) {
-		const run = bytes[i];
-		if (run === 0) throw new Error("Invalid chunk size");
-		const code = bytes[i + 1];
+	for (let i = 0; i < bytes.length; ) {
+		const token = bytes[i++];
+		if (token >= 0x80) {
+			codes[out++] = token & 0x7f;
+			continue;
+		}
+		const run = token;
+		if (run === 0 || i >= bytes.length) throw new Error("Invalid chunk size");
+		const code = bytes[i++];
+		if (code >= 0x80) throw new Error("Invalid chunk size");
 		// Battlefield chunks carry many single-cell runs; a fill() call per run
 		// costs more than the write itself there. Overflowing writes clamp and
 		// the exact-length check below rejects the stream.
-		if (run === 1) codes[out++] = code;
-		else {
-			codes.fill(code, out, out + run);
-			out += run;
-		}
+		codes.fill(code, out, out + run);
+		out += run;
 	}
 	if (out !== codes.length) throw new Error("Invalid chunk size");
 	return codes;

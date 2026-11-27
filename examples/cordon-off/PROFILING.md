@@ -1,6 +1,8 @@
 # Cordon Off profiling
 
-**Current state (2026-11-22):** Bun 1.4.4, macOS x86_64, Intel i9-9880H. Baseline `4ca71ba`. Re-baseline at the start of every session: numbers here are snapshots, and the 2026-10-18 baseline `cd67280` is not in this history.
+**Current state (2026-11-27):** Bun 1.4.3, Linux x86_64, AMD Ryzen 5 3600; last A/B baseline `bb5149a`. Numbers in this file are session snapshots; re-baseline at the start of every session and do not compare across machines.
+
+**Latest measured state:** local 0.15 ms/tick (simulation 0.096, serialization 0.057); 512/1,024 live farm rx 37.3/94.9 MB/s, ack p95 20.4/99.1 ms, row p95 65.4/123.8 ms; country-chunk payload −24.3% on the live 1,024 snapshot. The 1,024 stage is peer-farm-bound (9.9/12 threads), so its server latency is not a clean server measurement.
 
 ## Iteration loop
 
@@ -82,7 +84,7 @@ bun examples/cordon-off/profile.ts --publish --unpaced --chunk-interval 3 --mode
 bun examples/cordon-off/profile-browser.ts --players 512,1024 --seconds 30 --countries 32 --port 19183 --output test-artifacts/cordon-off-profile/browser-run
 ```
 
-This starts the real server, an observer Chromium page, and SDK peer workers. Use a direct interval-1 versus interval-3 A/B for coalescing changes. `--profile` records the observer page; `--server-profile` records the game server. The 1,024 stage measures the peer farm when it nears CPU saturation.
+This starts the real server, an observer Chromium page, and SDK peer workers. Use a direct interval-1 versus interval-3 A/B for coalescing changes. `--profile` records the observer page; `--server-profile` records the game server. The 1,024 stage measures the peer farm when it nears CPU saturation. Pin `GAME_ROUND_MS` (for example `86400000`) for A/B runs: the default one-hour boundary lands on the top of the hour and can archive/restart the world mid-stage.
 
 For the live path, `server.json` has tick/tickIntervals/waits/commits and per-second process CPU; `results.json` has per-stage driver CPU/rx and before/after CPU for the game server and ZyncBase. For native stacks, run `sample <zyncbase-pid> 10 -file <out>` during the measured stage; SQLite and socket sends are distinguishable. The farm's worker threads are not covered by `--cpu-prof`; add counters when that is the question.
 
@@ -107,7 +109,7 @@ For the live path, `server.json` has tick/tickIntervals/waits/commits and per-se
 
 1. All movers paint first; countries resolve enclosures once per tick in first-change order, so a closure breached later in the same tick stays open. Water is traversable background.
 2. The gate uses the straight/diagonal exit proof plus an open-run count. Unresolved candidates share a 16,384-cell local flood budget; a run-length eight-connected fallback scans the country bounds. Bounds only grow.
-3. Country chunks publish every 3 ticks for reconciliation; clients predict one-cell movement paints from confirmed user rows. Enclosure captures of at least 100 cells force an immediate flush. User chunks and moves remain per tick.
+3. Country chunks publish every 3 ticks for reconciliation; single-cell runs are one byte and longer runs are a count plus palette code. Clients predict one-cell movement paints from confirmed user rows. Enclosure captures of at least 100 cells force an immediate flush. User chunks and moves remain per tick.
 
 ## Change log
 
@@ -130,3 +132,4 @@ One line per iteration; detailed tables and reproduction notes are in this file'
 - **2026-10-17** — Fresh profile identified bot patch reservation Set allocations and lookups, dead areaScratch population during gain checks, in-loop step direction branching in scoreCells, unhoisted owners property loads in encodeChunk, and chunk coordinate math as bottlenecks: simulation −38.2% compact bots, −19.6% fragmented bots, −2.3% scripted fragmented; serialization −14.1% compact bots; p99 latency −51.6% compact bots (1.24 → 0.60 ms), −29.5% fragmented bots (1.05 → 0.74 ms); all checksums match deterministically. Baseline `e6b4196`.
 - **2026-10-18** — Profiled simulation, publish/database, and browser/peers; kept bot candidate reordering (simulation −13.2%/−14.5% on bot workloads), enclosure flood inlining (−10.2%/−11.7%/−5.3%), and 3-tick country-chunk coalescing with client movement-paint prediction and a 100-cell urgent-capture flush (country-chunk writes −20–32%, bytes −18–33%; 1,024-peer ack p95 152.9→140.5 ms, own-row p95 197.7→185.9 ms); rejected the chunk-row arena. Baseline `1393eff`; candidate `cd67280`.
 - **2026-11-22** — Attribution pass: phase-split `bun --cpu-prof` profiles plus live native sampling; kept the roster fan-out reduction (chunk crossings no longer publish a `users` row; farm rx −12.6%, farm CPU −9.8%, ZyncBase CPU −6.7% at 512; checksums match) and rejected one-drain-per-fenced-transaction (no CPU win, ack regression). Baseline `4ca71ba`.
+- **2026-11-27** — Fresh attribution found local total at 0.15 ms/tick (~0.3% of a 20 Hz core; countryChunk 0.039) and the 1,024 live stage saturating the peer farm (9.9/12 threads; server 0.13 Bun + 0.73 DB cores), which inflates 1,024 commit p95 to 65 ms. Kept the one-byte single-cell country-chunk RLE token (46.5% of live runs are length 1; payload −24.3% on a live 1,024 snapshot, −5% on the long-run local fixture): three live pairs measured farm rx −17.4% at 512 and −21.7% at 1,024, observer rx −19.4%/−8.6%, ack p95 −9.0%/−9.7%, row p95 −0.3%/−3.3%, fps flat, zero errors; local checksums match. Baseline `bb5149a`.

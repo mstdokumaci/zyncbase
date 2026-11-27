@@ -226,23 +226,26 @@ function benchDecodeVariants() {
 	const decodeManual = (encoded: Uint8Array) => {
 		const codes = new Uint8Array(50 * 25);
 		let out = 0;
-		for (let i = 0; i < encoded.length; i += 2) {
-			const run = encoded[i];
-			const code = encoded[i + 1];
-			for (let k = 0; k < run; k++) codes[out++] = code;
+		for (let i = 0; i < encoded.length; ) {
+			const token = encoded[i++];
+			if (token >= 0x80) codes[out++] = token & 0x7f;
+			else {
+				const code = encoded[i++];
+				for (let k = 0; k < token; k++) codes[out++] = code;
+			}
 		}
 		return codes;
 	};
 	const decodeFastPath = (encoded: Uint8Array) => {
 		const codes = new Uint8Array(50 * 25);
 		let out = 0;
-		for (let i = 0; i < encoded.length; i += 2) {
-			const run = encoded[i];
-			const code = encoded[i + 1];
-			if (run === 1) codes[out++] = code;
+		for (let i = 0; i < encoded.length; ) {
+			const token = encoded[i++];
+			if (token >= 0x80) codes[out++] = token & 0x7f;
 			else {
-				codes.fill(code, out, out + run);
-				out += run;
+				const code = encoded[i++];
+				codes.fill(code, out, out + token);
+				out += token;
 			}
 		}
 		return codes;

@@ -9,6 +9,8 @@ zig-pkg
 test-artifacts/
 node_modules/
 data/
+benchmark/corpus/
+benchmark/artifacts/
 sdk/typescript/dist
 examples/cordon-off/dist/
 examples/quorum/dist/

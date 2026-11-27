@@ -1514,6 +1514,8 @@ function spawnWorker(port: number, processIndex: number, jwtSecret: string) {
 	};
 
 	const workerCommand = [process.execPath];
+	const capturePreload = process.env.ZYNCBASE_COMBO_CAPTURE_PRELOAD;
+	if (capturePreload) workerCommand.push("--preload", capturePreload);
 	const profileDir = process.env.ZYNCBASE_COMBO_PROFILE_DIR;
 	if (profileDir) {
 		workerCommand.push(

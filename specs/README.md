@@ -46,11 +46,11 @@ Technical specs for the server core and internal systems.
 
 ### Phase 3: Query & Presence (Complete)
 **Goal**: Filtering and User Awareness
-- [ ] Query parser & SQLite executor
-- [ ] Standard operators (`eq`, `in`, `gt`/`lt`, `startsWith`)
-- [ ] Real-time query subscriptions
-- [ ] Presence.set() / Presence.subscribe()
-- [ ] Ephemeral in-memory storage
+- [x] Query parser & SQLite executor
+- [x] Standard operators (`eq`, `in`, `gt`/`lt`, `startsWith`)
+- [x] Real-time query subscriptions
+- [x] Presence.set() / Presence.subscribe()
+- [x] Ephemeral in-memory storage
 
 ### Phase 4: Production Hardening (In-Progress)
 **Goal**: Production Stability
