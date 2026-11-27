@@ -40,8 +40,6 @@ const ViolationTracker = connection_violations.ConnectionViolationTracker;
 pub const TableDef = schema_helpers.TableDef;
 const Schema = schema_types.Schema;
 
-/// Shared atomic counter for unique connection IDs in tests
-var next_mock_ws_id = std.atomic.Value(u64).init(1);
 var next_test_resolution_id = std.atomic.Value(u64).init(@as(u64, 1) << 62);
 
 pub const test_external_user_id = "test-client";
@@ -85,7 +83,6 @@ pub fn createMockWebSocketWithExternalId(allocator: Allocator, external_id: []co
     return WebSocket{
         .ws = null,
         .ssl = false,
-        .user_data = @ptrFromInt(next_mock_ws_id.fetchAdd(1, .monotonic)),
         .session = Session{
             .external_id = allocator.dupe(u8, external_id) catch @panic("OOM creating mock WebSocket"),
             .is_anonymous = false,

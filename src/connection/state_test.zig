@@ -21,10 +21,10 @@ test "connection: state deallocation on close" {
 
         const gpa = app.memory_strategy.generalAllocator();
         var dummy_ws = createMockWebSocket(gpa);
-        const conn_id = dummy_ws.getConnId();
 
         // onOpen handles acquisition, init, and adding to map
         try app.connection_manager.onOpen(&dummy_ws);
+        const conn_id = dummy_ws.getConnId();
 
         // Verify connection is in manager
         const retrieved = try app.connection_manager.acquireConnection(conn_id);
@@ -73,8 +73,8 @@ test "connection: state deallocation on close" {
 
         const gpa = app.memory_strategy.generalAllocator();
         var dummy_ws = createMockWebSocket(gpa);
-        const conn_id = dummy_ws.getConnId();
         try app.connection_manager.onOpen(&dummy_ws);
+        const conn_id = dummy_ws.getConnId();
 
         const state = try app.connection_manager.acquireConnection(conn_id);
         defer if (state.release()) app.releaseConnection(state);
@@ -127,8 +127,8 @@ test "connection: state deallocation on close" {
         var iter: usize = 0;
         while (iter < iterations) : (iter += 1) {
             var dummy_ws = createMockWebSocket(gpa);
-            const conn_id = dummy_ws.getConnId();
             try app.connection_manager.onOpen(&dummy_ws);
+            const conn_id = dummy_ws.getConnId();
 
             const state = try app.connection_manager.acquireConnection(conn_id);
             defer if (state.release()) app.releaseConnection(state);
@@ -155,9 +155,8 @@ test "connection: state deallocation on close" {
                 var i: u64 = 0;
                 while (i < count) : (i += 1) {
                     var dummy_ws = createMockWebSocket(alloc);
-                    const conn_id = dummy_ws.getConnId();
-
                     ctx.connection_manager.onOpen(&dummy_ws) catch unreachable; // zwanzig-disable-line: swallowed-error
+                    const conn_id = dummy_ws.getConnId();
 
                     const state = ctx.connection_manager.acquireConnection(conn_id) catch unreachable; // zwanzig-disable-line: swallowed-error
                     state.subscription_ids.append(state.allocator, conn_id * 100) catch unreachable; // zwanzig-disable-line: swallowed-error
@@ -240,8 +239,8 @@ test "connection: state deallocation edge cases" {
 
         const gpa = app.memory_strategy.generalAllocator();
         var dummy_ws = createMockWebSocket(gpa);
-        const conn_id = dummy_ws.getConnId();
         try app.connection_manager.onOpen(&dummy_ws);
+        const conn_id = dummy_ws.getConnId();
         const state = try app.connection_manager.acquireConnection(conn_id);
         defer if (state.release()) app.releaseConnection(state);
 

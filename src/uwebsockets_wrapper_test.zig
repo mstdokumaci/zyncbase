@@ -632,3 +632,11 @@ fn testOnCloseProperty(ws: *WebSocket, code: i32, message: []const u8, user_data
         ctx.received_user_data = data;
     }
 }
+
+test "ws: setConnId persists through open handler store" {
+    var stored: u64 = 0;
+    var ws = WebSocket{ .ws = null, .ssl = false, .conn_id_store = &stored };
+    ws.setConnId(42);
+    try testing.expectEqual(@as(u64, 42), ws.getConnId());
+    try testing.expectEqual(@as(u64, 42), stored);
+}

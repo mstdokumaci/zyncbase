@@ -74,6 +74,9 @@ pub const ConnectionManager = struct {
     /// Map of connection IDs to Connection objects
     map: std.AutoHashMapUnmanaged(u64, *Connection),
 
+    /// Source of process-unique connection ids; 0 means unassigned.
+    next_conn_id: std.atomic.Value(u64) = .init(1),
+
     /// Mutex for protecting the map during concurrent access
     mutex: std.Io.Mutex,
 
@@ -184,9 +187,10 @@ pub const ConnectionManager = struct {
     }
 
     pub fn onOpen(self: *ConnectionManager, ws: *WebSocket) !void {
-        const conn_id = ws.getConnId();
-
-        self.message_handler.violation_tracker.clearViolations(conn_id);
+        // Assigned before anything else: rejected opens burn an id, and onClose
+        // reads it back. Never reused, so a stale queued delivery cannot match.
+        const conn_id = self.next_conn_id.fetchAdd(1, .monotonic);
+        ws.setConnId(conn_id);
 
         var sess = ws.takeSession() orelse {
             std.log.warn("Rejecting connection {}: missing session", .{conn_id});
@@ -219,7 +223,7 @@ pub const ConnectionManager = struct {
             }
         };
 
-        conn.activate(self.io, ws.getConnId(), ws.*);
+        conn.activate(self.io, conn_id, ws.*);
         conn.setSession(sess);
         sess_transferred = true;
 

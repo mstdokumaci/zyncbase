@@ -50,7 +50,6 @@ test "ConnectionManager - onOpen rejects missing external identity" {
     var dummy_ws = WebSocket{
         .ws = null,
         .ssl = false,
-        .user_data = @ptrFromInt(999),
         .session = null,
     };
     try testing.expectError(error.MissingSession, app.connection_manager.onOpen(&dummy_ws));
@@ -64,11 +63,12 @@ test "ConnectionManager - onClose clears violation state" {
     defer app.deinit();
 
     var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
-    const conn_id = dummy_ws.getConnId();
+    var conn_id: u64 = 0;
 
     {
         const sc = try app.openScopedConnection(&dummy_ws);
         defer sc.deinit();
+        conn_id = dummy_ws.getConnId();
 
         _ = try app.violation_tracker.recordViolation(conn_id);
         try testing.expectEqual(@as(u32, 1), test_helpers.getViolationCount(&app.violation_tracker, conn_id));
@@ -77,34 +77,36 @@ test "ConnectionManager - onClose clears violation state" {
     try testing.expectEqual(@as(u32, 0), test_helpers.getViolationCount(&app.violation_tracker, conn_id));
 }
 
-test "ConnectionManager - onOpen clears stale violation state" {
-    const allocator = std.heap.smp_allocator;
+test "ConnectionManager: a reused socket never receives a delivery queued for its predecessor" {
     var app: AppTestContext = undefined;
-    try app.init(allocator, "conn-mgr-stale-violations", &.{});
+    try app.init(std.heap.smp_allocator, "conn-mgr-id-reuse", &.{});
     defer app.deinit();
+    const gpa = app.memory_strategy.generalAllocator();
+    const send_queue = if (app.test_context.send_queue) |*sq| sq else return error.TestExpectedValue;
 
-    {
-        var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
-        const conn_id = dummy_ws.getConnId();
+    var ws_a = createMockWebSocket(gpa);
+    // A reused socket starts from the same pre-open state; only the session is its own.
+    var ws_b = createMockWebSocket(gpa);
+    const session_b = ws_b.session;
+    ws_b = ws_a;
+    ws_b.session = session_b;
 
-        {
-            const sc = try app.openScopedConnection(&dummy_ws);
-            defer sc.deinit();
-        }
+    try app.connection_manager.onOpen(&ws_a);
+    const id_a = ws_a.getConnId();
+    app.connection_manager.sendToConnection(id_a, "for-a");
+    app.connection_manager.onClose(&ws_a, 1000, "");
 
-        _ = try app.violation_tracker.recordViolation(conn_id);
-        try testing.expectEqual(@as(u32, 1), test_helpers.getViolationCount(&app.violation_tracker, conn_id));
-    }
+    var sent_buf: [256]u8 = undefined;
+    var recorder = helpers.SendRecorder.init(&sent_buf);
+    ws_b.test_send_observer = helpers.sendRecorderObserver;
+    ws_b.test_send_observer_ctx = &recorder;
+    try app.connection_manager.onOpen(&ws_b);
+    defer app.connection_manager.onClose(&ws_b, 1000, "");
+    recorder.reset(); // schema sync
 
-    {
-        var dummy_ws = createMockWebSocket(app.memory_strategy.generalAllocator());
-        const conn_id = dummy_ws.getConnId();
-
-        const sc = try app.openScopedConnection(&dummy_ws);
-        defer sc.deinit();
-
-        try testing.expectEqual(@as(u32, 0), test_helpers.getViolationCount(&app.violation_tracker, conn_id));
-    }
+    app.connection_manager.drainSendQueue(send_queue, ws_a.loop_id);
+    try testing.expectEqual(@as(u64, 0), recorder.send_count.load(.monotonic));
+    try testing.expect(ws_b.getConnId() != id_a);
 }
 
 test "ConnectionManager - max connections" {

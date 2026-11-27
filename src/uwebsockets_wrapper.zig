@@ -15,6 +15,8 @@ const Session = authentication_session.Session;
 const SocketUserData = struct {
     server: *WebSocketServer,
     session: ?Session,
+    /// Assigned by the open handler; 0 until then.
+    conn_id: u64 = 0,
 };
 
 /// WebSocket server wrapper using ZyncBase's uWebSockets C bridge.
@@ -239,9 +241,13 @@ pub const SendStatus = enum(c_uint) {
 pub const WebSocket = struct {
     ws: ?*c.uws_websocket_t,
     ssl: bool,
-    user_data: ?*anyopaque = null,
     session: ?Session = null,
-    /// Owning event loop, encoded into getConnId().
+    /// Process-unique id assigned by ConnectionManager.onOpen; 0 until then.
+    conn_id: u64 = 0,
+    /// Backing store for on_open, where a handler may close the socket
+    /// synchronously and destroy socket_data before on_open returns.
+    conn_id_store: ?*u64 = null,
+    /// Owning event loop.
     loop_id: u8 = 0,
     /// Test-only send observer (fn pointer + opaque ctx); zero-sized in
     /// production builds, where the invocation compiles out entirely.
@@ -286,14 +292,15 @@ pub const WebSocket = struct {
         return sess;
     }
 
-    /// Returns a unique identifier for the connection.
-    /// For real WebSockets, this is the memory address of the C object.
-    /// For mock WebSockets, this is the value stored in user_data.
+    /// Process-unique connection id. Never derived from the socket address:
+    /// uWS reuses freed socket memory, and queued deliveries are keyed by id.
     pub fn getConnId(self: WebSocket) u64 {
-        if (self.ws) |ws_ptr| {
-            return @intFromPtr(ws_ptr);
-        }
-        return @as(u64, @intFromPtr(self.user_data));
+        return self.conn_id;
+    }
+
+    pub fn setConnId(self: *WebSocket, id: u64) void {
+        self.conn_id = id;
+        if (self.conn_id_store) |store| store.* = id;
     }
 };
 
@@ -374,7 +381,7 @@ fn onOpen(ws: ?*c.uws_websocket_t, is_ssl: bool) void {
     const server = socket_data.server;
     const session = socket_data.session;
     socket_data.session = null;
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = session };
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = session, .conn_id_store = &socket_data.conn_id };
     defer if (zig_ws.session) |*sess| sess.deinit(server.allocator);
     if (server.handlers.on_open) |handler| handler(&zig_ws, server.user_data);
 }
@@ -383,7 +390,7 @@ fn onMessage(ws: ?*c.uws_websocket_t, message: [*c]const u8, length: usize, opco
     if (ws == null or message == null) return;
     const socket_data = getSocketUserData(ws, is_ssl) orelse return;
     const server = socket_data.server;
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = socket_data.session };
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = socket_data.session, .conn_id = socket_data.conn_id };
     const msg_type: MessageType = if (opcode == c.UWS_OPCODE_TEXT) .text else .binary;
     if (server.handlers.on_message) |handler| handler(&zig_ws, message[0..length], msg_type, server.user_data);
 }
@@ -394,7 +401,7 @@ fn onClose(ws: ?*c.uws_websocket_t, code: c_int, message: [*c]const u8, length: 
     const server = socket_data.server;
     const session = socket_data.session;
     socket_data.session = null;
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = session };
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = session, .conn_id = socket_data.conn_id };
     defer if (zig_ws.session) |*sess| sess.deinit(server.allocator);
     const msg_slice = if (message != null) message[0..length] else "";
     if (server.handlers.on_close) |handler| handler(&zig_ws, code, msg_slice, server.user_data);
