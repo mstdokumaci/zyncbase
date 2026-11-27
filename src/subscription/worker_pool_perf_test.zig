@@ -211,11 +211,13 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         .{ avg_a, avg_b, avg_c, avg_d, avg_total },
     );
 
-    const target_a: f64 = if (is_tsan) 0.7 else if (is_debug) 0.7 else 0.15;
-    const target_b: f64 = if (is_tsan) 0.01 else if (is_debug) 0.02 else 0.01;
-    const target_c: f64 = if (is_tsan) 4.0 else if (is_debug) 4.0 else 0.6;
-    const target_d: f64 = if (is_tsan) 1.0 else if (is_debug) 1.2 else 0.2;
-    const target_total: f64 = if (is_tsan) 6.0 else if (is_debug) 6.0 else 1.1;
+    // 3x local median (CI variance budget), release bucket sized for ReleaseSafe;
+    // 0.01 ms floor where the stage is below timer noise.
+    const target_a: f64 = if (is_tsan) 1.6 else if (is_debug) 1.8 else 0.12;
+    const target_b: f64 = 0.01;
+    const target_c: f64 = if (is_tsan) 0.54 else if (is_debug) 0.54 else 0.21;
+    const target_d: f64 = 0.01;
+    const target_total: f64 = if (is_tsan) 2.1 else if (is_debug) 2.3 else 0.33;
 
     try testing.expect(avg_a < target_a);
     try testing.expect(avg_b < target_b);

@@ -187,10 +187,12 @@ test "WriteWorker: flushBatch throughput" {
     const r200_hot = try runBatchSweep(allocator, 200, 10, 512, if (is_debug) 5 else if (is_release_safe) 10 else 20, &ctx);
     std.debug.print("flushBatch (batch_len=200, distinct_docs=10) [ms]: flush={d:.3} drain={d:.3} jobs={d}\n", .{ r200_hot.avg_flush, r200_hot.avg_drain, r200_hot.change_jobs });
 
-    const target_flush_10: f64 = if (is_tsan) 3.0 else if (is_debug) 2.5 else 0.3;
-    const target_drain_10: f64 = if (is_tsan) 0.02 else if (is_debug) 0.03 else 0.01;
-    const target_flush_100: f64 = if (is_tsan) 45.0 else if (is_debug) 35.0 else 5.0;
-    const target_drain_100: f64 = if (is_tsan) 0.25 else if (is_debug) 0.25 else 0.1;
+    // 3x local median (CI variance budget), release bucket sized for ReleaseSafe;
+    // 0.01 ms floor where the stage is below timer noise.
+    const target_flush_10: f64 = if (is_tsan) 3.6 else if (is_debug) 2.1 else 0.31;
+    const target_drain_10: f64 = if (is_tsan) 0.015 else if (is_debug) 0.015 else 0.01;
+    const target_flush_100: f64 = if (is_tsan) 34.0 else if (is_debug) 21.0 else 3.2;
+    const target_drain_100: f64 = if (is_tsan) 0.14 else if (is_debug) 0.13 else 0.078;
 
     try testing.expect(r10.avg_flush < target_flush_10);
     try testing.expect(r10.avg_drain < target_drain_10);
@@ -249,6 +251,6 @@ test "WriteWorker: session resolutions commit in batches" {
     try testing.expect(ctx.engine.cachedUserId(schema_system.global_namespace_id, "resolve-user-1999") != null);
 
     // Unbatched this is one namespace + one user commit per client (~4k fsyncs).
-    const target_ms: f64 = if (builtin.sanitize_thread) 10_000 else 1_000;
+    const target_ms: f64 = if (builtin.sanitize_thread) 660 else if (builtin.mode == .Debug) 400 else 100;
     try testing.expect(elapsed_ms < target_ms);
 }

@@ -149,6 +149,7 @@ test "ActionsService: async forward dispatch throughput (1 worker)" {
         },
     );
 
-    const target_call_ns: f64 = if (is_tsan) 100_000 else if (is_debug) 7_000 else 1_500;
+    // 4x local median: per-call timing is noisy at sub-microsecond scale.
+    const target_call_ns: f64 = if (is_tsan) 9_600 else if (is_debug) 8_900 else 1_120;
     try testing.expect(avg_call_ns < target_call_ns);
 }
