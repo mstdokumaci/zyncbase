@@ -18,13 +18,16 @@ const { values } = parseArgs({
 });
 
 // The corpus has four logical roles per shard (2 rooms x 2 tables), each with
-// 2,500 clients. Run two roles per worker so each worker drives 5,000 clients.
+// 2,500 clients. A single worker per shard is fastest at 50k/100k; the 10k run
+// keeps two workers because one worker's event loop slows setup there.
 const processesPerShard = 4;
-const rolesPerWorker = 2;
+const shards = Number(values.shards);
+const rolesPerWorker = Number(
+	process.env.BENCH_ROLES_PER_WORKER ?? (shards <= 1 ? 2 : 4),
+);
 const clientsPerRole = 2500;
 const clientsPerProcess = rolesPerWorker * clientsPerRole;
 const workersPerShard = processesPerShard / rolesPerWorker;
-const shards = Number(values.shards);
 const internal = process.env.BENCH_INTERNAL === "1";
 const latency = process.env.BENCH_LATENCY === "1";
 const profileDir = process.env.ZYNCBASE_COMBO_PROFILE_DIR;
@@ -36,7 +39,12 @@ const hostCpus = os.availableParallelism();
 if (!Number.isInteger(shards) || shards < 1) {
 	throw new Error("combo: invalid --shards");
 }
-if (processesPerShard % rolesPerWorker !== 0) {
+if (
+	!Number.isInteger(rolesPerWorker) ||
+	rolesPerWorker < 1 ||
+	rolesPerWorker > processesPerShard ||
+	processesPerShard % rolesPerWorker !== 0
+) {
 	throw new Error("combo: roles per worker must divide the four shard roles");
 }
 if (profileDir) fs.mkdirSync(profileDir, { recursive: true });
