@@ -242,7 +242,7 @@ Authentication source and ticket settings. ZyncBase validates external identity 
 **Ticket Settings:**
 
 - `secret` - Signing secret for ZyncBase tickets. If omitted, the server may generate an ephemeral secret, which invalidates outstanding tickets on restart.
-- `ttlSeconds` - Ticket lifetime before WebSocket upgrade. Tickets should be short-lived because they travel in the WebSocket URL.
+- `ttlSeconds` - Ticket lifetime before WebSocket upgrade, greater than 0. Tickets should be short-lived because they travel in the WebSocket URL.
 
 **JWT Settings:**
 

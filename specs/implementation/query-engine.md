@@ -96,6 +96,7 @@ The vectors in `sdk/typescript/src/filter_eval.vectors.ts` are the conformance s
 | Cursor overfetch | +1 row | `LIMIT` is overfetched by 1 for accurate `hasMore` detection. |
 | Subscription condition matching | Predicate trie + residual evaluation | AND equality branches are indexed; OR/range/residual conditions are evaluated through the query evaluator. |
 | Default query limit | None (unbounded) | Client must supply `limit` for bounded queries. |
+| Max query `limit` | 10000 | `limit` must be an integer in 1..10000; `null` means no limit. Out of range is `INVALID_MESSAGE`; page larger sets with `after`. |
 | Max query response size | 8 MiB (`security.maxQueryResponseSize`) | Applies to the encoded response frame for query, subscribe snapshot, and load-more. |
 
 **Overflow policy**: Batch operations exceeding 500 ops return `BATCH_TOO_LARGE`. Queries without a `limit` are unbounded; clients should always supply a limit for predictable performance. A response whose encoded frame exceeds `security.maxQueryResponseSize` returns `RESPONSE_TOO_LARGE` instead of the records; the connection stays open so the client can retry with a smaller `limit`.

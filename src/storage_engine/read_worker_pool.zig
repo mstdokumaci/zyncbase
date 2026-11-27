@@ -104,7 +104,7 @@ pub const ReadWorker = struct {
     fn threadLoop(self: *ReadWorker) void {
         while (!self.thread.isRequested()) {
             // Bulk-free all record/value allocations from the previous request.
-            _ = self.read_arena.reset(.retain_capacity);
+            _ = self.read_arena.reset(.{ .retain_with_limit = MemoryStrategy.arena_retain_limit });
 
             const request = self.request_queue.pop() orelse break;
             const response = self.executeRead(request);
@@ -117,10 +117,7 @@ pub const ReadWorker = struct {
 
             if (response.err) |err| {
                 const msg_id: ?u64 = response.msg_id;
-                const encoded = wire_encode.encodeError(handle.allocator(), msg_id, .{
-                    .code = "STORE_QUERY",
-                    .message = @errorName(err),
-                }) catch {
+                const encoded = wire_encode.encodeErrorWithStrings(handle.allocator(), msg_id, "STORE_QUERY", @errorName(err)) catch {
                     std.log.err("ReadWorker: failed to encode error", .{});
                     continue;
                 };
@@ -184,10 +181,7 @@ pub const ReadWorker = struct {
             };
             defer handle.release();
 
-            const shutdown_encoded = wire_encode.encodeError(handle.allocator(), request.msg_id, .{
-                .code = "STORE_QUERY",
-                .message = "shutdown",
-            }) catch |err| {
+            const shutdown_encoded = wire_encode.encodeErrorWithStrings(handle.allocator(), request.msg_id, "STORE_QUERY", "shutdown") catch |err| {
                 std.log.err("ReadWorker: failed to encode shutdown error: {}", .{err});
                 cleanupRequest(request, self.allocator);
                 self.notifier.notify();
@@ -252,7 +246,20 @@ pub const ReadWorker = struct {
             table_metadata,
             effective_namespace_id,
             &req.filter,
-        );
+        ) catch |err| {
+            std.log.warn("ReadWorker: query on table {s} failed: {}", .{ table_metadata.name, err });
+            req.deinit(self.allocator);
+            return .{
+                .conn_id = req.conn_id,
+                .loop_id = req.loop_id,
+                .msg_id = req.msg_id,
+                .table = table_metadata,
+                .records = &[_]Record{},
+                .next_cursor_str = null,
+                .sub_id = req.sub_id,
+                .err = err,
+            };
+        };
         const response = ReadResponse{
             .conn_id = req.conn_id,
             .loop_id = req.loop_id,
@@ -333,28 +340,24 @@ pub const ReadWorker = struct {
         table_metadata: *const schema_types.Table,
         namespace_id: i64,
         filter: *const query_ast.QueryFilter,
-    ) SelectQueryResult {
+    ) !SelectQueryResult {
         if (filter.predicate.isAlwaysFalse()) {
             return .{ .records = &[_]Record{}, .next_cursor_str = null };
         }
 
         // Arena-backed query build: bulk-freed at next request reset.
         // Values are bound as transient SQLite params; records allocated via arena.
-        const query_res = read_mod.buildSelectQuery(self.read_arena.allocator(), table_metadata, namespace_id, filter) catch {
-            return .{ .records = &[_]Record{}, .next_cursor_str = null };
-        };
+        const query_res = try read_mod.buildSelectQuery(self.read_arena.allocator(), table_metadata, namespace_id, filter);
 
         // Execute DB read under the node mutex
         self.node.mutex.lockUncancelable(self.node.io);
         defer self.node.mutex.unlock(self.node.io);
 
-        var mstmt = self.node.stmt_cache.acquire(self.allocator, &self.node.conn, filter.structural_hash, query_res.sql) catch {
-            return .{ .records = &[_]Record{}, .next_cursor_str = null };
-        };
+        var mstmt = try self.node.stmt_cache.acquire(self.allocator, &self.node.conn, filter.structural_hash, query_res.sql);
         defer mstmt.release();
         const stmt = mstmt.stmt;
 
-        const exec_res = read_mod.execQuery(
+        const exec_res = try read_mod.execQuery(
             self.read_arena.allocator(),
             &self.node.conn,
             stmt,
@@ -364,9 +367,7 @@ pub const ReadWorker = struct {
             filter.limit,
             filter.order_by,
             &self.json_buf,
-        ) catch {
-            return .{ .records = &[_]Record{}, .next_cursor_str = null };
-        };
+        );
 
         return .{
             .records = exec_res.records,

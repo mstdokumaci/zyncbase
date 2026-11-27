@@ -347,5 +347,10 @@ pub const ConfigLoader = struct {
         if (config.security.max_query_response_size == 0) {
             return error.InvalidMaxQueryResponseSize;
         }
+
+        // A zero TTL makes every ticket expire on issue, so no upgrade can succeed.
+        if (config.authentication.ticket_ttl_seconds == 0) {
+            return error.InvalidTicketTtl;
+        }
     }
 };

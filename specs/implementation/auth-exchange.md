@@ -72,6 +72,7 @@ During the connection lifecycle and handshake upgrade, authentication and valida
 | Ticket Request | JWT issuer, audience, or algorithm invalid | HTTP 401 `AUTH_FAILED` |
 | Ticket Request | Anonymous auth disabled | HTTP 401 `AUTH_FAILED` |
 | Ticket Request | Anonymous subject invalid | HTTP 400 `INVALID_MESSAGE` |
+| Ticket Request | Request body larger than 4 KiB | HTTP 413 `MESSAGE_TOO_LARGE`, answered after the body is read |
 | WebSocket Upgrade | Ticket expired | HTTP 401 `AUTH_FAILED` |
 | WebSocket Upgrade | Ticket already used | HTTP 401 `AUTH_FAILED` |
 | WebSocket Upgrade | Origin not in `allowedOrigins` | HTTP 403 `FORBIDDEN` |

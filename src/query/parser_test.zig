@@ -1309,3 +1309,42 @@ test "parseWritePrecondition: rejects always-true and over-limit predicates" {
         try testing.expectError(error.PreconditionTooLarge, query_parser.parseWritePrecondition(allocator, &schema, tbl.index, map));
     }
 }
+
+test "parseQueryFilter: limit is range-checked before narrowing" {
+    const allocator = std.testing.allocator;
+    var schema = try schema_helpers.createTestSchema(allocator, &[_]schema_helpers.TableDef{.{
+        .name = "items",
+        .fields = &[_][]const u8{"age"},
+        .types = &[_]schema_types.FieldType{.integer},
+    }});
+    defer schema.deinit();
+    const tbl = schema.table("items") orelse return error.TestExpectedValue;
+
+    const Case = struct { value: ?msgpack.Payload, expected: anyerror!?u32 };
+    const cases = [_]Case{
+        // Above u32: used to panic in safe builds on the narrowing cast.
+        .{ .value = msgpack.Payload.uintToPayload(1 << 33), .expected = error.QueryLimitTooLarge },
+        .{ .value = msgpack.Payload.uintToPayload(query_parser.max_query_limit + 1), .expected = error.QueryLimitTooLarge },
+        .{ .value = msgpack.Payload.uintToPayload(query_parser.max_query_limit), .expected = query_parser.max_query_limit },
+        .{ .value = msgpack.Payload.intToPayload(7), .expected = 7 },
+        .{ .value = msgpack.Payload.uintToPayload(0), .expected = error.InvalidMessageFormat },
+        .{ .value = msgpack.Payload.intToPayload(-1), .expected = error.InvalidMessageFormat },
+        .{ .value = null, .expected = error.InvalidMessageFormat }, // string "5", built per iteration
+        .{ .value = .nil, .expected = null },
+    };
+
+    for (cases) |case| {
+        var root = msgpack.Payload.mapPayload(allocator);
+        defer root.free(allocator);
+        try root.mapPut("limit", case.value orelse try msgpack.Payload.strToPayload("5", allocator));
+
+        const result = query_parser.parseQueryFilter(allocator, &schema, tbl.index, root);
+        if (case.expected) |expected_limit| {
+            var filter = try result;
+            defer filter.deinit(allocator);
+            try testing.expectEqual(expected_limit, filter.limit);
+        } else |expected_err| {
+            try testing.expectError(expected_err, result);
+        }
+    }
+}

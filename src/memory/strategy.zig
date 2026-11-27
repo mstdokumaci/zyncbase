@@ -94,9 +94,13 @@ pub const MemoryStrategy = struct {
         return self.arena_pool.acquire();
     }
 
+    /// Capacity a reset arena keeps. Larger peaks are freed so one big request
+    /// cannot pin memory in a pooled or long-lived arena for the process lifetime.
+    pub const arena_retain_limit: usize = 64 * 1024;
+
     /// Release an arena back to the pool after resetting it
     pub fn releaseArena(self: *MemoryStrategy, arena: *std.heap.ArenaAllocator) void {
-        _ = arena.reset(.retain_capacity);
+        _ = arena.reset(.{ .retain_with_limit = arena_retain_limit });
         self.arena_pool.release(arena);
     }
 

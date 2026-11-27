@@ -39,6 +39,7 @@ const wire_error_map = std.StaticStringMap(WireError).initComptime(.{
     .{ "IncrementValueAuthUnsupported", wireError("SCHEMA_VALIDATION_FAILED", "Atomic increments are not supported when the collection's write rule references $value; use schema bounds and 'if' for result invariants") },
     .{ "InvalidIncrement", wireError("SCHEMA_VALIDATION_FAILED", "Increment delta must be a non-zero integer") },
     .{ "PreconditionTooLarge", wireError("MESSAGE_TOO_LARGE", "Write precondition exceeds the condition limit") },
+    .{ "QueryLimitTooLarge", wireError("INVALID_MESSAGE", "Query limit exceeds 10000; page with after") },
     .{ "EmptyPrecondition", wireError("INVALID_MESSAGE", "Write precondition requires at least one condition") },
     .{ "InvalidPrecondition", wireError("INVALID_MESSAGE", "Write precondition is always true") },
     .{ "InvalidArrayElement", wireError("INVALID_ARRAY_ELEMENT", "Array field contains non-literal value") },
