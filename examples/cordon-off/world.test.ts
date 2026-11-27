@@ -211,7 +211,7 @@ test("color-index chunks round-trip and reject malformed streams", () => {
 	const encoded = encodeColorIndexes(codes);
 	expect(encoded.byteLength).toBeLessThan(codes.length);
 	expect(readColorIndexes(encoded)).toEqual(codes);
-	// Truncated pair, oversized run, and short decoded output all fail closed.
+	// Truncated run, short decoded output, and a high-bit code byte all fail closed.
 	expect(() => readColorIndexes(encoded.subarray(1))).toThrow(
 		"Invalid chunk size",
 	);
@@ -221,6 +221,42 @@ test("color-index chunks round-trip and reject malformed streams", () => {
 	expect(() => readColorIndexes(new Uint8Array([1, 1]))).toThrow(
 		"Invalid chunk size",
 	);
+	expect(() => readColorIndexes(new Uint8Array([2]))).toThrow(
+		"Invalid chunk size",
+	);
+});
+
+test("color-index chunks encode single cells in one byte and split long runs", () => {
+	const codes = new Uint8Array(COUNTRY_CHUNK_WIDTH * 25);
+	for (let i = 0; i < codes.length; i++) codes[i] = i % 2 ? 3 : 4;
+	const singles = encodeColorIndexes(codes);
+	expect(singles.byteLength).toBe(codes.length);
+	expect(readColorIndexes(singles)).toEqual(codes);
+	codes.fill(7);
+	const long = encodeColorIndexes(codes);
+	expect(long.byteLength).toBe(20); // 9 x 127 plus 107
+	expect(readColorIndexes(long)).toEqual(codes);
+});
+
+test("world chunk encoding matches the shared RLE on single-cell borders", () => {
+	const world = new World(new Uint8Array(WIDTH * HEIGHT).fill(1));
+	const north = world.country("North");
+	const south = world.country("South");
+	if (!north || !south) throw new Error("Missing countries");
+	const northCode = COUNTRY_COLORS.indexOf(north.color) + 1;
+	const southCode = COUNTRY_COLORS.indexOf(south.color) + 1;
+	const codes = new Uint8Array(COUNTRY_CHUNK_WIDTH * 25);
+	for (let dy = 0; dy < 25; dy++)
+		for (let dx = 0; dx < COUNTRY_CHUNK_WIDTH; dx++) {
+			const southCell = (dx + dy) % 2 === 0;
+			world.owners[dy * WIDTH + dx] = southCell
+				? south.country_id
+				: north.country_id;
+			codes[dy * COUNTRY_CHUNK_WIDTH + dx] = southCell ? southCode : northCode;
+		}
+	const chunk = world.countryChunk(0);
+	expect(chunk.color_indexes).toEqual(encodeColorIndexes(codes));
+	expect(readColorIndexes(chunk.color_indexes)).toEqual(codes);
 });
 
 test("bots join a point's first human, thin out as it crowds, and return when it empties", () => {

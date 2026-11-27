@@ -1372,6 +1372,7 @@ export class World {
 
 	/** Fused palette mapping and RLE for one chunk: one pass over the cells,
 	 * no intermediate code array. Returns the used length in the scratch. */
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: fused hot loop keeps palette mapping and RLE in one pass over the cells.
 	private encodeChunk(x: number, y: number, encoded: Uint8Array) {
 		const owners = this.owners;
 		const ownerCodes = this.ownerCodes;
@@ -1385,11 +1386,12 @@ export class World {
 				let code = ownerCodes[countryId];
 				// Directly injected country rows skip country(); resolve once.
 				if (!code && countryId) code = this.codeOf(countryId);
-				if (code === currentCode && currentRun < 255) {
+				if (code === currentCode && currentRun < 127) {
 					currentRun++;
 					continue;
 				}
-				if (currentRun > 0) {
+				if (currentRun === 1) encoded[out++] = 0x80 | currentCode;
+				else if (currentRun > 0) {
 					encoded[out++] = currentRun;
 					encoded[out++] = currentCode;
 				}
@@ -1397,7 +1399,8 @@ export class World {
 				currentRun = 1;
 			}
 		}
-		if (currentRun > 0) {
+		if (currentRun === 1) encoded[out++] = 0x80 | currentCode;
+		else if (currentRun > 0) {
 			encoded[out++] = currentRun;
 			encoded[out++] = currentCode;
 		}
