@@ -1642,10 +1642,8 @@ pub const WriteWorker = struct {
         }
 
         const created_at = try self.claimCreatedAt(op.table_index, op.timestamp);
-        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, created_at) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-        bind_idx += 1;
-        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, created_at) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-        bind_idx += 1;
+        try self.bindInt(stmt, &bind_idx, created_at);
+        try self.bindInt(stmt, &bind_idx, created_at);
 
         if (rendered_guard) |rg| {
             try self.bindValueSlice(stmt, &bind_idx, rg.values);
@@ -1682,13 +1680,11 @@ pub const WriteWorker = struct {
             bind_idx += 1;
         }
         for (op.increments) |inc| {
-            if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, inc.delta) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-            bind_idx += 1;
+            try self.bindInt(stmt, &bind_idx, inc.delta);
         }
 
         if (op.timestamp < 0 or op.timestamp > schema_system.max_safe_timestamp_us) return StorageError.InvalidOperation;
-        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, op.timestamp) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-        bind_idx += 1;
+        try self.bindInt(stmt, &bind_idx, op.timestamp);
 
         try sql.bindDocIdNamespace(stmt, &self.conn, bind_idx, op.id, namespace_id);
         bind_idx += 2;
@@ -1703,17 +1699,25 @@ pub const WriteWorker = struct {
         // Increment guards: typeof operand, then the range operand, min, max.
         for (op.increments) |inc| {
             if (inc.field_index >= table_metadata.fields.len) return StorageError.UnknownField;
-            if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, inc.delta) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-            bind_idx += 1;
+            try self.bindInt(stmt, &bind_idx, inc.delta);
 
             const constraints = table_metadata.fields[inc.field_index].constraints orelse continue;
-            if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx, inc.delta) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
-            bind_idx += 1;
+            try self.bindInt(stmt, &bind_idx, inc.delta);
             if (constraints.minimum) |bound| try self.bindBound(stmt, &bind_idx, bound);
             if (constraints.maximum) |bound| try self.bindBound(stmt, &bind_idx, bound);
         }
 
         return try sql.fetchRecord(self.allocator, &self.conn, stmt, table_metadata);
+    }
+
+    fn bindInt(
+        self: *WriteWorker,
+        stmt: *sqlite.c.sqlite3_stmt,
+        bind_idx: *c_int,
+        value: i64,
+    ) !void {
+        if (sqlite.c.sqlite3_bind_int64(stmt, bind_idx.*, value) != sqlite.c.SQLITE_OK) return errors.classifyStepError(&self.conn);
+        bind_idx.* += 1;
     }
 
     fn bindBound(

@@ -663,6 +663,15 @@ test "migrate cli: status reports an active restore" {
     try h.expectOutput("restore is pending");
 }
 
+test "migrate cli: status reports a data directory held by another process" {
+    var h = try Harness.init(v1);
+    defer h.deinit();
+    const data_dir = std.fs.path.dirname(h.db_path) orelse ".";
+    var lock = try DataLock.acquire(std.testing.io, allocator, data_dir);
+    defer lock.release(std.testing.io);
+    try std.testing.expectError(error.DataDirLocked, h.run(&.{"status"}));
+    try h.expectOutput("in use by another zyncbase process");
+}
 test "migrate cli: a max major version reports that it cannot be raised" {
     const vmax =
         \\{"version":"4294967295.0.0","store":{"tasks":{"fields":{"title":{"type":"string"},"priority":{"type":"integer"}},"required":["title"]}}}

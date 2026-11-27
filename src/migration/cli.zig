@@ -284,6 +284,13 @@ fn describeDiff(ctx: Context, arena: Allocator, d: *const SchemaDiff) !void {
 
 // ─── migrate status ──────────────────────────────────────────────────────────
 
+fn requireNoPendingRestore(ctx: Context, arena: Allocator, db_path: []const u8) !void {
+    if (!try backup.restorePending(ctx.io, arena, db_path)) return;
+    try ctx.out.print("Database:   {s}\n", .{db_path});
+    try ctx.out.print("A restore is pending or was interrupted; recover it before planning migrations.\n", .{});
+    return error.RestoreInProgress;
+}
+
 fn status(ctx: Context, cmd: Command) !void {
     const out = ctx.out;
     var project = try Project.load(ctx);
@@ -293,23 +300,22 @@ fn status(ctx: Context, cmd: Command) !void {
     const arena = arena_state.allocator();
 
     const db_path = cmd.db orelse try backup.dbPath(arena, dataDir(ctx, cmd));
-    var lock = DataLock.acquireShared(ctx.io, ctx.allocator, dirOf(db_path)) catch |err| switch (err) {
-        error.DataDirLocked => {
-            if (try backup.restorePending(ctx.io, arena, db_path)) {
-                try out.print("Database:   {s}\n", .{db_path});
-                try out.print("A restore is pending or was interrupted; recover it before planning migrations.\n", .{});
-                return error.RestoreInProgress;
-            }
-            return err;
-        },
-        else => return err,
+    // Checked before the lock: the journal exists whether or not another
+    // process holds the data directory, and a pending restore is the real
+    // reason planning cannot proceed.
+    try requireNoPendingRestore(ctx, arena, db_path);
+    var lock = DataLock.acquireShared(ctx.io, ctx.allocator, dirOf(db_path)) catch |err| {
+        if (err == error.DataDirLocked) {
+            // A restore that started after the check above holds the exclusive lock.
+            try requireNoPendingRestore(ctx, arena, db_path);
+            try out.print("{s} is in use by another zyncbase process. Stop the server first.\n", .{dirOf(db_path)});
+        }
+        return err;
     };
     defer lock.release(ctx.io);
-    if (try backup.restorePending(ctx.io, arena, db_path)) {
-        try out.print("Database:   {s}\n", .{db_path});
-        try out.print("A restore is pending or was interrupted; recover it before planning migrations.\n", .{});
-        return error.RestoreInProgress;
-    }
+    // A restore that crashed between the check above and this lock leaves the
+    // journal behind, so the state must be re-confirmed under the lock.
+    try requireNoPendingRestore(ctx, arena, db_path);
     const exists = try fileExists(ctx.io, db_path);
     var db = if (exists) try openFile(ctx.allocator, db_path, false, false) else try openMemory();
     defer db.deinit();
