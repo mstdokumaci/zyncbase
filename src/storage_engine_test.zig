@@ -491,7 +491,7 @@ test "StorageEngine: conditional update with failing precondition is rejected an
     const update = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 7001;
     const msg_id: u64 = 7;
-    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, null, precondition, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, null, precondition, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
@@ -533,7 +533,7 @@ test "StorageEngine: conditional update with passing precondition applies" {
     const update = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 7002;
     const msg_id: u64 = 8;
-    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, null, precondition, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, null, precondition, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
@@ -571,7 +571,7 @@ test "StorageEngine: conditional update on a missing row returns PreconditionFai
     const update = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 7003;
     const msg_id: u64 = 9;
-    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, null, precondition, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, null, precondition, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
@@ -621,7 +621,7 @@ test "StorageEngine: auth rejection is classified before a failed precondition" 
     const update = [_]sth.ColumnValue{.{ .index = val_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 7004;
     const msg_id: u64 = 10;
-    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, guard, precondition, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueUpdateConditional(&ctx.engine, table_meta.index, id, ns, &update, guard, precondition, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
@@ -653,7 +653,7 @@ test "StorageEngine: atomic increment applies and enforces min/max" {
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, id, ns, 1, &seed, null, null);
     try ctx.engine.flushPendingWrites();
 
-    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -3, null, .{ .conn_id = 7101, .msg_id = 11 });
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -3, null, .{ .conn_id = 7101, .loop_id = 0, .msg_id = 11 });
     try ctx.engine.flushPendingWrites();
     {
         const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
@@ -661,7 +661,7 @@ test "StorageEngine: atomic increment applies and enforces min/max" {
         try testing.expectEqual(@as(i64, 7), rec.?.values[balance_idx].scalar.integer);
     }
 
-    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, 100, null, .{ .conn_id = 7102, .msg_id = 12 });
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, 100, null, .{ .conn_id = 7102, .loop_id = 0, .msg_id = 12 });
     try ctx.engine.flushPendingWrites();
     {
         const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
@@ -669,7 +669,7 @@ test "StorageEngine: atomic increment applies and enforces min/max" {
         try testing.expectEqual(@as(i64, 7), rec.?.values[balance_idx].scalar.integer);
     }
 
-    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -100, null, .{ .conn_id = 7103, .msg_id = 13 });
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -100, null, .{ .conn_id = 7103, .loop_id = 0, .msg_id = 13 });
     try ctx.engine.flushPendingWrites();
     {
         const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
@@ -677,7 +677,7 @@ test "StorageEngine: atomic increment applies and enforces min/max" {
         try testing.expectEqual(@as(i64, 7), rec.?.values[balance_idx].scalar.integer);
     }
 
-    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -7, null, .{ .conn_id = 7104, .msg_id = 14 });
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -7, null, .{ .conn_id = 7104, .loop_id = 0, .msg_id = 14 });
     try ctx.engine.flushPendingWrites();
     {
         const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
@@ -719,7 +719,7 @@ test "StorageEngine: increment combines with a precondition atomically" {
 
     var sufficient = try makeOpPredicate(allocator, balance_idx, .integer, .gte, .{ .scalar = .{ .integer = 5 } });
     defer sufficient.deinit(allocator);
-    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -5, sufficient, .{ .conn_id = 7201, .msg_id = 21 });
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -5, sufficient, .{ .conn_id = 7201, .loop_id = 0, .msg_id = 21 });
     try ctx.engine.flushPendingWrites();
     {
         const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
@@ -729,7 +729,7 @@ test "StorageEngine: increment combines with a precondition atomically" {
 
     var insufficient = try makeOpPredicate(allocator, balance_idx, .integer, .gte, .{ .scalar = .{ .integer = 6 } });
     defer insufficient.deinit(allocator);
-    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -6, insufficient, .{ .conn_id = 7202, .msg_id = 22 });
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, id, ns, balance_idx, -6, insufficient, .{ .conn_id = 7202, .loop_id = 0, .msg_id = 22 });
     try ctx.engine.flushPendingWrites();
     {
         const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, id, ns);
@@ -775,9 +775,9 @@ test "StorageEngine: increment rejects NULL and overflowing results" {
     try sth.enqueueUpsert(&ctx.engine, table_meta.index, 3, ns, 1, &min_seed, null, null);
     try ctx.engine.flushPendingWrites();
 
-    try sth.enqueueIncrement(&ctx.engine, table_meta.index, 1, ns, balance_idx, 1, null, .{ .conn_id = 7301, .msg_id = 31 });
-    try sth.enqueueIncrement(&ctx.engine, table_meta.index, 2, ns, balance_idx, 1, null, .{ .conn_id = 7302, .msg_id = 32 });
-    try sth.enqueueIncrement(&ctx.engine, table_meta.index, 3, ns, balance_idx, -1, null, .{ .conn_id = 7303, .msg_id = 33 });
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, 1, ns, balance_idx, 1, null, .{ .conn_id = 7301, .loop_id = 0, .msg_id = 31 });
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, 2, ns, balance_idx, 1, null, .{ .conn_id = 7302, .loop_id = 0, .msg_id = 32 });
+    try sth.enqueueIncrement(&ctx.engine, table_meta.index, 3, ns, balance_idx, -1, null, .{ .conn_id = 7303, .loop_id = 0, .msg_id = 33 });
     try ctx.engine.flushPendingWrites();
 
     const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
@@ -803,13 +803,13 @@ test "StorageEngine: increment rejects NULL and overflowing results" {
     try testing.expectEqual(std.math.minInt(i64), rec3.?.values[balance_idx].scalar.integer);
 }
 
-fn drainOutcomes(sq: *send_queue_mod.send_queue) ![]SendQueueEntry {
+fn drainOutcomes(sq: *send_queue_mod.SendQueue) ![]SendQueueEntry {
     var entries = std.ArrayListUnmanaged(SendQueueEntry).empty;
     errdefer {
         for (entries.items) |entry| entry.deinit();
         entries.deinit(std.heap.smp_allocator);
     }
-    while (sq.pop()) |entry| {
+    while (sq.popFrom(0)) |entry| {
         errdefer entry.deinit();
         try entries.append(std.heap.smp_allocator, entry);
     }
@@ -870,7 +870,7 @@ test "StorageEngine: upsert with rejecting guard returns PermissionDenied" {
     const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 999;
     const msg_id: u64 = 1;
-    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &update_columns, guard, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &update_columns, guard, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
@@ -931,11 +931,11 @@ test "StorageEngine: mixed flush batch commits passing op and rejects guarded op
     // op #1 has no guard (must commit), op #2 has a rejecting guard (must fail).
     const conn_ok: u64 = 1001;
     const ok_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
-    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_ok, namespace_id, author_a, &ok_columns, null, .{ .conn_id = conn_ok, .msg_id = 1 });
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_ok, namespace_id, author_a, &ok_columns, null, .{ .conn_id = conn_ok, .loop_id = 0, .msg_id = 1 });
 
     const conn_reject: u64 = 1002;
     const reject_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
-    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_reject, namespace_id, author_a, &reject_columns, guard, .{ .conn_id = conn_reject, .msg_id = 2 });
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_reject, namespace_id, author_a, &reject_columns, guard, .{ .conn_id = conn_reject, .loop_id = 0, .msg_id = 2 });
     try ctx.engine.flushPendingWrites();
 
     const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
@@ -1139,7 +1139,7 @@ test "StorageEngine: unique violation in an explicit batch rolls back the batch 
     initialized += 1;
 
     const conn_id: u64 = 3001;
-    try ctx.engine.enqueueWriteOp(.{ .batch = .{ .entries = entries, .ack = .{ .conn_id = conn_id, .msg_id = 7 } } });
+    try ctx.engine.enqueueWriteOp(.{ .batch = .{ .entries = entries, .ack = .{ .conn_id = conn_id, .loop_id = 0, .msg_id = 7 } } });
     enqueued = true;
     try ctx.engine.flushPendingWrites();
 
@@ -1195,7 +1195,7 @@ test "StorageEngine: delete with rejecting guard returns PermissionDenied" {
 
     const conn_id: u64 = 888;
     const msg_id: u64 = 2;
-    try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, guard, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, guard, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
@@ -1235,7 +1235,7 @@ test "StorageEngine: delete of non-existent row succeeds" {
 
     const conn_id: u64 = 777;
     const msg_id: u64 = 3;
-    try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, guard, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, guard, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
@@ -1272,7 +1272,7 @@ test "StorageEngine: update with guard on non-existent row succeeds" {
     const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 555;
     const msg_id: u64 = 4;
-    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
@@ -1313,7 +1313,7 @@ test "StorageEngine: upsert with guard on non-existent row succeeds" {
     };
     const conn_id: u64 = 666;
     const msg_id: u64 = 5;
-    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, guard, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, guard, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
@@ -1365,7 +1365,7 @@ test "StorageEngine: update with rejecting guard on existing row returns Permiss
     const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "updated" } } }};
     const conn_id: u64 = 444;
     const msg_id: u64 = 6;
-    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     const entries = try drainOutcomes(&ctx.test_context.send_queue.?);
@@ -1435,7 +1435,7 @@ test "StorageEngine: write-through cache populates cache post-commit and handles
     const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "rejected_val" } } }};
     const conn_id: u64 = 555;
     const msg_id: u64 = 7;
-    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, .{ .conn_id = conn_id, .msg_id = msg_id });
+    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
     try ctx.engine.flushPendingWrites();
 
     // Verify cache still holds "initial_val" and was NOT evicted
@@ -2466,6 +2466,6 @@ test "foreign key startup rejects legacy orphaned rows" {
     );
     _ = try setup_conn.pragma(void, .{}, "foreign_keys", "on");
 
-    test_context.send_queue = try send_queue_mod.send_queue.init(allocator);
+    test_context.send_queue = try send_queue_mod.SendQueue.init(allocator);
     try testing.expectError(error.ForeignKeyViolation, engine.start(&test_context.send_queue.?, null, null));
 }

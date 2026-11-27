@@ -6,7 +6,7 @@ const schema_helpers = @import("../schema/test_helpers.zig");
 const storage_mod = @import("../storage_engine.zig");
 const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MessageType = @import("../wire/message_type.zig").MessageType;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const SubscriptionEngine = @import("engine.zig").SubscriptionEngine;
@@ -29,7 +29,7 @@ const Fixture = struct {
     ctx: sth.EngineTestContext,
     subscriptions: SubscriptionEngine,
     change_queue: *ChangeQueue,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     table_index: usize,
     val_index: usize,
 
@@ -58,7 +58,7 @@ const Fixture = struct {
 
     fn enqueueUpsert(self: *Fixture, request_id: u64) !void {
         const columns = self.valColumns(request_id);
-        try sth.enqueueUpsert(&self.ctx.engine, self.table_index, @intCast(request_id), namespace_id, typed_doc_id.zero, &columns, null, .{ .conn_id = conn_id, .msg_id = request_id });
+        try sth.enqueueUpsert(&self.ctx.engine, self.table_index, @intCast(request_id), namespace_id, typed_doc_id.zero, &columns, null, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = request_id });
     }
 
     fn enqueueBatch(self: *Fixture, request_id: u64) !void {
@@ -83,7 +83,7 @@ const Fixture = struct {
         }
         try self.ctx.engine.enqueueWriteOp(.{ .batch = .{
             .entries = entries,
-            .ack = .{ .conn_id = conn_id, .msg_id = request_id },
+            .ack = .{ .conn_id = conn_id, .loop_id = 0, .msg_id = request_id },
         } });
     }
 
@@ -126,7 +126,7 @@ fn expectDeltasBeforeOutcomes(allocator: std.mem.Allocator, fixture: *Fixture, s
     var deltas = std.AutoHashMapUnmanaged(u64, u32).empty;
     defer deltas.deinit(allocator);
     var outcomes: usize = 0;
-    while (fixture.send_queue.pop()) |entry| {
+    while (fixture.send_queue.popFrom(0)) |entry| {
         defer entry.deinit();
         if (entry.items) |items| {
             for (items) |delivery| {
@@ -166,7 +166,7 @@ test "outcome ordering: a write's deltas reach its connection before its outcome
 
     var filter = try qth.makeDefaultFilter(allocator);
     defer filter.deinit(allocator);
-    try fixture.subscriptions.subscribe(namespace_id, fixture.table_index, filter, conn_id, 1);
+    try fixture.subscriptions.subscribe(namespace_id, fixture.table_index, filter, conn_id, 1, 0);
 
     // Four workers on one shard process a transaction's jobs in parallel, so
     // any of them can drop the last fence reference.

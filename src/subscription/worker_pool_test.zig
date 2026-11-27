@@ -7,7 +7,7 @@ const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const tth = @import("../typed/test_helpers.zig");
 const typed = @import("../typed/types.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const OwnedRecordChange = @import("change_queue.zig").OwnedRecordChange;
@@ -21,7 +21,7 @@ const TestContext = struct {
     memory_strategy: MemoryStrategy,
     change_queue: ChangeQueue,
     subscription_engine: SubscriptionEngine,
-    send_queue: send_queue_type,
+    send_queue: SendQueueType,
     schema: sth.Schema,
     notifier_called: std.atomic.Value(u32),
 
@@ -32,7 +32,7 @@ const TestContext = struct {
         try self.memory_strategy.init();
         self.change_queue = try ChangeQueue.init(testing.io, allocator, 1);
         self.subscription_engine = SubscriptionEngine.init(testing.io, allocator);
-        self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
+        self.send_queue = try SendQueueType.init(self.memory_strategy.generalAllocator());
         self.schema = try sth.createSchema(allocator, &.{
             schema_helpers.makeTable("items", &.{
                 schema_helpers.makeField("status", .text),
@@ -43,7 +43,7 @@ const TestContext = struct {
 
     fn deinit(self: *TestContext) void {
         self.schema.deinit();
-        while (self.send_queue.pop()) |entry| {
+        while (self.send_queue.popFrom(0)) |entry| {
             entry.deinit();
         }
         self.send_queue.deinit();
@@ -81,7 +81,7 @@ test "SubscriptionWorkerPool: matching change is processed and pushed to send_qu
     const table = ctx.schema.table("items") orelse return error.TestExpectedValue;
     const sub_id: u64 = 100;
     const conn_id: u64 = 1;
-    _ = try ctx.subscription_engine.subscribe(conn_id, table.index, filter, conn_id, sub_id);
+    _ = try ctx.subscription_engine.subscribe(conn_id, table.index, filter, conn_id, sub_id, 0);
 
     var pool = try SubscriptionWorkerPool.init(
         allocator,
@@ -123,12 +123,11 @@ test "SubscriptionWorkerPool: matching change is processed and pushed to send_qu
     try testing.expect(ctx.notifier_called.load(.monotonic) > 0);
 
     // Drain and release the batched send_queue entry.
-    if (ctx.send_queue.pop()) |entry| {
-        const items = entry.items orelse return error.TestExpectedValue;
-        try testing.expectEqual(@as(usize, 1), items.len);
-        try testing.expectEqual(conn_id, items[0].conn_id);
-        entry.deinit();
-    }
+    const entry = ctx.send_queue.popFrom(0) orelse return error.MissingResponse;
+    defer entry.deinit();
+    const items = entry.items orelse return error.TestExpectedValue;
+    try testing.expectEqual(@as(usize, 1), items.len);
+    try testing.expectEqual(conn_id, items[0].conn_id);
 }
 
 test "SubscriptionWorkerPool: non-matching change does not push to send_queue" {
@@ -144,7 +143,7 @@ test "SubscriptionWorkerPool: non-matching change does not push to send_queue" {
     defer filter.deinit(allocator);
 
     const table = ctx.schema.table("items") orelse return error.TestExpectedValue;
-    _ = try ctx.subscription_engine.subscribe(1, table.index, filter, 1, 100);
+    _ = try ctx.subscription_engine.subscribe(1, table.index, filter, 1, 100, 0);
 
     var pool = try SubscriptionWorkerPool.init(
         allocator,

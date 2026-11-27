@@ -17,7 +17,7 @@ const sql = @import("sql.zig");
 const write_queue = @import("write_queue.zig");
 const SessionResolver = @import("../authorization/session_resolver.zig").SessionResolver;
 const PerformanceConfig = @import("../config/state.zig").Config.PerformanceConfig;
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
@@ -96,7 +96,7 @@ pub const WriteWorker = struct {
     /// consume `change_queue`. Null means no outcome waits for deltas.
     subscription_count: ?*const std.atomic.Value(usize) = null,
     session_resolver: ?*SessionResolver,
-    send_queue: ?*send_queue_type,
+    send_queue: ?*SendQueueType,
     notifier: Notifier,
     document_cache: *storage_cache.document_cache_type,
     namespace_cache: *storage_cache.namespace_cache_type,
@@ -1350,6 +1350,7 @@ pub const WriteWorker = struct {
 
     const ResolutionResult = struct {
         conn_id: u64,
+        loop_id: u8,
         msg_id: u64,
         scope_seq: u64,
         namespace_id: i64,
@@ -1439,12 +1440,12 @@ pub const WriteWorker = struct {
         defer local.deinit(self.batch_arena.allocator());
 
         const users_table = self.schema.table("users") orelse {
-            self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, error.UnknownTable, sop.is_presence);
+            self.dispatchResolution(sop.conn_id, sop.msg_id, sop.loop_id, sop.scope_seq, namespace_id, user_doc_id, error.UnknownTable, sop.is_presence);
             return;
         };
         const resolution_err = self.resolveSessionInTx(sop, users_table, &local, &namespace_id, &user_doc_id);
         if (resolution_err == null) self.publishLocalCaches(&local);
-        self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, namespace_id, user_doc_id, resolution_err, sop.is_presence);
+        self.dispatchResolution(sop.conn_id, sop.msg_id, sop.loop_id, sop.scope_seq, namespace_id, user_doc_id, resolution_err, sop.is_presence);
     }
 
     fn resolveSessionsIndividually(self: *WriteWorker, resolves: *std.ArrayListUnmanaged(WriteOp)) void {
@@ -1481,7 +1482,7 @@ pub const WriteWorker = struct {
         const users_table = self.schema.table("users") orelse {
             for (resolves.items) |op| {
                 const sop = op.resolve_session;
-                self.dispatchResolution(sop.conn_id, sop.msg_id, sop.scope_seq, 0, typed_doc_id.zero, error.UnknownTable, sop.is_presence);
+                self.dispatchResolution(sop.conn_id, sop.msg_id, sop.loop_id, sop.scope_seq, 0, typed_doc_id.zero, error.UnknownTable, sop.is_presence);
             }
             self.finishResolutions(resolves);
             self.endOp(count);
@@ -1501,6 +1502,7 @@ pub const WriteWorker = struct {
                 const resolution_err = self.resolveSessionInTx(sop, users_table, &local, &namespace_id, &user_doc_id);
                 results.appendAssumeCapacity(.{
                     .conn_id = sop.conn_id,
+                    .loop_id = sop.loop_id,
                     .msg_id = sop.msg_id,
                     .scope_seq = sop.scope_seq,
                     .namespace_id = namespace_id,
@@ -1531,7 +1533,7 @@ pub const WriteWorker = struct {
 
         self.publishLocalCaches(&local);
         for (results.items) |result| {
-            self.dispatchResolution(result.conn_id, result.msg_id, result.scope_seq, result.namespace_id, result.user_doc_id, result.err, result.is_presence);
+            self.dispatchResolution(result.conn_id, result.msg_id, result.loop_id, result.scope_seq, result.namespace_id, result.user_doc_id, result.err, result.is_presence);
         }
         self.finishResolutions(resolves);
         self.endOp(count);
@@ -1547,6 +1549,7 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         conn_id: u64,
         msg_id: u64,
+        loop_id: u8,
         scope_seq: u64,
         namespace_id: i64,
         user_doc_id: typed_doc_id.DocId,
@@ -1561,8 +1564,8 @@ pub const WriteWorker = struct {
             std.log.warn("WriteWorker: send_queue not set, dropping resolution for conn_id={d}", .{conn_id});
             return;
         };
-        const outcome = sr.processResolution(conn_id, msg_id, scope_seq, namespace_id, user_doc_id, resolution_err, is_presence) orelse return;
-        sq.push(.{ .conn_id = outcome.conn_id, .data = outcome.data, .arena = outcome.arena }) catch |err| {
+        const outcome = sr.processResolution(conn_id, msg_id, loop_id, scope_seq, namespace_id, user_doc_id, resolution_err, is_presence) orelse return;
+        sq.push(outcome.loop_id, .{ .conn_id = outcome.conn_id, .data = outcome.data, .arena = outcome.arena }) catch |err| {
             std.log.err("WriteWorker: failed to push session resolution to send_queue: {}", .{err});
             outcome.arena.release();
         };

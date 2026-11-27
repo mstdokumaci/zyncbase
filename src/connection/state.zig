@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 
 const typed_doc_id = @import("../typed/doc_id.zig");
@@ -15,6 +16,8 @@ const empty_claims: std.StringHashMapUnmanaged(typed.Value) = .{};
 pub const Connection = struct {
     allocator: Allocator,
     id: u64,
+    /// Owning event loop. Immutable after activate().
+    loop_id: u8,
     session: ?Session,
     namespace_id: i64,
     store_namespace: ?[]const u8,
@@ -54,6 +57,7 @@ pub const Connection = struct {
         self.presence_scope_seq = 0;
         self.subscription_ids = .empty;
         self.next_subscription_id = 1;
+        self.loop_id = 0;
         self.ref_count = std.atomic.Value(usize).init(0);
     }
 
@@ -61,6 +65,7 @@ pub const Connection = struct {
     pub fn activate(self: *Connection, io: std.Io, id: u64, ws: WebSocket) void {
         self.resetSessionLocked();
         self.id = id;
+        self.loop_id = ws.loop_id;
         self.ws = ws;
         self.ref_count.store(1, .release);
         self.created_at = std.Io.Clock.real.now(io).toSeconds();
@@ -276,10 +281,32 @@ pub const Connection = struct {
     }
 
     /// Send a message to the client. Must be called from the event loop thread.
+    /// After end()/close() the stored handle is null and this returns Dropped.
     pub fn send(self: *Connection, data: []const u8) !void {
         switch (self.ws.send(data, .binary)) {
             .success, .backpressure => {},
             .dropped => return error.Dropped,
         }
+    }
+
+    /// Close with a WebSocket close code. Clears the socket handle so later
+    /// sends are refused by WebSocket.send instead of writing after the close
+    /// frame.
+    pub fn end(self: *Connection, code: u16) void {
+        self.ws.end(code);
+        self.ws.ws = null;
+    }
+
+    /// Raw transport close. Same handle clearing as end().
+    pub fn close(self: *Connection) void {
+        self.ws.close();
+        self.ws.ws = null;
+    }
+
+    /// Whether the connection can still send. Mock sockets start without a
+    /// handle, so test builds treat every connection as open and let the send
+    /// observer/status decide the outcome.
+    pub fn isOpen(self: *const Connection) bool {
+        return builtin.is_test or self.ws.ws != null;
     }
 };

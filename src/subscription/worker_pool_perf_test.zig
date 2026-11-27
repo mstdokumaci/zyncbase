@@ -7,7 +7,7 @@ const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const tth = @import("../typed/test_helpers.zig");
 const wire_encode = @import("../wire/encode.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const ChangeQueue = @import("change_queue.zig").ChangeQueue;
 const RecordChange = @import("engine.zig").RecordChange;
@@ -21,7 +21,7 @@ const TestContext = struct {
     memory_strategy: MemoryStrategy,
     change_queue: ChangeQueue,
     subscription_engine: SubscriptionEngine,
-    send_queue: send_queue_type,
+    send_queue: SendQueueType,
     schema: sth.Schema,
     notifier_called: std.atomic.Value(u32),
 
@@ -32,7 +32,7 @@ const TestContext = struct {
         try self.memory_strategy.init();
         self.change_queue = try ChangeQueue.init(testing.io, allocator, 1);
         self.subscription_engine = SubscriptionEngine.init(testing.io, allocator);
-        self.send_queue = try send_queue_type.init(self.memory_strategy.generalAllocator());
+        self.send_queue = try SendQueueType.init(self.memory_strategy.generalAllocator());
         self.schema = try sth.createSchema(allocator, &.{
             schema_helpers.makeTable("items", &.{
                 schema_helpers.makeField("status", .text),
@@ -43,7 +43,7 @@ const TestContext = struct {
 
     fn deinit(self: *TestContext) void {
         self.schema.deinit();
-        while (self.send_queue.pop()) |entry| {
+        while (self.send_queue.popFrom(0)) |entry| {
             entry.deinit();
         }
         self.send_queue.deinit();
@@ -92,6 +92,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
                 filter,
                 @as(u64, @intCast(i + 1)),
                 @as(u64, @intCast(j + 1)),
+                0,
             );
         }
     }
@@ -145,7 +146,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         // dispatchDeltasToMatches owns the arena; the final pop in this drain releases it.
         var unique_messages: std.AutoHashMapUnmanaged(usize, void) = .empty;
         defer unique_messages.deinit(allocator);
-        while (ctx.send_queue.pop()) |entry| {
+        while (ctx.send_queue.popFrom(0)) |entry| {
             if (entry.items) |items| {
                 for (items) |delivery| {
                     try unique_messages.put(allocator, @intFromPtr(delivery.data.ptr), {});
@@ -191,7 +192,7 @@ test "SubscriptionWorkerPool: dispatch fanout performance" {
         // Same-thread cache-warm drain. Real consumer is on a separate thread with
         // cache-cold access — D understates production consumer latency.
         // The final pop releases the arena back to the pool.
-        while (ctx.send_queue.pop()) |entry| {
+        while (ctx.send_queue.popFrom(0)) |entry| {
             entry.deinit();
         }
         now_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();

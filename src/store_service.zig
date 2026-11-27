@@ -142,7 +142,7 @@ pub const StoreService = struct {
         msg_id: u64,
 
         fn ack(self: WriteContext) storage_mod.WriteAck {
-            return .{ .conn_id = self.request.conn_id, .msg_id = self.msg_id };
+            return .{ .conn_id = self.request.conn_id, .loop_id = self.request.loop_id, .msg_id = self.msg_id };
         }
     };
 
@@ -185,13 +185,14 @@ pub const StoreService = struct {
         self: *StoreService,
         conn_id: u64,
         msg_id: u64,
+        loop_id: u8,
         scope_seq: u64,
         namespace: []const u8,
         external_user_id: []const u8,
         is_presence: bool,
     ) !void {
         if (namespace.len == 0 or external_user_id.len == 0) return error.InvalidMessageFormat;
-        try self.storage_engine.enqueueSessionResolution(conn_id, msg_id, scope_seq, namespace, external_user_id, is_presence);
+        try self.storage_engine.enqueueSessionResolution(conn_id, msg_id, loop_id, scope_seq, namespace, external_user_id, is_presence);
     }
 
     pub fn enqueueRead(self: *StoreService, request: ReadRequest) !void {
@@ -261,6 +262,7 @@ pub const StoreService = struct {
 
         return ReadRequest{
             .conn_id = ctx.request.conn_id,
+            .loop_id = ctx.request.loop_id,
             .msg_id = ctx.msg_id,
             .table_index = table_index,
             .namespace_id = ctx.request.store_namespace_id,
@@ -304,6 +306,7 @@ pub const StoreService = struct {
 
         return ReadRequest{
             .conn_id = ctx.request.conn_id,
+            .loop_id = ctx.request.loop_id,
             .msg_id = ctx.msg_id,
             .table_index = table_index,
             .namespace_id = namespace_id,

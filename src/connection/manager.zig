@@ -8,12 +8,14 @@ const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const MessageHandler = @import("../message_handler.zig").MessageHandler;
 const ServerMetrics = @import("../observability/metrics.zig").ServerMetrics;
 const Schema = @import("../schema/types.zig").Schema;
+const event_loop_count = @import("../thread_budget.zig").event_loop_count;
 const Notifier = @import("../threading/notifier.zig").Notifier;
 const MessageType = @import("../uwebsockets_wrapper.zig").MessageType;
 const WebSocket = @import("../uwebsockets_wrapper.zig").WebSocket;
 const c = @import("../uwebsockets_wrapper.zig").c;
-const send_queue_type = @import("send_queue.zig").send_queue;
+const SendQueueType = @import("send_queue.zig").SendQueue;
 const Connection = @import("state.zig").Connection;
+const WakeRegistry = @import("wake_registry.zig").WakeRegistry;
 
 const Allocator = std.mem.Allocator;
 
@@ -60,6 +62,10 @@ fn appendToGroup(
 /// ConnectionManager handles the lifecycle of client sessions and acts as a relay
 /// between the raw network events and the application logic (MessageHandler).
 pub const ConnectionManager = struct {
+    const TokenSweepCtx = struct {
+        manager: *ConnectionManager,
+        loop_id: u8,
+    };
     io: std.Io,
     allocator: Allocator,
     memory_strategy: *MemoryStrategy,
@@ -79,9 +85,14 @@ pub const ConnectionManager = struct {
     /// Grace period for expired tokens (seconds), used by the timer sweep.
     token_grace_period_seconds: u32,
 
-    /// uWS timer for periodic token expiry sweeps (replaces timestamp poll).
-    token_sweep_timer: ?*c.struct_us_timer_t = null,
+    /// uWS timers for periodic token expiry sweeps (one per event loop).
+    token_sweep_timers: [event_loop_count]?*c.struct_us_timer_t = .{null} ** event_loop_count,
+    token_sweep_ctx: [event_loop_count]TokenSweepCtx,
 
+    /// Wake handles by loop id, used to kick the owning reactor after a queued
+    /// cross-loop send. Owned by the server and initialized before any worker
+    /// can notify; null only in tests that never wake a reactor.
+    wake_registry: ?*WakeRegistry = null,
     /// Atomic connection count for cheap shutdown polling (maintained alongside map count).
     active_connection_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
@@ -89,12 +100,25 @@ pub const ConnectionManager = struct {
     last_conn_notifier: Notifier = .{},
 
     /// Arena for temporary allocations during drainSendQueue grouping.
-    drain_arena: std.heap.ArenaAllocator,
+    drain_arenas: [event_loop_count]std.heap.ArenaAllocator,
+
+    /// Queue used by sendToConnection to reach a connection owned by another
+    /// reactor. Null only before the server wires it.
+    send_queue: ?*SendQueueType = null,
 
     metrics: ?*ServerMetrics = null,
 
     pub fn setMetrics(self: *ConnectionManager, metrics: ?*ServerMetrics) void {
         self.metrics = metrics;
+    }
+    pub fn setSendQueue(self: *ConnectionManager, send_queue: ?*SendQueueType) void {
+        self.send_queue = send_queue;
+    }
+    pub fn setWakeRegistry(self: *ConnectionManager, wake_registry: ?*WakeRegistry) void {
+        self.wake_registry = wake_registry;
+    }
+    fn wakeLoop(self: *ConnectionManager, loop_id: u8) void {
+        if (self.wake_registry) |registry| registry.wake(loop_id);
     }
 
     pub fn init(
@@ -120,27 +144,41 @@ pub const ConnectionManager = struct {
             .max_connections = max_connections,
             .schema_sync_msg = schema_sync_msg,
             .token_grace_period_seconds = token_grace_period_seconds,
-            .drain_arena = std.heap.ArenaAllocator.init(allocator),
+            .drain_arenas = .{
+                std.heap.ArenaAllocator.init(allocator),
+                std.heap.ArenaAllocator.init(allocator),
+            },
             .metrics = null,
+            // SAFETY: populated for every loop in the loop below before any timer uses it.
+            .token_sweep_ctx = undefined,
         };
+        for (0..event_loop_count) |i| {
+            self.token_sweep_ctx[i] = .{ .manager = self, .loop_id = @intCast(i) };
+        }
     }
 
     pub fn deinit(self: *ConnectionManager) void {
         self.stopTokenSweepTimer();
-        self.drain_arena.deinit();
+        for (&self.drain_arenas) |*arena| arena.deinit();
 
+        // Take the whole registry in one lock; teardown re-enters the registry
+        // (sendToConnection) and the actions service, so it runs unlocked. A map
+        // swap allocates nothing, so no connection can be skipped.
         self.mutex.lockUncancelable(self.io);
-        var it = self.map.valueIterator();
-        while (it.next()) |conn_ptr| {
-            const conn = conn_ptr.*;
+        var drained = self.map;
+        self.map = .empty;
+        self.mutex.unlock(self.io);
+
+        var it = drained.iterator();
+        while (it.next()) |entry| {
+            const conn = entry.value_ptr.*;
             // Ensure all logical cleanup (unsubscriptions) is performed before manager shuts down
             self.message_handler.teardownSession(conn);
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
             }
         }
-        self.map.deinit(self.allocator);
-        self.mutex.unlock(self.io);
+        drained.deinit(self.allocator);
 
         self.allocator.free(self.schema_sync_msg);
     }
@@ -287,14 +325,47 @@ pub const ConnectionManager = struct {
         if (metrics) |m| m.recordMessagesSent(count);
     }
 
-    /// Broadcast helper as a method on ConnectionManager.
+    /// Queue a message for delivery on the connection's owning reactor. Safe
+    /// from any thread: the bytes are copied into an arena and the owning loop
+    /// performs the send during its drain. Used for low-rate control messages
+    /// (action replies and errors); worker fanout carries the loop id instead.
     pub fn sendToConnection(self: *ConnectionManager, conn_id: u64, data: []const u8) void {
-        const conn = self.acquireConnection(conn_id) catch return;
-        defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
-
-        sendOrClose(conn, data, self.message_handler, self.metrics, 1);
+        const send_queue = self.send_queue orelse return;
+        const loop_id = blk: {
+            const conn = self.acquireConnection(conn_id) catch return;
+            defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
+            break :blk conn.loop_id;
+        };
+        const handle = self.memory_strategy.acquireArenaDeferred() catch |err| {
+            std.log.warn("sendToConnection: arena acquire failed for conn {}: {}", .{ conn_id, err });
+            return;
+        };
+        defer handle.release();
+        const copy = handle.allocator().dupe(u8, data) catch |err| {
+            std.log.warn("sendToConnection: copy failed for conn {}: {}", .{ conn_id, err });
+            return;
+        };
+        handle.retain();
+        send_queue.push(loop_id, .{ .conn_id = conn_id, .data = copy, .arena = handle }) catch |err| {
+            std.log.warn("sendToConnection: queue push failed for conn {}: {}", .{ conn_id, err });
+            handle.release();
+            return;
+        };
+        self.wakeLoop(loop_id);
     }
 
+    /// Deliver everything already queued for the connection's reactor. Must be
+    /// called on that reactor. Used to put earlier frames ahead of a direct
+    /// response the caller is about to send.
+    pub fn drainOwningLoop(self: *ConnectionManager, conn_id: u64) void {
+        const send_queue = self.send_queue orelse return;
+        const loop_id = blk: {
+            const conn = self.acquireConnection(conn_id) catch return;
+            defer if (conn.release()) self.memory_strategy.releaseConnection(conn);
+            break :blk conn.loop_id;
+        };
+        self.drainSendQueue(send_queue, loop_id);
+    }
     /// Drain SendQueue and send messages to connections. Must be called from event loop thread.
     /// Called in notifyPostHandler after dispatcher polls.
     /// Groups entries by conn_id and sends each group as ONE concatenated
@@ -302,9 +373,10 @@ pub const ConnectionManager = struct {
     /// The client decodes multiple messages per frame (decodeMulti).
     /// A connection that accumulates more than `max_pending_group_bytes` in one
     /// pass is dropped and closed with BACKPRESSURE_LIMIT.
-    pub fn drainSendQueue(self: *ConnectionManager, send_queue: *send_queue_type) void {
-        _ = self.drain_arena.reset(.retain_capacity);
-        const alloc = self.drain_arena.allocator();
+    pub fn drainSendQueue(self: *ConnectionManager, send_queue: *SendQueueType, loop_id: usize) void {
+        std.debug.assert(loop_id < self.drain_arenas.len);
+        _ = self.drain_arenas[loop_id].reset(.retain_capacity);
+        const alloc = self.drain_arenas[loop_id].allocator();
 
         // Phase 1: pop all entries, group deliveries by conn_id, capped per connection.
         var groups = std.AutoHashMapUnmanaged(u64, Group).empty;
@@ -316,7 +388,7 @@ pub const ConnectionManager = struct {
             owners.deinit(alloc);
         }
 
-        while (send_queue.pop()) |entry| {
+        while (send_queue.popFrom(loop_id)) |entry| {
             owners.append(alloc, entry.arena) catch {
                 std.log.warn("drainSendQueue: owner append failed for conn {}, dropping {} byte entry", .{ entry.conn_id, entry.data.len });
                 entry.deinit();
@@ -324,6 +396,7 @@ pub const ConnectionManager = struct {
             };
             if (entry.items) |items| {
                 for (items) |delivery| {
+                    std.debug.assert(delivery.loop_id == loop_id);
                     appendToGroup(alloc, &groups, delivery.conn_id, delivery.data);
                 }
             } else {
@@ -366,8 +439,11 @@ pub const ConnectionManager = struct {
         }
     }
 
-    /// Send ServerDisconnect message to all active connections and initiate socket close
-    pub fn sendDisconnectToAll(self: *ConnectionManager, code: []const u8, message: []const u8, close_code: u16) void {
+    /// Send ServerDisconnect only to connections owned by one event loop.
+    pub fn sendDisconnectToAllForLoop(self: *ConnectionManager, loop_id: u8, code: []const u8, message: []const u8, close_code: u16) void {
+        self.sendDisconnectToAllFiltered(loop_id, code, message, close_code);
+    }
+    fn sendDisconnectToAllFiltered(self: *ConnectionManager, filter: ?u8, code: []const u8, message: []const u8, close_code: u16) void {
         const msg = wire_encode.encodeServerDisconnect(self.allocator, code, message) catch |err| blk: {
             std.log.err("Failed to encode ServerDisconnect: {}", .{err});
             break :blk null;
@@ -383,6 +459,9 @@ pub const ConnectionManager = struct {
             var it = self.map.valueIterator();
             while (it.next()) |state| {
                 const conn = state.*;
+                if (filter) |loop_id| {
+                    if (conn.loop_id != loop_id) continue;
+                }
                 conn.acquire();
                 connections.append(self.allocator, conn) catch |err| {
                     std.log.err("Failed to add connection to disconnect list: {}", .{err});
@@ -401,14 +480,24 @@ pub const ConnectionManager = struct {
                     std.log.warn("Failed to send ServerDisconnect to connection {}: {}", .{ conn.id, err });
                 }
             }
-            conn.ws.end(close_code);
+            conn.end(close_code);
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
             }
         }
     }
 
-    pub fn sweepExpiredTokens(self: *ConnectionManager) void {
+    pub fn countForLoop(self: *ConnectionManager, loop_id: u8) usize {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        var count: usize = 0;
+        var it = self.map.valueIterator();
+        while (it.next()) |state| {
+            if (state.*.loop_id == loop_id) count += 1;
+        }
+        return count;
+    }
+    pub fn sweepExpiredTokens(self: *ConnectionManager, loop_id: u8) void {
         const now = std.Io.Clock.real.now(self.io).toSeconds();
         const grace_period_seconds = self.token_grace_period_seconds;
         const ExpiryAction = struct {
@@ -426,6 +515,7 @@ pub const ConnectionManager = struct {
         var it = self.map.valueIterator();
         while (it.next()) |state| {
             const conn = state.*;
+            if (conn.loop_id != loop_id) continue;
             if (conn.session) |sess| {
                 if (!sess.is_anonymous and now >= sess.token_expires_at) {
                     const close = now >= sess.token_expires_at + @as(i64, @intCast(grace_period_seconds));
@@ -494,7 +584,7 @@ pub const ConnectionManager = struct {
                         std.log.warn("Failed to send TOKEN_EXPIRED to connection {}: {}", .{ conn.id, err });
                     }
                 }
-                conn.ws.end(4006);
+                conn.end(4006);
             }
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
@@ -506,18 +596,22 @@ pub const ConnectionManager = struct {
         self.last_conn_notifier = n;
     }
 
-    pub fn startTokenSweepTimer(self: *ConnectionManager, loop: *c.struct_us_loop_t) !void {
-        self.token_sweep_timer = try uws_timer.startTimer(ConnectionManager, self, loop, tokenSweepCallback, 15_000, 15_000);
+    pub fn startTokenSweepTimer(self: *ConnectionManager, loop_id: u8, loop: *c.struct_us_loop_t) !void {
+        std.debug.assert(loop_id < event_loop_count);
+        self.token_sweep_timers[loop_id] = try uws_timer.startTimer(TokenSweepCtx, &self.token_sweep_ctx[loop_id], loop, tokenSweepCallback, 15_000, 15_000);
     }
-
     pub fn stopTokenSweepTimer(self: *ConnectionManager) void {
-        uws_timer.stopTimer(&self.token_sweep_timer);
+        for (&self.token_sweep_timers) |*timer| uws_timer.stopTimer(timer);
     }
-
+    /// Must be called on the owning loop.
+    pub fn stopTokenSweepTimerForLoop(self: *ConnectionManager, loop_id: u8) void {
+        std.debug.assert(loop_id < event_loop_count);
+        uws_timer.stopTimer(&self.token_sweep_timers[loop_id]);
+    }
     fn tokenSweepCallback(t: ?*c.struct_us_timer_t) callconv(.c) void {
         const timer = t orelse return;
-        const self = uws_timer.extractPtr(ConnectionManager, timer);
-        self.sweepExpiredTokens();
+        const ctx = uws_timer.extractPtr(TokenSweepCtx, timer);
+        ctx.manager.sweepExpiredTokens(ctx.loop_id);
     }
 };
 

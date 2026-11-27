@@ -22,6 +22,7 @@ fn writeCtx(namespace_id: i64) store_service.StoreService.WriteContext {
     return .{
         .request = .{
             .conn_id = 1,
+            .loop_id = 0,
             .user_doc_id = typed_doc_id.zero,
             .store_namespace = "public",
             .store_namespace_id = namespace_id,
@@ -34,6 +35,7 @@ fn readCtx(namespace_id: i64) store_service.StoreService.ReadContext {
     return .{
         .request = .{
             .conn_id = 1,
+            .loop_id = 0,
             .user_doc_id = typed_doc_id.zero,
             .store_namespace = "public",
             .store_namespace_id = namespace_id,
@@ -645,7 +647,7 @@ test "StoreService: query response over the configured size limit fails with RES
     // The read worker runs on its own thread; wait for its single response.
     const send_queue = &(app.test_context.send_queue orelse return error.TestExpectedValue);
     for (0..2000) |_| {
-        if (send_queue.pop()) |entry| {
+        if (send_queue.popFrom(0)) |entry| {
             defer entry.deinit();
             try testing.expect(std.mem.indexOf(u8, entry.data, "RESPONSE_TOO_LARGE") != null);
             return;
@@ -1646,7 +1648,7 @@ test "StoreService: conditional write on an unreadable row returns PermissionDen
     try app.storage_engine.flushPendingWrites();
 
     var saw_permission_denied = false;
-    while (app.test_context.send_queue.?.pop()) |entry| {
+    while (app.test_context.send_queue.?.popFrom(0)) |entry| {
         var owned = entry;
         defer owned.deinit();
         if (std.mem.indexOf(u8, owned.data, "PERMISSION_DENIED") != null) saw_permission_denied = true;

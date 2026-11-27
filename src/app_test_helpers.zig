@@ -251,6 +251,7 @@ pub const AppTestContext = struct {
         try self.connection_manager.init(std.testing.io, gpa, &self.memory_strategy, &self.handler, &self.schema, 100_000, 30);
         errdefer self.connection_manager.deinit();
         self.actions_service.setConnectionManager(&self.connection_manager);
+        if (self.test_context.send_queue) |*sq| self.connection_manager.setSendQueue(sq);
 
         // 10. Initialize Session Resolver
         self.session_resolver.init(gpa, &self.connection_manager, &self.memory_strategy);
@@ -414,11 +415,11 @@ pub const AppTestContext = struct {
         mock_conn.beginStoreScopeResolutionLocked(namespace_dupe);
         const scope_seq = mock_conn.scope_seq;
 
-        try self.store_service.enqueueResolveScope(mock_conn.id, msg_id, scope_seq, namespace, external_user_id, false);
+        try self.store_service.enqueueResolveScope(mock_conn.id, msg_id, 0, scope_seq, namespace, external_user_id, false);
         try self.storage_engine.flushPendingWrites();
 
         var matched_entry: ?send_queue_mod.Entry = null;
-        while (self.test_context.send_queue.?.pop()) |entry| {
+        while (self.test_context.send_queue.?.popFrom(0)) |entry| {
             if (entry.conn_id == mock_conn.id) {
                 if (matched_entry != null) {
                     // Unexpected multiple results. Deinit both and fail.
@@ -500,14 +501,14 @@ pub const AppTestContext = struct {
     /// the onClose callbacks for all mock WebSockets, since the test environment
     /// lacks the asynchronous event loop that would normally handle this.
     pub fn closeAllConnections(self: *AppTestContext) void {
-        // Close all active connections (inlined from ConnectionManager since it
-        // is test-only logic; production shutdown uses sendDisconnectToAll instead).
+        // Close all active connections (inlined: the test context has no event
+        // loops, so production shutdown cannot be reused here).
         self.connection_manager.mutex.lockUncancelable(self.connection_manager.io);
         {
             var it = self.connection_manager.map.valueIterator();
             while (it.next()) |state| {
                 const conn = state.*;
-                conn.ws.close();
+                conn.close();
             }
         }
         self.connection_manager.mutex.unlock(self.connection_manager.io);

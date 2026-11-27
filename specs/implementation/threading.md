@@ -1,117 +1,119 @@
 # Threading
 
-**Drivers**: [Threading Model Architecture](../architecture/threading-model.md), [ADR-006](../architecture/adrs.md#adr-006-deterministic-thread-budget-architecture), [ADR-014](../architecture/adrs.md#adr-014-unified-subscription-engine), [ADR-018](../architecture/adrs.md#adr-018-mutation-outcomes-and-optimistic-local-state)
-
-ZyncBase uses a deterministic thread budget architecture with six thread domains computed from CPU core count. Thread counts are hardcoded via formula — no configuration overrides. The server refuses to start on machines with fewer than 2 CPU cores.
+ZyncBase runs two uWebSockets reactors. Every connection is owned by exactly one
+reactor for its lifetime; all WebSocket sends for that connection happen on its
+owning reactor.
 
 ## Source Files
 
-| File | Responsibility |
-|------|----------------|
-| `src/thread_budget.zig` | Thread budget computation from CPU count — hardcoded formula, no config overrides. |
-| `src/server.zig` | Server composition and lifecycle for networking, storage, subscriptions, notifications, and `SendQueue` draining. |
-| `src/uwebsockets_wrapper.zig` | C ABI wrapper around uWebSockets callbacks and send/close primitives. |
-| `src/connection/manager.zig` | Connection registry and cross-thread send helper. |
-| `src/connection/state.zig` | Per-connection mutable state, scoped session fields, subscription ownership, and direct uWS send behavior. |
-| `src/message_handler.zig` | Concurrent request entry point and per-request routing. |
-| `src/connection/send_queue.zig` | Wrapper around lock-free `mpscQueue` for owned cross-thread WebSocket message delivery. |
-| `src/subscription/change_queue.zig` | Sharded SPMC blocking queue (`ChangeQueue`) for distributing committed record changes to `SubscriptionWorkerPool`. |
-| `src/subscription/worker_pool.zig` | Pool of `SubscriptionWorker` threads; each worker drains one shard of `ChangeQueue`. |
-| `src/subscription/engine.zig` | Shared subscription registry and record-change matching. |
-| `src/presence/worker.zig` | Dedicated `PresenceWorker` thread; SPSC input queue of `PresenceOp`; drains ops, mutates `PresenceManager`, encodes and pushes broadcasts to `SendQueue`. |
-| `src/threading/managed_thread.zig` | Generic background thread wrapper with atomic shutdown flag, condvar, signal/broadcast, and safe join. |
-| `src/threading/worker_pool.zig` | Generic slice of workers supporting `start()` / `stop()` lifecycles. |
-| `src/threading/notifier.zig` | Typed function-pointer + context pair for waking the uWS event loop from any thread. |
-| `src/threading/latch.zig` | One-shot async result primitive used by background coordination paths. |
-| `src/threading/wait_group.zig` | Atomic counter + condvar for tracking in-flight operations; used in `WriteWorker` for flush backpressure. |
-| `src/queues/mpsc_queue.zig` | Generic lock-free MPSC queue (linked list, atomic tail swap). |
-| `src/queues/spmc_blocking_queue.zig` | Generic SPMC blocking queue (mutex + CV + linked list). |
-| `src/queues/spsc_queue.zig` | Generic lock-free SPSC queue (Vyukov linked-list, pool-parameterized nodes). |
-| `src/storage_engine/write_worker.zig` | Dedicated writer OS thread; owns `spscQueue(WriteOp)`, `WaitGroup` (`flush_wg`), `Notifier`, and SQLite writer connection. |
-| `src/storage_engine/write_queue.zig` | `WriteOp` union, `write_queue_type` alias, checkpoint types, and `ReconnectionConfig`. |
-| `src/storage_engine/read_worker_pool.zig` | `ReadWorkerPool` + `ReadWorker`; dedicated reader OS threads using `managedThread` and `workerPool`. Consume `ReadRequest`, encode responses, push owned bytes to `SendQueue`. |
-| `src/storage_engine/read_buffer.zig` | `ReadRequest`, `ReadResponse` types and `read_request_queue` alias (`spmcBlockingQueue(ReadRequest)`). |
+| File | Role |
+|---|---|
+| `src/thread_budget.zig` | Fixed two-reactor budget and variable reader/notification split. |
+| `src/server.zig` | `EventLoopContext`, reactor startup/shutdown, post handlers, per-loop timers, owned `WakeRegistry`. |
+| `src/uwebsockets_wrapper.zig` | App/listen/run/destroy per reactor; loop id on sockets. |
+| `src/connection/send_queue.zig` | Two per-loop send queues; one consumer each. |
+| `src/connection/wake_registry.zig` | Cross-thread reactor wake handles with an in-flight count so `clear` waits out wakes before the loop is freed. |
+| `src/connection/manager.zig` | Connection registry, per-loop drains, token sweeps, queued cross-loop control sends, owning-loop drain. |
+| `src/connection/state.zig` | Connection-local state and immutable owning loop id. |
+| `src/storage_engine/read_buffer.zig` | Read request/response with target loop. |
+| `src/storage_engine/write_queue.zig` | `WriteAck` with target loop. |
+| `src/storage_engine/outcome_fence.zig` | Per-transaction outcomes routed to owning loops. |
+| `src/subscription/engine.zig` | Subscription records carry owning loop. |
+| `src/subscription/worker_pool.zig` | Batched fanout split by owning loop. |
+| `src/presence/worker.zig` | Presence deliveries routed to owning loop. |
+| `src/actions/service.zig` | Shared action state guarded by a mutex; deliveries routed by loop. |
+| `src/threading/notifier.zig` | Wake callback used by background producers. |
 
 ## Important Types
 
-| Type | Dependencies | Responsibility |
-|------|--------------|----------------|
-| `ThreadBudget` | CPU count | Computes deterministic thread allocation from CPU core count. |
-| `ZyncBaseServer` | `WebSocketServer`, `StorageEngine`, `MessageHandler`, workers | Owns subsystem wiring and start/stop lifecycle. |
-| `ConnectionManager` | `Connection`, uWebSockets wrapper | Tracks live connections and supports targeted sends. |
-| `Connection` | `Session`, `WebSocket` | Serializes connection-local scope/subscription state and sends directly through uWS on the event loop. |
-| `SendQueue` | `Allocator` | Lock-free MPSC queue for owned cross-thread message delivery to connections. |
-| `ChangeQueue` | `Allocator`, `spmcBlockingQueue(ChangeJob)`, shard count | Sharded SPMC blocking queue. Writer thread pushes `ChangeJob` entries; each `SubscriptionWorker` drains one shard. Sharding is by `(namespace_id, table_index, doc_id)` hash. |
-| `ChangeJob` | `OwnedRecordChange`, `Allocator` | Ownership wrapper bundling a committed record change with its allocator. |
-| `SubscriptionWorkerPool` | `workerPool(SubscriptionWorker)`, `ChangeQueue`, `SubscriptionEngine`, `SendQueue`, `Notifier` | Manages N `SubscriptionWorker` threads; each worker owns one shard of `ChangeQueue`. |
-| `SubscriptionWorker` | `managedThread(SubscriptionWorker)`, `ChangeQueue` shard, `SubscriptionEngine`, `SendQueue`, `Notifier` | Drains one `ChangeQueue` shard, evaluates subscription filters, encodes delta messages, pushes owned bytes to `SendQueue`, wakes event loop. |
-| `WriteWorker` | `managedThread(WriteWorker)`, `spscQueue(WriteOp, IndexPool)`, `WaitGroup`, `Notifier`, SQLite writer connection | Sole writer thread; executes mutations, emits `RecordChange` to `ChangeQueue`, encodes write outcomes to `SendQueue`. |
-| `write_queue_type` | `spscQueue(WriteOp, IndexPool)` | SPSC queue type alias for write operations; `IndexPool` provides zero-allocation pooled nodes. |
-| `ReadWorkerPool` | `workerPool(ReadWorker)`, `read_request_queue`, `SendQueue` | Owns N reader threads, each with exclusive SQLite connection. |
-| `ReadWorker` | `managedThread(ReadWorker)`, `ReaderNode`, `read_request_queue`, `SendQueue`, `Notifier` | Consumes `ReadRequest` from the SPMC blocking queue, executes the query on its own SQLite connection, encodes the response to MessagePack, pushes owned `{conn_id, encoded_bytes}` to `SendQueue`, wakes event loop. |
-| `read_request_queue` | `spmcBlockingQueue(ReadRequest)` | SPMC blocking queue; event loop (single producer) enqueues read requests, reader threads (multiple consumers) pop and execute. |
-| `PresenceWorker` | `managedThread(PresenceWorker)`, `spscQueue(PresenceOp, AllocPool)`, `PresenceManager`, `SendQueue`, `Notifier` | Dedicated presence thread. Event loop enqueues `PresenceOp` values; worker drains, mutates `PresenceManager`, encodes snapshots/broadcasts, pushes owned bytes to `SendQueue`. |
-| `PresenceOp` | `Allocator` | Typed union of presence operations (`set_user`, `set_shared`, `remove_user`, `subscribe_user`, `subscribe_shared`, `unsubscribe_user`, `unsubscribe_shared`, `remove_all_for_connection`). Each op carries an allocator for cleanup. |
-| `MpscQueue(T)` | `Allocator` | Generic lock-free MPSC linked list queue (atomic tail swap pattern). |
-| `SpmcBlockingQueue(T)` | `Allocator`, `Mutex`, `Condition` | Generic SPMC blocking queue with mutex + CV; consumers sleep when empty; `shutdown()` wakes all consumers. |
-| `SpscQueue(T, PoolFn)` | Pool | Generic lock-free SPSC queue with pool-parameterized node allocation; not blocking — callers pair with condvar where needed. |
-| `managedThread(T)` | `std.Thread`, `std.atomic.Value(bool)`, `std.Io.Mutex`, `std.Io.Condition`, `std.Io.Event` | Generic thread wrapper; holds shutdown flag and `std.Io` synchronization primitives; `stop()` sets the flag, wakes the worker, and joins safely; `spawn()` is idempotent-safe. |
-| `workerPool(T)` | `Allocator`, `[]T` | Generic pool of workers; `start()` calls `spawn()` on each, `stop()` calls `stop()` on each. |
-| `WaitGroup` | `std.atomic.Value(usize)`, `Mutex`, `Condition` | Go-style wait group; `add(n)` increments, `done(n)` decrements and broadcasts when zero, `wait()` blocks until zero. Used by `WriteWorker` as `flush_wg` for flush backpressure. |
-| `Notifier` | function pointer + context | Stores one callback (`?*const fn (?*anyopaque) void`) and context pointer. `notify()` invokes the callback if set. Used to wake the uWS event loop from background worker threads. |
-| `SubscriptionEngine` | `QueryFilter`, `RecordChange` | Maintains subscription groups shared across network workers. |
+| Type | Fields / role |
+|---|---|
+| `EventLoopContext` | Reactor id, `WebSocketServer`, thread handle, ready/closed state, shutdown timer. |
+| `SendQueue` | Two MPSC queues of `Entry`; one consumer per queue; per-loop arena drain. |
+| `Entry` | `conn_id`, encoded bytes, arena handle, optional batched `Delivery` items, owning loop. |
+| `Delivery` | One subscriber delivery inside a batched fanout entry: `conn_id`, bytes, loop id. |
+| `Connection` | Immutable owning loop, connection-local scope/subscription state. |
+| `ReadRequest` / `ReadResponse` | Query/pagination work and response with target loop. |
+| `WriteAck` / `OutcomeFence` | Write outcome target loop and fence ordering. |
+| `SubscriptionEngine.Match` | Subscriber connection, subscription id, operation, owning loop. |
+| `PresenceOp` / `Subscriber` | Presence work and subscriber owning loop. |
+| `Notifier` | Callback/context pair for waking the reactors from worker threads. |
 
 ## Concurrency Model
 
-- The server runs six thread domains: event loop (1), writer (1), checkpoint (1), presence (1), readers (variable, max 4), subscription (variable).
-- Reader threads are actual OS threads (`ReadWorkerPool` of `ReadWorker`) that consume read requests from an SPMC blocking queue. Each reader thread owns its SQLite connection exclusively — no round-robin mutex contention on the event loop.
-- Store queries, subscribes, and load_more messages are handled asynchronously: the event loop enqueues a `ReadRequest` and returns immediately; reader threads execute the query, encode the response to MessagePack, push owned `{conn_id, encoded_bytes}` into `SendQueue`, and then wake the event loop via `Notifier`. The event loop drains `SendQueue` and sends via `Connection.send()` in the post-handler.
-- The writer thread is the sole consumer of the SPSC write queue. After each commit it pushes committed `ChangeJob` entries into the sharded `ChangeQueue`. Each `SubscriptionWorker` owns one shard and blocks until work arrives (SPMC blocking queue semantics).
-- Write outcomes go through one `OutcomeFence` per tracked transaction. The writer encodes `WriteCommitted`/`WriteError` into the fence's deferred arena, and every `ChangeJob` the transaction pushes holds a fence reference. The writer drops its own reference after recording the outcomes. Whichever thread drops the last reference — the writer, or the subscription worker finishing the transaction's last job — pushes the outcomes to `SendQueue` and wakes the event loop. While `SubscriptionEngine.active_count` is zero, the writer attaches no fence to jobs and publishes on its own release.
-- Presence operations from the event loop are enqueued as typed `PresenceOp` values into a SPSC queue inside `PresenceWorker`. The worker drains the queue, mutates `PresenceManager`, encodes broadcasts/snapshots, and pushes owned bytes to `SendQueue`.
-- Thread counts are computed at startup from CPU core count using a hardcoded formula in `ThreadBudget`.
-- The server refuses to start on machines with fewer than 2 CPU cores.
-- A single connection must observe sequential scope and subscription state changes through `Connection` methods.
-- Subscription fanout and write-outcome delivery happen after storage commit, not before durable ordering is known.
+Thread domains:
+
+- **Event loops (2):** main thread runs loop 0; one spawned thread runs loop 1.
+  Each accepts and owns a shard of connections, runs its own post handler,
+  drains its own send queue, and owns its token/cleanup timers.
+- **Writer (1):** serializes SQLite commits and routes outcomes to origin loops.
+- **Checkpoint (1):** background WAL flush.
+- **Presence (1):** serializes presence state and encodes broadcasts.
+- **Readers (variable, max 4):** parallel SQLite reads on dedicated connections.
+- **Notification (variable):** sharded subscription evaluation and delta
+  encoding.
+
+The server starts both reactors before opening the listening port and stops
+both before final checkpoint/deinit.
+
+## Queues and Ownership
+
+| Queue / resource | Producers | Consumer | Notes |
+|---|---|---|---|
+| Send queue 0 | reader, writer, subscription, presence, actions | reactor 0 | MPSC; target loop explicit; per-loop drain arena |
+| Send queue 1 | reader, writer, subscription, presence, actions | reactor 1 | MPSC; target loop explicit; per-loop drain arena |
+| Write queue | reactors 0 and 1 | writer | Producer push is serialized by the writer's work mutex |
+| `read_request_queue` | reactors 0 and 1 | reader pool | SPMC blocking queue; push is mutex-guarded; requests carry target loop |
+| `ChangeQueue` | writer | subscription workers | Sharded SPMC; one worker per shard |
+| Presence input queue | reactors 0 and 1 | presence worker | Producers serialized by the worker's work mutex |
+| Actions state | reactors 0 and 1 | shared | One mutex around external entry points; deliveries go through target send queues |
+
+Subscription fanout:
+
+- A change is evaluated once.
+- `Match` entries carry the subscriber's loop.
+- The worker builds one batched delivery slice per loop and pushes one queue
+  entry per loop. It never pushes one entry per subscriber.
+- The owning reactor groups entries by connection and sends one frame per
+  connection, preserving per-connection order.
 
 ## Synchronization Boundaries
 
-| Boundary | Rule |
-|----------|------|
-| Connection state | Mutate only through `Connection` methods that preserve scope/subscription invariants. |
-| Storage writes | Enter through `StorageEngine` / `WriteWorker`; do not bypass the single-writer path. |
-| Storage reads | Enqueue a `ReadRequest` into `read_request_queue` (SPMC blocking). Reader threads execute queries on dedicated SQLite connections, encode responses to MessagePack, push owned `{conn_id, encoded_bytes}` into `SendQueue`, then wake the event loop. The event loop drains `SendQueue` in `notifyPostHandler`. |
-| `read_request_queue` | SPMC blocking queue (mutex + CV). Single producer: event loop via `StorageEngine.enqueueRead()`. Multiple consumers: reader threads via `pop()` / `popTimed()`. Readers sleep on CV when empty. |
-| `ChangeQueue` | Sharded SPMC blocking queue. Single producer: writer thread via `ChangeQueue.push()` (non-blocking, logs and drops on alloc failure). Multiple consumers: one `SubscriptionWorker` per shard, blocking via `shard.pop()`. A job's optional `OutcomeFence` reference is released by `ChangeJob.deinit`, which runs after the worker has pushed the job's deltas, or when the job is dropped. |
-| `OutcomeFence` | Arena-resident; `pending` is an atomic count of the writer's hold plus one per carrying job. Only the writer allocates in the arena, until its release. Retain is `.monotonic`, release is `.acq_rel`, so the last release follows every earlier releaser's delta pushes. After `pending` reaches zero only the publisher touches the fence; its `SendQueue` entries keep the arena alive. |
-| Subscriptions | Register/unregister through `SubscriptionEngine`; disconnect must detach connection-owned subscription ids. For async StoreSubscribe, registration occurs in `MessageHandler` before the read request is enqueued. |
-| WebSocket sends | Same-thread sends use `ConnectionManager.sendToConnection()` directly. Cross-thread sends push to `SendQueue`; the event loop drains in `notifyPostHandler`. `Connection.send()` is always called from the event loop thread and relies on uWS's ordered 16 MiB per-connection buffer. |
-| `SendQueue` | Lock-free MPSC queue of owned `{ conn_id, encoded_message }` entries. Producers may be reader, writer, subscription, or presence worker threads. The single consumer is the event loop, which drains via `ConnectionManager.drainSendQueue()`. Producers call `Notifier.notify()` after a successful push. `deinit()` requires all producers stopped. |
-| `PresenceWorker` input queue | SPSC queue (`spscQueue(PresenceOp, AllocPool)`). Single producer: event loop via `PresenceWorker.enqueue()`, which holds `thread.mutex` during push and signals `thread.cond`. Single consumer: `PresenceWorker` thread, which waits on `thread.cond` when the queue is empty. |
-| Background scope resolution | Commit only if `scope_seq` still matches the active pending request. |
-| Thread budget | Computed once at startup; no runtime mutation or configuration override. |
+| Operation | Rule |
+|---|---|
+| Connection state | Mutated through connection/loop-owned methods; owning loop id is immutable. |
+| WebSocket sends | Only on the connection's owning reactor via its send queue or same-loop direct send. |
+| Cross-loop send | Copied into the target loop's queue and that reactor is woken; never send from the caller's reactor. |
+| Storage writes | Serialized through the writer; do not bypass it. |
+| Storage reads | Reader owns its SQLite connection; request/response carries target loop. |
+| Notification fanout | Sharded by change; each worker evaluates its shard; deltas route by loop. |
+| Subscriptions | Thread-safe registration/matching; disconnect detaches all connection-owned subscriptions. |
+| Presence | Presence worker is sole mutator; reactors only enqueue operations. |
+| Actions | External entry points lock the ActionsService mutex; replies/forwards route to target loops. |
+| Shutdown | Loop 0 flushes staged action forwards; each reactor drains its queue, disconnects its connections and closes; the supervisor joins both. |
 
 ## Invariants
 
-- All WebSocket sends via `Connection.send()` occur on the event loop thread; cross-thread producers use `SendQueue` to marshal messages.
-- uWS `.backpressure` means the frame was accepted and buffered; `Connection.send()` returns `error.Dropped` without closing the WebSocket, and `ConnectionManager.sendOrClose()` closes the connection after receiving that error.
-- Background producers encode into general-allocator-owned byte slices before enqueue. After a successful `SendQueue.push()`, the queue owns the bytes and the event loop frees them after send.
-- Background producers call `Notifier.notify()` after a successful enqueue, not before, so a notify always observes queued work or later work.
-- A transaction's outcomes for a connection are pushed after every delta the transaction produces for that connection's subscriptions registered before the writer checks the active subscription count for that write (ADR-018). `SendQueue` pops in push order and the drain keeps each connection's entries in pop order. If `ChangeQueue.push()` fails, that change job is dropped and its fence reference released without sending a delta; the transaction outcome may still be published. The affected subscription can remain stale for that record until a later change or resubscription.
-- No request may publish subscription deltas or `WriteCommitted` for a non-empty write before the corresponding storage commit. `WriteError` may be published after a rejected batch rolls back (no commit occurs), and an empty batch receives `WriteCommitted` without a transaction.
-- StoreSubscribe registration happens synchronously in `MessageHandler` before the initial read request is enqueued, so committed changes cannot be missed while the snapshot is being read.
-- Read response records are allocated by reader threads; after encoding to MessagePack bytes, reader threads free records and push owned bytes to `SendQueue`. The event loop frees encoded bytes after sending.
-- Namespace resolution results must be ignored when superseded by a newer namespace request.
-- Connection teardown must be idempotent enough to tolerate concurrent disconnect and background completion.
-- Shared registries must define one owner for allocation and deallocation of ids, buffers, and snapshots.
-- Threading changes require sanitizer coverage; data-race freedom is part of the API contract.
-- Thread counts are deterministic — derived from CPU count, not configuration.
-- `send_queue.deinit()` must only run after every producer thread has been stopped and joined, and after `change_queue.deinit()`, whose leftover jobs may still publish fenced outcomes; it will automatically free any remaining unconsumed entry data.
-- Reader threads share-read the metadata cache (lock-free); cache population uses writer version snapshot for race protection.
-- `ChangeQueue.push()` on the writer thread is non-blocking; on alloc failure it logs an error and frees the change rather than blocking the writer.
-- `PresenceWorker` is the sole consumer of its SPSC work queue and the sole mutator of `PresenceManager` state; the event loop only enqueues `PresenceOp` values.
-- `WaitGroup.done()` must only be called after a matching `add()`. `WriteWorker` calls `beginOp()` (wraps `add(1)`) before enqueuing and `endOp(n)` after the commit loop processes N ops.
-- `Notifier.notify()` is safe to call from any thread; it unconditionally invokes the stored callback with no locking.
+- Every `Connection.send()` call runs on the connection's owning reactor.
+- Each send queue has exactly one consumer: its reactor.
+- A producer passes the target loop explicitly; there is no global
+  connection-to-loop lookup on the push path.
+- Batched fanout remains batched and is split only at the loop boundary.
+- `drainSendQueue(loop_id)` uses only that loop's queue and drain arena.
+- Per-loop token/action sweeps only inspect and send to their own shard.
+- Write outcomes and session-resolution outcomes route to the origin loop.
+- No shared service calls `Connection.send()` directly from a background
+  thread or a non-owning reactor; it pushes to the target send queue and wakes
+  the owning reactor.
+- Background producers encode into general-allocator-owned bytes; after a
+  successful push, the queue owns the bytes and the reactor frees them after
+  send.
+- A transaction's deltas for a connection are pushed before that connection's
+  write outcome (ADR-018); each connection's queue preserves push order.
+- `SendQueue.deinit()` runs only after both reactors and all producers have
+  stopped and both queues are drained.
+- Threading changes require the loop-routing unit tests, TSAN, and safe-mode coverage.
+- Thread counts are deterministic; the reactor count is fixed at two.
 
 ## Related Specifications
 
@@ -119,3 +121,4 @@ ZyncBase uses a deterministic thread budget architecture with six thread domains
 - [Storage](./storage.md)
 - [Lock-Free Cache](./lock-free-cache.md)
 - [Presence Internals](./presence-internals.md)
+- [Threading Model](../architecture/threading-model.md)

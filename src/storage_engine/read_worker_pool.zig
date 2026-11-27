@@ -12,7 +12,7 @@ const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
 const read_mod = @import("reader.zig");
 const sql = @import("sql.zig");
-const send_queue_type = @import("../connection/send_queue.zig").send_queue;
+const SendQueueType = @import("../connection/send_queue.zig").SendQueue;
 const MemoryStrategy = @import("../memory/strategy.zig").MemoryStrategy;
 const managedThread = @import("../threading/managed_thread.zig").managedThread;
 const Notifier = @import("../threading/notifier.zig").Notifier;
@@ -52,7 +52,7 @@ pub const ReadWorker = struct {
     thread: managedThread(ReadWorker),
     node: *ReaderNode,
     request_queue: *req_queue_type,
-    send_queue: *send_queue_type,
+    send_queue: *SendQueueType,
     schema: *const schema_types.Schema,
     document_cache: *document_cache_type,
     writer_version: *std.atomic.Value(u64),
@@ -68,7 +68,7 @@ pub const ReadWorker = struct {
         memory_strategy: *MemoryStrategy,
         node: *ReaderNode,
         request_queue: *req_queue_type,
-        send_queue: *send_queue_type,
+        send_queue: *SendQueueType,
         schema: *const schema_types.Schema,
         document_cache: *document_cache_type,
         writer_version: *std.atomic.Value(u64),
@@ -125,7 +125,7 @@ pub const ReadWorker = struct {
                     continue;
                 };
                 handle.retain();
-                self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
+                self.send_queue.push(response.loop_id, .{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
                     std.log.err("ReadWorker: failed to push error to send queue", .{});
                     handle.release();
                     continue;
@@ -157,7 +157,7 @@ pub const ReadWorker = struct {
                         continue;
                     };
                     handle.retain();
-                    self.send_queue.push(.{ .conn_id = response.conn_id, .data = too_large, .arena = handle }) catch {
+                    self.send_queue.push(response.loop_id, .{ .conn_id = response.conn_id, .data = too_large, .arena = handle }) catch {
                         std.log.err("ReadWorker: failed to push response-too-large error to send queue", .{});
                         handle.release();
                         continue;
@@ -166,7 +166,7 @@ pub const ReadWorker = struct {
                     continue;
                 }
                 handle.retain();
-                self.send_queue.push(.{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
+                self.send_queue.push(response.loop_id, .{ .conn_id = response.conn_id, .data = encoded, .arena = handle }) catch {
                     std.log.err("ReadWorker: failed to push to send queue", .{});
                     handle.release();
                     continue;
@@ -194,7 +194,7 @@ pub const ReadWorker = struct {
                 continue;
             };
             handle.retain();
-            self.send_queue.push(.{ .conn_id = request.conn_id, .data = shutdown_encoded, .arena = handle }) catch |err| {
+            self.send_queue.push(request.loop_id, .{ .conn_id = request.conn_id, .data = shutdown_encoded, .arena = handle }) catch |err| {
                 std.log.err("ReadWorker: failed to push shutdown error: {}", .{err});
                 handle.release();
             };
@@ -211,6 +211,7 @@ pub const ReadWorker = struct {
             // SAFETY: Table metadata is undefined because the table index was not found.
             return .{
                 .conn_id = req.conn_id,
+                .loop_id = req.loop_id,
                 .msg_id = req.msg_id,
                 .table = undefined,
                 .records = &[_]Record{},
@@ -233,6 +234,7 @@ pub const ReadWorker = struct {
                 req.deinit(self.allocator);
                 return .{
                     .conn_id = req.conn_id,
+                    .loop_id = req.loop_id,
                     .msg_id = req.msg_id,
                     .table = table_metadata,
                     .records = &[_]Record{},
@@ -253,6 +255,7 @@ pub const ReadWorker = struct {
         );
         const response = ReadResponse{
             .conn_id = req.conn_id,
+            .loop_id = req.loop_id,
             .msg_id = req.msg_id,
             .table = table_metadata,
             .records = result.records,
@@ -381,6 +384,7 @@ pub const ReadWorker = struct {
             const records = self.read_arena.allocator().alloc(Record, 1) catch {
                 return .{
                     .conn_id = request.conn_id,
+                    .loop_id = request.loop_id,
                     .msg_id = request.msg_id,
                     .table = table_metadata,
                     .records = &[_]Record{},
@@ -391,6 +395,7 @@ pub const ReadWorker = struct {
             records[0] = record;
             return .{
                 .conn_id = request.conn_id,
+                .loop_id = request.loop_id,
                 .msg_id = request.msg_id,
                 .table = table_metadata,
                 .records = records,
@@ -400,6 +405,7 @@ pub const ReadWorker = struct {
         }
         return .{
             .conn_id = request.conn_id,
+            .loop_id = request.loop_id,
             .msg_id = request.msg_id,
             .table = table_metadata,
             .records = &[_]Record{},
@@ -419,7 +425,7 @@ pub const ReadWorkerPool = struct {
         memory_strategy: *MemoryStrategy,
         reader_nodes: []ReaderNode,
         request_queue: *req_queue_type,
-        send_queue: *send_queue_type,
+        send_queue: *SendQueueType,
         schema: *const schema_types.Schema,
         document_cache: *document_cache_type,
         writer_version: *std.atomic.Value(u64),
