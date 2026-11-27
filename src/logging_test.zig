@@ -174,7 +174,6 @@ test "logging: error details" {
     // We can't easily intercept logs, but we can verify the error path is taken
     {
         var ws = createMockWebSocket(memory_strategy.generalAllocator());
-        ws.user_data = &ws;
 
         // Open connection
         try manager.onOpen(&ws);
@@ -192,7 +191,6 @@ test "logging: error details" {
     // Test 2: Missing required fields logs error
     {
         var ws = createMockWebSocket(memory_strategy.generalAllocator());
-        ws.user_data = &ws;
 
         try manager.onOpen(&ws);
 
@@ -226,7 +224,6 @@ test "logging: error details" {
     // Test 4: Multiple error types are logged
     {
         var ws = createMockWebSocket(memory_strategy.generalAllocator());
-        ws.user_data = &ws;
 
         try manager.onOpen(&ws);
 
