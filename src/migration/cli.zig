@@ -304,7 +304,14 @@ fn status(ctx: Context, cmd: Command) !void {
     // process holds the data directory, and a pending restore is the real
     // reason planning cannot proceed.
     try requireNoPendingRestore(ctx, arena, db_path);
-    var lock = try DataLock.acquireShared(ctx.io, ctx.allocator, dirOf(db_path));
+    var lock = DataLock.acquireShared(ctx.io, ctx.allocator, dirOf(db_path)) catch |err| {
+        if (err == error.DataDirLocked) {
+            // A restore that started after the check above holds the exclusive lock.
+            try requireNoPendingRestore(ctx, arena, db_path);
+            try out.print("{s} is in use by another zyncbase process. Stop the server first.\n", .{dirOf(db_path)});
+        }
+        return err;
+    };
     defer lock.release(ctx.io);
     // A restore that crashed between the check above and this lock leaves the
     // journal behind, so the state must be re-confirmed under the lock.
