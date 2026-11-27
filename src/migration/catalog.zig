@@ -28,6 +28,13 @@ fn hasManagedPrefix(index_name: []const u8, table_name: []const u8, prefix: []co
     return rest.len > table_name.len + 2 and std.mem.eql(u8, rest[table_name.len .. table_name.len + 2], "__");
 }
 
+/// Reports one schema mismatch (when a diagnostic sink is present) and marks
+/// the comparison as failed.
+fn fail(diag: ?*Diagnostics, ok: *bool, comptime fmt: []const u8, args: anytype) void {
+    if (diag) |d| d.add(fmt, args);
+    ok.* = false;
+}
+
 /// Reads every row of `stmt` into an arena-owned slice.
 fn collectRows(comptime T: type, arena: Allocator, stmt: anytype, values: anytype) ![]T {
     var rows = std.ArrayListUnmanaged(T).empty;
@@ -187,36 +194,30 @@ fn columnsMatch(arena: Allocator, db: *sqlite.Db, table: *const Table, diag: ?*D
     var ok = true;
     for (expected) |column| {
         const row = findColumn(actual, column.name) orelse {
-            if (diag) |d| d.add("  {s}: column \"{s}\" is missing", .{ table.name, column.name });
-            ok = false;
+            fail(diag, &ok, "  {s}: column \"{s}\" is missing", .{ table.name, column.name });
             continue;
         };
         if (row.hidden != 0) {
-            if (diag) |d| d.add("  {s}: column \"{s}\" is generated or hidden", .{ table.name, column.name });
-            ok = false;
+            fail(diag, &ok, "  {s}: column \"{s}\" is generated or hidden", .{ table.name, column.name });
         }
         if (!std.mem.eql(u8, row.type, column.sql_type)) {
-            if (diag) |d| d.add("  {s}: column \"{s}\" is {s}, expected {s}", .{ table.name, column.name, row.type, column.sql_type });
-            ok = false;
+            fail(diag, &ok, "  {s}: column \"{s}\" is {s}, expected {s}", .{ table.name, column.name, row.type, column.sql_type });
         }
         if ((row.notnull != 0) != column.not_null) {
-            if (diag) |d| d.add("  {s}: column \"{s}\" is {s}, expected {s}", .{
+            fail(diag, &ok, "  {s}: column \"{s}\" is {s}, expected {s}", .{
                 table.name,
                 column.name,
                 if (row.notnull != 0) "NOT NULL" else "nullable",
                 if (column.not_null) "NOT NULL" else "nullable",
             });
-            ok = false;
         }
         if ((row.pk != 0) != column.primary_key) {
-            if (diag) |d| d.add("  {s}: column \"{s}\" primary key mismatch", .{ table.name, column.name });
-            ok = false;
+            fail(diag, &ok, "  {s}: column \"{s}\" primary key mismatch", .{ table.name, column.name });
         }
     }
     for (actual) |row| {
         if (findExpected(expected, row.name) == null) {
-            if (diag) |d| d.add("  {s}: unexpected column \"{s}\"", .{ table.name, row.name });
-            ok = false;
+            fail(diag, &ok, "  {s}: unexpected column \"{s}\"", .{ table.name, row.name });
         }
     }
     return ok;
@@ -277,13 +278,11 @@ fn foreignKeysMatch(arena: Allocator, db: *sqlite.Db, table: *const Table, diag:
             seen[i] = true;
             continue :row_loop;
         }
-        if (diag) |d| d.add("  {s}: unexpected foreign key on \"{s}\" -> {s} (ON DELETE {s})", .{ table.name, row.from, row.table, row.on_delete });
-        ok = false;
+        fail(diag, &ok, "  {s}: unexpected foreign key on \"{s}\" -> {s} (ON DELETE {s})", .{ table.name, row.from, row.table, row.on_delete });
     }
     for (fields, 0..) |field, i| {
         if (field.references != null and !seen[i]) {
-            if (diag) |d| d.add("  {s}: foreign key on \"{s}\" is missing or differs", .{ table.name, field.name });
-            ok = false;
+            fail(diag, &ok, "  {s}: foreign key on \"{s}\" is missing or differs", .{ table.name, field.name });
         }
     }
     return ok;
@@ -321,8 +320,7 @@ fn managedIndexesMatch(arena: Allocator, db: *sqlite.Db, table: *const Table, di
         const position = for (actual, 0..) |row, i| {
             if (!consumed[i] and std.mem.eql(u8, row.name, expected_name)) break i;
         } else {
-            if (diag) |d| d.add("  {s}: index {s} is missing", .{ table.name, expected_name });
-            ok = false;
+            fail(diag, &ok, "  {s}: index {s} is missing", .{ table.name, expected_name });
             continue;
         };
         consumed[position] = true;
@@ -333,15 +331,13 @@ fn managedIndexesMatch(arena: Allocator, db: *sqlite.Db, table: *const Table, di
         if ((row.unique != 0) != managed_index.isUnique() or row.partial != 0 or
             !try indexColumnsMatch(arena, db, expected_name, columns))
         {
-            if (diag) |d| d.add("  {s}: index {s} differs", .{ table.name, expected_name });
-            ok = false;
+            fail(diag, &ok, "  {s}: index {s} differs", .{ table.name, expected_name });
         }
     }
 
     for (actual, 0..) |row, i| {
         if (consumed[i] or !isReservedManagedIndexName(row.name, table.name)) continue;
-        if (diag) |d| d.add("  {s}: obsolete managed index {s}", .{ table.name, row.name });
-        ok = false;
+        fail(diag, &ok, "  {s}: obsolete managed index {s}", .{ table.name, row.name });
     }
     return ok;
 }
