@@ -93,12 +93,14 @@ type WorkerState = {
 	local: number;
 	proc: Bun.Subprocess;
 	stopping: boolean;
+	failure: Error | null;
 	ready: PromiseWithResolvers<void>;
 	armed: PromiseWithResolvers<void>;
 	fired: PromiseWithResolvers<void>;
 	collected: PromiseWithResolvers<{
 		framesBefore: number;
 		framesAfter: number;
+		subscriberFrames: number;
 	}>;
 	result: PromiseWithResolvers<WorkerResult>;
 	readyCpuMs: number;
@@ -142,6 +144,7 @@ await withServer(
 		const threadsStart = readThreadCpu(server.process.pid);
 		const statsStart = await readStats(server.port);
 		const workers: WorkerState[] = [];
+		const memory = startMemorySampler(server.process.pid, workers);
 
 		for (let global = 0; global < processCount; global++) {
 			const shard = Math.floor(global / workersPerShard);
@@ -197,6 +200,7 @@ await withServer(
 			const collected = Promise.withResolvers<{
 				framesBefore: number;
 				framesAfter: number;
+				subscriberFrames: number;
 			}>();
 			const result = Promise.withResolvers<WorkerResult>();
 			// Probe deferreds are unused in single-shard runs; mark them handled
@@ -210,6 +214,7 @@ await withServer(
 				local,
 				proc,
 				stopping: false,
+				failure: null,
 				ready,
 				armed,
 				fired,
@@ -235,8 +240,6 @@ await withServer(
 				}
 			});
 		}
-
-		const memory = startMemorySampler(server.process.pid, workers);
 
 		try {
 			await Promise.all(workers.map((worker) => worker.ready.promise));
@@ -276,6 +279,9 @@ await withServer(
 			}
 
 			const phase = async (name: string): Promise<number> => {
+				for (const worker of workers) {
+					if (worker.failure) throw worker.failure;
+				}
 				const start = performance.now();
 				const startEpoch = performance.timeOrigin + start;
 				const done = workers.map(
@@ -367,6 +373,12 @@ await withServer(
 			const generatorCores = generatorCpu / elapsedSeconds;
 			const totalCores = serverCores + generatorCores;
 
+			const failed = workers.find((worker) => worker.failure);
+			if (failed?.failure) throw failed.failure;
+			const closedClients = results.reduce((sum, r) => sum + r.closed, 0);
+			if (closedClients > 0) {
+				throw new Error(`${closedClients} clients disconnected before cleanup`);
+			}
 			console.log(
 				`\ncombo server load test passed: ${processCount * clientsPerProcess} clients across ${processCount} processes` +
 					(shards > 1 ? ` (${shards} isolated shards)` : "") +
@@ -436,6 +448,7 @@ await withServer(
 			}
 			reportShards(workers, results, internal);
 		} finally {
+			memory.stop();
 			if (profileDir) await Bun.sleep(500);
 			for (const worker of workers) {
 				worker.stopping = true;
@@ -717,7 +730,9 @@ function reportMessages(args: {
 				`(${formatRate(storeFanout / (storeMs / 1000))})`,
 		);
 		const presenceMs =
-			phases["presence-user"].ms + phases["presence-shared"].ms;
+			phases["presence-user"].ms +
+			phases["presence-shared"].ms +
+			phases.converge.ms;
 		console.log(
 			`    ${"presence total".padEnd(16)} ${formatCount(presenceFanout).padStart(10)} ` +
 				`(${formatRate(presenceFanout / (presenceMs / 1000))})`,
@@ -976,8 +991,12 @@ async function runIsolationProbe(workers: WorkerState[]): Promise<void> {
 	}
 
 	const shardZero = perShard.get(0) ?? 0;
-	if (shardZero <= 0) {
-		throw new Error("isolation probe: shard 0 saw no probe fanout");
+	// shortcut: delivery is inferred from one quiet-window subscriber's frame
+	// count; decode the frame if unrelated traffic can overlap the probe.
+	const probeDelivered =
+		collected[workers.indexOf(writer)]?.subscriberFrames ?? 0;
+	if (probeDelivered <= 0) {
+		throw new Error("isolation probe: shard 0 subscriber saw no probe fanout");
 	}
 	for (const [shard, frames] of perShard) {
 		if (shard !== 0 && frames !== 0) {
@@ -987,7 +1006,7 @@ async function runIsolationProbe(workers: WorkerState[]): Promise<void> {
 		}
 	}
 	console.log(
-		`  isolation: shard 0 fanout=${shardZero} frames; other shards 0`,
+		`  isolation: shard 0 fanout=${shardZero} frames, probe deliveries=${probeDelivered}; other shards 0`,
 	);
 }
 
@@ -997,6 +1016,7 @@ type WorkerMessage = {
 	message?: string;
 	framesBefore?: number;
 	framesAfter?: number;
+	subscriberFrames?: number;
 	cpuMs?: number;
 	connections?: number;
 	closed?: number;
@@ -1088,6 +1108,7 @@ function handleProbeMessage(
 			state.collected.resolve({
 				framesBefore: record.framesBefore ?? 0,
 				framesAfter: record.framesAfter ?? 0,
+				subscriberFrames: record.subscriberFrames ?? 0,
 			});
 			return true;
 		default:
@@ -1096,6 +1117,7 @@ function handleProbeMessage(
 }
 
 function fail(state: WorkerState, error: Error): void {
+	if (!state.failure) state.failure = error;
 	state.ready.reject(error);
 	state.result.reject(error);
 	state.armed.reject(error);

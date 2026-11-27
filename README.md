@@ -54,7 +54,9 @@ bun run demo:quorum
 bun run demo:verso
 ```
 
-Use the TypeScript SDK directly:
+Use the TypeScript SDK directly against your own server (default port 3000).
+The server needs `authentication.ticket` and `authentication.anonymous.enabled`;
+the demos issue their own scoped tokens and apply their own authorization.
 
 ```sh
 bun add @zyncbase/client
@@ -94,8 +96,9 @@ Reference run on a 12-logical-CPU host:
   messages at ~2.6–3.9M messages/s, ~0.8–1.0M presence messages, client-observed
   store p99 1.0–1.5 s during the burst.
 - **100k clients, 10 namespaces:** completes, but the event loops saturate;
-  client-observed p99 rises to 3.4–5.2 s. This is a stress result, not the
-  recommended operating point.
+  store create p99 rises to 3.4–3.9 s and the update maximum reaches 4.7–5.2 s
+  (update p99 is censored at the 5 s histogram cap). This is a stress result,
+  not the recommended operating point.
 - **Caveat:** these are synchronized-burst numbers, not sustained throughput or
   steady-state p99. 100k here is ten namespaces of 10k clients, not one
   100k-subscriber namespace.

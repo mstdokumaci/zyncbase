@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { decode, encode } from "@msgpack/msgpack";
-import { fromBase64, rebaseDocId, rebaseNamespace } from "./protocol";
+import {
+	fromBase64,
+	probeStoreFrame,
+	rebaseDocId,
+	rebaseNamespace,
+} from "./protocol";
 
 function encodeBase64(value: unknown): string {
 	return Buffer.from(encode(value)).toString("base64");
@@ -52,5 +57,21 @@ describe("rebaseDocId", () => {
 			decode(fromBase64(update)) as { path: [number, Uint8Array] }
 		).path[1];
 		expect(updateId).toEqual(createId);
+	});
+});
+
+describe("probeStoreFrame", () => {
+	test("replaces the string field without touching the document id", () => {
+		const id = new Uint8Array(16).fill(0x80);
+		const template = encodeBase64(storeSet(id, "item-0"));
+		const decoded = decode(
+			fromBase64(probeStoreFrame(template, "probe-1")),
+		) as {
+			path: [number, Uint8Array];
+			value: unknown[];
+		};
+		expect(decoded.path[1]).toEqual(id);
+		expect(decoded.value).toContain("probe-1");
+		expect(decoded.value).not.toContain("item-0");
 	});
 });

@@ -69,6 +69,25 @@ export function rebaseDocId(template: string, shard: number): string {
 	return Buffer.from(encode(message)).toString("base64");
 }
 
+/**
+ * Replaces the first string field of a captured store write. The probe needs a
+ * value no workload frame wrote, so the server cannot treat it as a no-op.
+ */
+export function probeStoreFrame(template: string, value: string): string {
+	const message = decode(fromBase64(template)) as { value?: unknown };
+	const sparse = message.value;
+	if (!Array.isArray(sparse)) {
+		throw new Error("store frame is missing value");
+	}
+	for (let i = 0; i + 1 < sparse.length; i += 2) {
+		if (typeof sparse[i + 1] === "string") {
+			sparse[i + 1] = value;
+			return Buffer.from(encode(message)).toString("base64");
+		}
+	}
+	throw new Error("store frame has no string field to mark");
+}
+
 export function makeJwt(secret: string, subject: string): string {
 	return createTestJwt(secret, subject);
 }
@@ -273,7 +292,12 @@ export class RawConnection {
 			onFrame,
 			recordDetails,
 		);
-		await conn.waitFor(1, 60_000);
+		try {
+			await conn.waitFor(1, 60_000);
+		} catch (error) {
+			conn.close();
+			throw error;
+		}
 		if (timing) timing.wsMs = performance.now() - wsStart;
 		if (expectedSchema && conn.firstFrame) {
 			if (!buffersEqual(conn.firstFrame, expectedSchema)) {

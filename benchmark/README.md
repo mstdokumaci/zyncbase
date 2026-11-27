@@ -37,16 +37,24 @@ frames).
 ## Usage
 
 ```sh
+bun install
+bun run --filter @zyncbase/client build
 zig build -Doptimize=ReleaseFast
 
 bun run bench:capture    # generate the workload corpus (first run only)
 bun run bench:combo      # 10k clients
 bun run bench:combo:50k  # 50k clients = 5 shards
 bun run bench:combo:100k # 100k clients = 10 shards
+BENCH_LATENCY=1 bun run bench:combo      # 10k clients, with latency
+BENCH_LATENCY=1 bun run bench:combo:50k  # 50k clients = 5 shards, with latency
 ```
 
 The workload corpus is generated locally and is not checked in. Re-run
-`bun run bench:capture` after schema or protocol changes.
+`bun run bench:capture` after schema or protocol changes. Capture and replay
+both fix the client stride at 2,500 per process.
+
+CPU and RSS sampling reads `/proc`; run the measured modes on Linux or WSL.
+On macOS these fields read as zero.
 
 ## Results
 
@@ -61,7 +69,7 @@ network and device time.
 |---|---:|---:|---:|
 | clients | 10,000 | **50,000** | 100,000 |
 | namespaces | 1 | **5** | 10 |
-| server CPU | ~1.7 of 12 cores | **~2.0–2.1** | ~2.1–2.2 |
+| server CPU (run avg) | ~1.7 of 12 cores | **~2.0–2.1** | ~2.1–2.2 |
 | server peak RSS | ~0.25–0.33 GB | **~1.3–1.6 GB** | ~2.2–3.2 GB |
 | server RSS per 1k clients | ~24–32 MB | **~26–32 MB** | ~22–32 MB |
 | store messages | 2.1 M | **10.5 M** | 21.0 M |
@@ -85,18 +93,23 @@ presence counts are not directly proportional across sizes.
 | store create p50 | 0.13 s | **0.6–0.9 s** | 2.0–2.3 s |
 | store create p99 | 0.27 s | **1.0–1.5 s** | 3.4–3.9 s |
 | store update p50 | 0.13 s | **0.6–0.9 s** | 2.2–2.8 s |
-| store update p99 | 0.18 s | **1.3–1.5 s** | 4.7–5.2 s |
+| store update p99 | 0.18 s | **1.3–1.5 s** | n/a (5 s cap) |
 
 Latency is measured from the start of the write burst to delivery at a
 subscriber. It is a burst-tail number, not idle or sustained-load latency.
+Deliveries that arrive after the phase's writes are acknowledged are not
+recorded, so p99 and max omit the slowest tail. The update histogram also caps
+at 5 s: the 100k figure is not a p99; its observed maximum was 4.7–5.2 s.
 
 ### Beyond 50k
 
 100k clients completed and stayed isolated across 10 namespaces. Server CPU
 stayed at ~2.1–2.2 cores — barely more than at 50k — while store fanout rate
-fell to 2.3–2.7M messages/s and client-observed store p99 rose to 3.4–5.2 s.
-This is the server's single-node ceiling for this workload. Treat 50k as the
-reference operating point and 100k as a stress result, not a recommendation.
+fell to 2.3–2.7M messages/s. Client-observed store create p99 rose to
+3.4–3.9 s and the update maximum reached 4.7–5.2 s; the update p99 is censored
+at the 5 s histogram cap. This is the server's single-node ceiling for this
+workload. Treat 50k as the reference operating point and 100k as a stress
+result, not a recommendation.
 
 Remember that 100k here is ten namespaces of 10k clients, not one namespace
 with 100k subscribers. A single large namespace would fan out each write to
@@ -111,8 +124,8 @@ many more clients and is not measured by this corpus.
 - Store fanout scaled linearly with clients: 2.1M messages at 10k, 10.5M at
   50k, and 21.0M at 100k.
 - Presence fanout reached 4.8–6.5M messages/s at 50k.
-- The server used about 2 cores and about 30 MB per 1,000 clients at 50k,
-  leaving host CPU and memory headroom.
+- The server averaged about 2 of 12 cores over the run and about 30 MB per
+  1,000 clients at 50k; compare burst peaks against the host before sizing.
 - The 50k store burst tail stayed around 1.5 s p99.
 
 ## What this does not show

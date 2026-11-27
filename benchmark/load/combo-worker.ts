@@ -6,6 +6,7 @@ import {
 	makeJwt,
 	messageType,
 	type OpenTiming,
+	probeStoreFrame,
 	RawConnection,
 	rebaseDocId,
 	rebaseNamespace,
@@ -28,7 +29,12 @@ const port = Number(values.port);
 const host = values.host;
 const secret = values.secret ?? "";
 const corpusPath = values.corpus;
-const roleIndices = (values.processes ?? "").split(",").map(Number);
+const roleIndices =
+	values.processes === undefined
+		? []
+		: values.processes
+				.split(",")
+				.map((part) => (part.trim() === "" ? Number.NaN : Number(part)));
 const shard = Number(values.shard);
 const clientsPerRole = Number(values.clients);
 
@@ -268,11 +274,11 @@ async function openLatencyProbe(
 async function connectLocal(index: number): Promise<RawConnection> {
 	const role = roles[Math.floor(index / clientsPerRole)];
 	const localId = index % clientsPerRole;
-	const globalId = role.processIndex * corpusClientsPerProcess + localId;
+	const subjectId = role.processIndex * clientsPerRole + localId;
 	const subject =
 		shard === 0
-			? `combo-stress-${globalId}`
-			: `combo-stress-s${shard}-${globalId}`;
+			? `combo-stress-${subjectId}`
+			: `combo-stress-s${shard}-${subjectId}`;
 	let lastError: unknown;
 	for (let attempt = 0; attempt < 3; attempt++) {
 		try {
@@ -480,23 +486,20 @@ function countClosed(): number {
 }
 
 let probeFramesBefore = 0;
+let probeSubscriberFramesBefore = 0;
 let workloadFrames = -1;
 let workloadBytes = -1;
 
 async function fireProbe(): Promise<void> {
 	const role = roles[0];
-	const presence =
-		corpus.presenceUser[
-			String(role.processIndex * corpusClientsPerProcess + 200)
-		]?.[0];
-	if (!presence) throw new Error("probe: missing template presence frame");
 	const writer = connections[role.base];
 	const target = writer.acks + 1;
 	writer.countAcks = true;
-	writer.sendBase64(role.createFrames[0]);
+	writer.sendBase64(
+		probeStoreFrame(role.createFrames[0], `probe-${process.pid}-${Date.now()}`),
+	);
 	await writer.waitForAcks(target, setupTimeoutMs);
 	writer.countAcks = false;
-	connections[role.base + 200].sendBase64(presence);
 }
 
 async function phaseConverge(): Promise<void> {
@@ -572,6 +575,10 @@ process.on("message", (message: unknown) => {
 		workloadFrames = totalFrames();
 		workloadBytes = totalBytes();
 		probeFramesBefore = workloadFrames;
+		// Filter B matches createFrames[0]; the last client is filter B and is
+		// not the writer.
+		probeSubscriberFramesBefore =
+			connections[roles[0].base + clientsPerRole - 1].frames;
 		process.send?.({ type: "probe-armed", shard, process: processIndex });
 	}
 	if (record.type === "probe-fire") {
@@ -591,6 +598,9 @@ process.on("message", (message: unknown) => {
 			process: processIndex,
 			framesBefore: probeFramesBefore,
 			framesAfter: totalFrames(),
+			subscriberFrames:
+				connections[roles[0].base + clientsPerRole - 1].frames -
+				probeSubscriberFramesBefore,
 		});
 	}
 	if (record.type === "cleanup") {
