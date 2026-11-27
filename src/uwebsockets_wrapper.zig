@@ -244,6 +244,9 @@ pub const WebSocket = struct {
     session: ?Session = null,
     /// Process-unique id assigned by ConnectionManager.onOpen; 0 until then.
     conn_id: u64 = 0,
+    /// Backing store for on_open, where a handler may close the socket
+    /// synchronously and destroy socket_data before on_open returns.
+    conn_id_store: ?*u64 = null,
     /// Owning event loop.
     loop_id: u8 = 0,
     /// Test-only send observer (fn pointer + opaque ctx); zero-sized in
@@ -297,6 +300,7 @@ pub const WebSocket = struct {
 
     pub fn setConnId(self: *WebSocket, id: u64) void {
         self.conn_id = id;
+        if (self.conn_id_store) |store| store.* = id;
     }
 };
 
@@ -377,11 +381,9 @@ fn onOpen(ws: ?*c.uws_websocket_t, is_ssl: bool) void {
     const server = socket_data.server;
     const session = socket_data.session;
     socket_data.session = null;
-    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = session };
+    var zig_ws = WebSocket{ .ws = ws.?, .ssl = server.ssl, .loop_id = server.loop_id, .session = session, .conn_id_store = &socket_data.conn_id };
     defer if (zig_ws.session) |*sess| sess.deinit(server.allocator);
     if (server.handlers.on_open) |handler| handler(&zig_ws, server.user_data);
-    // The handler assigned the id on this stack copy; persist it for later callbacks.
-    socket_data.conn_id = zig_ws.conn_id;
 }
 
 fn onMessage(ws: ?*c.uws_websocket_t, message: [*c]const u8, length: usize, opcode: c.uws_opcode_t, is_ssl: bool) void {
