@@ -4,6 +4,7 @@ import {
 	fromBase64,
 	loadComboCorpus,
 	makeJwt,
+	messageType,
 	type OpenTiming,
 	RawConnection,
 	rebaseDocId,
@@ -17,7 +18,7 @@ const { values } = parseArgs({
 		host: { type: "string", default: "127.0.0.1" },
 		secret: { type: "string" },
 		corpus: { type: "string" },
-		process: { type: "string" },
+		processes: { type: "string" },
 		shard: { type: "string", default: "0" },
 		clients: { type: "string", default: "2500" },
 	},
@@ -27,51 +28,94 @@ const port = Number(values.port);
 const host = values.host;
 const secret = values.secret ?? "";
 const corpusPath = values.corpus;
-const processIndex = Number(values.process);
+const roleIndices = (values.processes ?? "").split(",").map(Number);
 const shard = Number(values.shard);
-const clientsPerProcess = Number(values.clients);
+const clientsPerRole = Number(values.clients);
 
 if (
 	!Number.isInteger(port) ||
 	!host ||
 	!secret ||
 	!corpusPath ||
-	!Number.isInteger(processIndex) ||
-	processIndex < 0 ||
-	processIndex >= 4 ||
 	!Number.isInteger(shard) ||
 	shard < 0 ||
-	clientsPerProcess !== 2500
+	!Number.isInteger(clientsPerRole) ||
+	clientsPerRole < 400 ||
+	roleIndices.length < 1 ||
+	roleIndices.length > 4 ||
+	roleIndices.some(
+		(index) => !Number.isInteger(index) || index < 0 || index >= 4,
+	) ||
+	new Set(roleIndices).size !== roleIndices.length
 ) {
 	throw new Error("combo worker: invalid arguments");
 }
 
+// The captured presence frames are keyed by the original 2,500-client process
+// topology; the client count may grow, but the corpus keys do not.
+const corpusClientsPerProcess = 2500;
+
 const corpus = loadComboCorpus(corpusPath);
 const expectedSchema = fromBase64(corpus.schemaSync);
-const table = processIndex % 2 === 0 ? "items" : "events";
-const room = processIndex < 2 ? 0 : 1;
 const storeNamespace =
 	shard === 0
 		? corpus.setup.storeNamespace
 		: rebaseNamespace(corpus.setup.storeNamespace, `public-s${shard}`);
-const presenceNamespace =
-	shard === 0
-		? corpus.setup.presenceNamespaces[String(room)]
-		: rebaseNamespace(
-				corpus.setup.presenceNamespaces[String(room)],
-				`presence-combo-s${shard}-room-${room}`,
-			);
-const sharedFrames = corpus.presenceShared[String(room)];
-const createFrames = Array.from({ length: 100 }, (_, index) => {
-	const frame = corpus.storeCreates[`${processIndex}:${index}`];
-	if (!frame) throw new Error(`missing create ${processIndex}:${index}`);
-	return rebaseDocId(frame, shard);
-});
-const updateFrames = Array.from({ length: 100 }, (_, index) => {
-	const frame = corpus.storeUpdates[`${processIndex}:${index}`];
-	if (!frame) throw new Error(`missing update ${processIndex}:${index}`);
-	return rebaseDocId(frame, shard);
-});
+const presenceSubscribe = corpus.setup.presenceSubscribe;
+const presenceSubscribeShared = corpus.setup.presenceSubscribeShared;
+
+type Role = {
+	processIndex: number;
+	table: "items" | "events";
+	room: number;
+	presenceNamespace: string;
+	sharedFrames: string[];
+	createFrames: string[];
+	updateFrames: string[];
+	storeSubscribes: Record<"A" | "B", string>;
+	base: number;
+};
+
+const roles: Role[] = [];
+let connectionBase = 0;
+for (const processIndex of roleIndices) {
+	const table = processIndex % 2 === 0 ? "items" : "events";
+	const room = processIndex < 2 ? 0 : 1;
+	const presenceNamespace =
+		shard === 0
+			? corpus.setup.presenceNamespaces[String(room)]
+			: rebaseNamespace(
+					corpus.setup.presenceNamespaces[String(room)],
+					`presence-combo-s${shard}-room-${room}`,
+				);
+	const createFrames = Array.from({ length: 100 }, (_, index) => {
+		const frame = corpus.storeCreates[`${processIndex}:${index}`];
+		if (!frame) throw new Error(`missing create ${processIndex}:${index}`);
+		return rebaseDocId(frame, shard);
+	});
+	const updateFrames = Array.from({ length: 100 }, (_, index) => {
+		const frame = corpus.storeUpdates[`${processIndex}:${index}`];
+		if (!frame) throw new Error(`missing update ${processIndex}:${index}`);
+		return rebaseDocId(frame, shard);
+	});
+	roles.push({
+		processIndex,
+		table,
+		room,
+		presenceNamespace,
+		sharedFrames: corpus.presenceShared[String(room)],
+		createFrames,
+		updateFrames,
+		storeSubscribes: corpus.setup.storeSubscribes[table],
+		base: connectionBase,
+	});
+	connectionBase += clientsPerRole;
+}
+const totalClients = connectionBase;
+const processIndex = roles[0].processIndex;
+// 100k clients saturate the server's event loops; setup responses can take
+// longer than RawConnection's 20 s default.
+const setupTimeoutMs = 60_000;
 const cpuStart = process.cpuUsage();
 
 type Phase =
@@ -81,7 +125,59 @@ type Phase =
 	| "presence-shared"
 	| "converge";
 
-let connections: RawConnection[] = [];
+type LatencyHistogram = {
+	buckets: number[];
+	samples: number;
+	overflow: number;
+	maxMs: number;
+};
+
+// Probe subscribers record store-set arrival times relative to the phase start
+// broadcast by the parent. 5 ms buckets keep the IPC report small.
+const LATENCY_BUCKET_MS = 5;
+const LATENCY_BUCKET_COUNT = 1000;
+const latency = process.env.BENCH_LATENCY === "1";
+const internal = process.env.BENCH_INTERNAL === "1";
+const latencyByPhase: Record<string, LatencyHistogram> = {};
+let latencyPhaseStartEpoch: number | null = null;
+let latencyBuckets = new Uint32Array(LATENCY_BUCKET_COUNT);
+let latencySamples = 0;
+let latencyOverflow = 0;
+let latencyMaxMs = 0;
+
+function recordLatency(at: number): void {
+	if (latencyPhaseStartEpoch === null) return;
+	const ms = performance.timeOrigin + at - latencyPhaseStartEpoch;
+	latencySamples++;
+	if (ms > latencyMaxMs) latencyMaxMs = ms;
+	const bucket = Math.floor(ms / LATENCY_BUCKET_MS);
+	if (bucket >= 0 && bucket < LATENCY_BUCKET_COUNT) latencyBuckets[bucket]++;
+	else latencyOverflow++;
+}
+
+function startLatencyPhase(startEpoch: number): void {
+	latencyBuckets = new Uint32Array(LATENCY_BUCKET_COUNT);
+	latencySamples = 0;
+	latencyOverflow = 0;
+	latencyMaxMs = 0;
+	latencyPhaseStartEpoch = startEpoch;
+}
+
+function finishLatencyPhase(name: Phase): void {
+	if (latencyPhaseStartEpoch === null) return;
+	latencyByPhase[name] = {
+		buckets: Array.from(latencyBuckets),
+		samples: latencySamples,
+		overflow: latencyOverflow,
+		maxMs: latencyMaxMs,
+	};
+	latencyPhaseStartEpoch = null;
+}
+
+const connections: RawConnection[] = new Array<RawConnection>(totalClients);
+const latencyProbes: RawConnection[] = [];
+let framesTotal = 0;
+let bytesTotal = 0;
 const setupFail: Record<string, number> = {};
 type StageStat = { count: number; totalMs: number; maxMs: number };
 const setupStages: Record<string, StageStat> = {};
@@ -125,10 +221,16 @@ async function connectWithStoreScope(
 			true,
 			countAcks,
 			timing,
+			undefined,
+			(n) => {
+				framesTotal++;
+				bytesTotal += n;
+			},
+			internal,
 		);
 		const namespaceStart = performance.now();
 		conn.sendBase64(storeNamespace);
-		await conn.waitFor(2);
+		await conn.waitFor(2, setupTimeoutMs);
 		noteSetup("store-namespace", conn);
 		recordStage("ticket", timing.ticketMs ?? 0);
 		recordStage("ws", timing.wsMs ?? 0);
@@ -140,8 +242,33 @@ async function connectWithStoreScope(
 	}
 }
 
-async function connectLocal(localId: number): Promise<RawConnection> {
-	const globalId = processIndex * clientsPerProcess + localId;
+async function openLatencyProbe(
+	role: Role,
+	filter: "A" | "B",
+): Promise<RawConnection> {
+	const conn = await RawConnection.open(
+		host,
+		port,
+		makeJwt(secret, `combo-latency-s${shard}-p${role.processIndex}-${filter}`),
+		expectedSchema,
+		false,
+		false,
+		undefined,
+		(message, at) => {
+			if (messageType(message) === 0x18) recordLatency(at);
+		},
+	);
+	conn.sendBase64(storeNamespace);
+	await conn.waitFor(2, setupTimeoutMs);
+	conn.sendBase64(role.storeSubscribes[filter]);
+	await conn.waitFor(3, setupTimeoutMs);
+	return conn;
+}
+
+async function connectLocal(index: number): Promise<RawConnection> {
+	const role = roles[Math.floor(index / clientsPerRole)];
+	const localId = index % clientsPerRole;
+	const globalId = role.processIndex * corpusClientsPerProcess + localId;
 	const subject =
 		shard === 0
 			? `combo-stress-${globalId}`
@@ -164,45 +291,59 @@ async function connectLocal(localId: number): Promise<RawConnection> {
 }
 
 try {
+	const setupOnly = process.env.COMBO_SETUP_ONLY === "1";
+
+	// Open probes before the client load. At 100k clients a probe opened after
+	// setup can miss its 20 s schema-frame deadline while the server is busy.
+	if (latency && !setupOnly) {
+		for (const role of roles) {
+			const [filterA, filterB] = await Promise.all([
+				openLatencyProbe(role, "A"),
+				openLatencyProbe(role, "B"),
+			]);
+			latencyProbes.push(filterA, filterB);
+		}
+	}
+
 	// Match the e2e connect phase: clients connect concurrently, store scope
-	// handshake included, 250 in flight. Keep the localId index stable.
-	connections = new Array<RawConnection>(clientsPerProcess);
+	// handshake included, 500 in flight. Keep the index stable.
 	let next = 0;
 	let failure: Error | null = null;
 	const connector = async () => {
 		while (failure === null) {
-			const localId = next++;
-			if (localId >= clientsPerProcess) return;
+			const index = next++;
+			if (index >= totalClients) return;
 			try {
-				connections[localId] = await connectLocal(localId);
+				connections[index] = await connectLocal(index);
 			} catch (error) {
 				const reason = error instanceof Error ? error.message : String(error);
-				failure = new Error(`connect localId=${localId}: ${reason}`);
+				failure = new Error(`connect index=${index}: ${reason}`);
 			}
 		}
 	};
-	await Promise.all(Array.from({ length: 250 }, connector));
+	await Promise.all(Array.from({ length: 500 }, connector));
 	if (failure) throw failure;
 
-	const setupOnly = process.env.COMBO_SETUP_ONLY === "1";
 	// Match the client setup pipeline: the store subscription and presence
 	// namespace are sent together; the two presence subscriptions are sent
 	// together once the presence scope is ready. Wait on messages, not frames,
 	// because the server may coalesce setup responses.
 	if (!setupOnly)
 		await Promise.all(
-			connections.map(async (conn, localId) => {
-				const filter = localId < clientsPerProcess / 2 ? "A" : "B";
+			connections.map(async (conn, index) => {
+				const role = roles[Math.floor(index / clientsPerRole)];
+				const localId = index % clientsPerRole;
+				const filter = localId < clientsPerRole / 2 ? "A" : "B";
 				let stageStart = performance.now();
-				conn.sendBase64(corpus.setup.storeSubscribes[table][filter]);
-				conn.sendBase64(presenceNamespace);
-				await conn.waitForMessages(4);
+				conn.sendBase64(role.storeSubscribes[filter]);
+				conn.sendBase64(role.presenceNamespace);
+				await conn.waitForMessages(4, setupTimeoutMs);
 				recordStage("store-sub+presence-ns", performance.now() - stageStart);
 
 				stageStart = performance.now();
-				conn.sendBase64(corpus.setup.presenceSubscribe);
-				conn.sendBase64(corpus.setup.presenceSubscribeShared);
-				await conn.waitForMessages(6);
+				conn.sendBase64(presenceSubscribe);
+				conn.sendBase64(presenceSubscribeShared);
+				await conn.waitForMessages(6, setupTimeoutMs);
 				recordStage("presence-subs", performance.now() - stageStart);
 
 				const storeSubAt = conn.messageTimes.get(2);
@@ -229,6 +370,9 @@ try {
 					setupFail.subscriptions = (setupFail.subscriptions ?? 0) + 1;
 				}
 				conn.countMessages = false;
+				// Acks are only needed while a write is in flight; decoding every
+				// later fanout frame just to count acks burns generator CPU.
+				conn.countAcks = false;
 			}),
 		);
 } catch (error) {
@@ -266,33 +410,45 @@ process.send?.({
 
 function phaseCreates(): Promise<void> {
 	return Promise.all(
-		connections.slice(0, 100).map(async (conn, idx) => {
-			const target = conn.acks + 1;
-			conn.sendBase64(createFrames[idx]);
-			await conn.waitForAcks(target);
-		}),
+		roles.flatMap((role) =>
+			role.createFrames.map(async (frame, idx) => {
+				const conn = connections[role.base + idx];
+				const target = conn.acks + 1;
+				conn.countAcks = true;
+				conn.sendBase64(frame);
+				await conn.waitForAcks(target, setupTimeoutMs);
+				conn.countAcks = false;
+			}),
+		),
 	).then(() => {});
 }
 
 function phaseUpdates(): Promise<void> {
 	return Promise.all(
-		connections.slice(100, 200).map(async (conn, idx) => {
-			const target = conn.acks + 1;
-			conn.sendBase64(updateFrames[idx]);
-			await conn.waitForAcks(target);
-		}),
+		roles.flatMap((role) =>
+			role.updateFrames.map(async (frame, idx) => {
+				const conn = connections[role.base + 100 + idx];
+				const target = conn.acks + 1;
+				conn.countAcks = true;
+				conn.sendBase64(frame);
+				await conn.waitForAcks(target, setupTimeoutMs);
+				conn.countAcks = false;
+			}),
+		),
 	).then(() => {});
 }
 
 async function phasePresenceUser(): Promise<void> {
 	for (let tick = 0; tick < 3; tick++) {
-		for (let i = 0; i < 100; i++) {
-			const localId = 200 + i;
-			const conn = connections[localId];
-			const globalId = processIndex * clientsPerProcess + localId;
-			const frames = corpus.presenceUser[String(globalId)];
-			if (!frames) throw new Error(`missing presence user ${globalId}`);
-			conn.sendBase64(frames[tick]);
+		for (const role of roles) {
+			for (let i = 0; i < 100; i++) {
+				const localId = 200 + i;
+				const conn = connections[role.base + localId];
+				const globalId = role.processIndex * corpusClientsPerProcess + localId;
+				const frames = corpus.presenceUser[String(globalId)];
+				if (!frames) throw new Error(`missing presence user ${globalId}`);
+				conn.sendBase64(frames[tick]);
+			}
 		}
 		if (tick < 2) await Bun.sleep(25);
 	}
@@ -300,23 +456,21 @@ async function phasePresenceUser(): Promise<void> {
 
 async function phasePresenceShared(): Promise<void> {
 	for (let tick = 0; tick < 3; tick++) {
-		for (let i = 0; i < 100; i++) {
-			connections[300 + i].sendBase64(sharedFrames[tick]);
+		for (const role of roles) {
+			for (let i = 0; i < 100; i++) {
+				connections[role.base + 300 + i].sendBase64(role.sharedFrames[tick]);
+			}
 		}
 		if (tick < 2) await Bun.sleep(25);
 	}
 }
 
 function totalFrames(): number {
-	let total = 0;
-	for (const conn of connections) total += conn.frames;
-	return total;
+	return framesTotal;
 }
 
 function totalBytes(): number {
-	let total = 0;
-	for (const conn of connections) total += conn.bytes;
-	return total;
+	return bytesTotal;
 }
 
 function countClosed(): number {
@@ -330,14 +484,19 @@ let workloadFrames = -1;
 let workloadBytes = -1;
 
 async function fireProbe(): Promise<void> {
+	const role = roles[0];
 	const presence =
-		corpus.presenceUser[String(processIndex * clientsPerProcess + 200)]?.[0];
+		corpus.presenceUser[
+			String(role.processIndex * corpusClientsPerProcess + 200)
+		]?.[0];
 	if (!presence) throw new Error("probe: missing template presence frame");
-	const writer = connections[0];
+	const writer = connections[role.base];
 	const target = writer.acks + 1;
-	writer.sendBase64(createFrames[0]);
-	await writer.waitForAcks(target);
-	connections[200].sendBase64(presence);
+	writer.countAcks = true;
+	writer.sendBase64(role.createFrames[0]);
+	await writer.waitForAcks(target, setupTimeoutMs);
+	writer.countAcks = false;
+	connections[role.base + 200].sendBase64(presence);
 }
 
 async function phaseConverge(): Promise<void> {
@@ -378,19 +537,27 @@ async function runPhase(phase: Phase): Promise<void> {
 	phaseFrames[phase] = totalFrames() - before;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat message dispatch
 process.on("message", (message: unknown) => {
 	if (!message || typeof message !== "object") return;
-	const record = message as { type?: string; phase?: Phase };
+	const record = message as {
+		type?: string;
+		phase?: Phase;
+		startEpoch?: number;
+	};
 	if (record.type === "phase" && record.phase) {
+		const phase = record.phase;
 		const phaseCpuStart = process.cpuUsage();
-		runPhase(record.phase)
+		startLatencyPhase(record.startEpoch ?? 0);
+		runPhase(phase)
 			.then(() => {
+				finishLatencyPhase(phase);
 				const phaseCpu = process.cpuUsage(phaseCpuStart);
 				process.send?.({
 					type: "phase-done",
 					process: processIndex,
 					shard,
-					phase: record.phase,
+					phase,
 					cpuMs: (phaseCpu.user + phaseCpu.system) / 1000,
 				});
 			})
@@ -440,7 +607,12 @@ process.on("message", (message: unknown) => {
 			frames: workloadFrames >= 0 ? workloadFrames : totalFrames(),
 			bytes: workloadBytes >= 0 ? workloadBytes : totalBytes(),
 			setupFail,
+			latency: latencyByPhase,
 			cpuMs: (cpu.user + cpu.system) / 1000,
 		});
+		if (process.env.ZYNCBASE_COMBO_PROFILE_DIR) {
+			// Let Bun flush the CPU profile before the parent tears the worker down.
+			setTimeout(() => process.exit(0), 100);
+		}
 	}
 });

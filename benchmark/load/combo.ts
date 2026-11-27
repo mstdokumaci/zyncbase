@@ -17,20 +17,29 @@ const { values } = parseArgs({
 	},
 });
 
-// The corpus is captured for 2,500 clients per process and embeds their
-// connection/global ids; only the shard count may vary.
-const clientsPerProcess = 2500;
+// The corpus has four logical roles per shard (2 rooms x 2 tables), each with
+// 2,500 clients. Run two roles per worker so each worker drives 5,000 clients.
+const processesPerShard = 4;
+const rolesPerWorker = 2;
+const clientsPerRole = 2500;
+const clientsPerProcess = rolesPerWorker * clientsPerRole;
+const workersPerShard = processesPerShard / rolesPerWorker;
 const shards = Number(values.shards);
 const internal = process.env.BENCH_INTERNAL === "1";
+const latency = process.env.BENCH_LATENCY === "1";
+const profileDir = process.env.ZYNCBASE_COMBO_PROFILE_DIR;
 const root = path.resolve(import.meta.dir, "../..");
 const corpusPath = path.resolve(root, values.corpus);
-const processesPerShard = 4;
-const processCount = processesPerShard * shards;
+const processCount = workersPerShard * shards;
 const hostCpus = os.availableParallelism();
 
 if (!Number.isInteger(shards) || shards < 1) {
 	throw new Error("combo: invalid --shards");
 }
+if (processesPerShard % rolesPerWorker !== 0) {
+	throw new Error("combo: roles per worker must divide the four shard roles");
+}
+if (profileDir) fs.mkdirSync(profileDir, { recursive: true });
 
 type WorkerResult = {
 	cpuMs: number;
@@ -40,7 +49,15 @@ type WorkerResult = {
 	bytes: number;
 	phaseFrames: Record<string, number>;
 	setupFail: Record<string, number>;
+	latency: Record<string, LatencyHistogram>;
 	shard: number;
+};
+
+type LatencyHistogram = {
+	buckets: number[];
+	samples: number;
+	overflow: number;
+	maxMs: number;
 };
 
 type ServerStats = {
@@ -107,7 +124,10 @@ await withServer(
 		authPath: ctx.schemaPath("auth-allow-all.json"),
 		jwtSecret: PRESENCE_E2E_JWT_SECRET,
 		idleTimeoutSeconds: 239,
+		// Latency probes are extra connections beyond the workload clients.
+		maxConnections: processCount * clientsPerProcess + 1000,
 	},
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: linear benchmark orchestration
 	async (server) => {
 		const started = performance.now();
 		const serverCpuStart = processCpuSeconds(server.process.pid);
@@ -116,40 +136,53 @@ await withServer(
 		const workers: WorkerState[] = [];
 
 		for (let global = 0; global < processCount; global++) {
-			const shard = Math.floor(global / processesPerShard);
-			const local = global % processesPerShard;
+			const shard = Math.floor(global / workersPerShard);
+			const local = global % workersPerShard;
+			const roleStart = local * rolesPerWorker;
+			const roleList = Array.from(
+				{ length: rolesPerWorker },
+				(_, offset) => roleStart + offset,
+			);
 			// Each shard uses its own loopback destination IP: one listener, but
 			// separate source-port tuple spaces so 50k localhost sockets do not
 			// exhaust the ephemeral port range.
 			const host = shards === 1 ? "127.0.0.1" : `127.0.0.${shard + 1}`;
 			let state: WorkerState | null = null;
-			const proc = Bun.spawn(
-				[
-					process.execPath,
-					path.join(root, "benchmark/load/combo-worker.ts"),
-					"--port",
-					String(server.port),
-					"--host",
-					host,
-					"--secret",
-					PRESENCE_E2E_JWT_SECRET,
-					"--corpus",
-					corpusPath,
-					"--process",
-					String(local),
-					"--shard",
-					String(shard),
-					"--clients",
-					String(clientsPerProcess),
-				],
-				{
-					cwd: root,
-					stdio: ["ignore", "inherit", "inherit"],
-					ipc: (message) => {
-						if (state) handleMessage(state, message);
-					},
-				},
+			const workerArgs = [process.execPath];
+			if (profileDir) {
+				workerArgs.push(
+					"--cpu-prof",
+					"--cpu-prof-md",
+					"--cpu-prof-dir",
+					profileDir,
+					"--cpu-prof-name",
+					`combo-worker-${global}`,
+				);
+			}
+			workerArgs.push(
+				path.join(root, "benchmark/load/combo-worker.ts"),
+				"--port",
+				String(server.port),
+				"--host",
+				host,
+				"--secret",
+				PRESENCE_E2E_JWT_SECRET,
+				"--corpus",
+				corpusPath,
+				"--processes",
+				roleList.join(","),
+				"--shard",
+				String(shard),
+				"--clients",
+				String(clientsPerRole),
 			);
+			const proc = Bun.spawn(workerArgs, {
+				cwd: root,
+				stdio: ["ignore", "inherit", "inherit"],
+				ipc: (message) => {
+					if (state) handleMessage(state, message);
+				},
+			});
 			const ready = Promise.withResolvers<void>();
 			const armed = Promise.withResolvers<void>();
 			const fired = Promise.withResolvers<void>();
@@ -195,6 +228,8 @@ await withServer(
 			});
 		}
 
+		const memory = startMemorySampler(server.process.pid, workers);
+
 		try {
 			await Promise.all(workers.map((worker) => worker.ready.promise));
 			const setupMs = performance.now() - started;
@@ -221,17 +256,20 @@ await withServer(
 				const generatorCpu =
 					workers.reduce((sum, worker) => sum + worker.readyCpuMs, 0) / 1000;
 				const serverCpu = setupSample.serverCpuSeconds;
+				memory.stop();
 				console.log(
 					`\nsetup-only: ${processCount * clientsPerProcess} connections in ${Math.round(setupSample.ms)}ms; ` +
 						`server=${(serverCpu / setupSeconds).toFixed(2)} cores, ` +
 						`generator=${(generatorCpu / setupSeconds).toFixed(2)} cores`,
 				);
+				reportMemory(memory, processCount * clientsPerProcess);
 				reportSetupStages(workers);
 				return;
 			}
 
 			const phase = async (name: string): Promise<number> => {
 				const start = performance.now();
+				const startEpoch = performance.timeOrigin + start;
 				const done = workers.map(
 					(worker) =>
 						new Promise<void>((resolve, reject) => {
@@ -239,7 +277,7 @@ await withServer(
 						}),
 				);
 				for (const worker of workers) {
-					worker.proc.send({ type: "phase", phase: name });
+					worker.proc.send({ type: "phase", phase: name, startEpoch });
 				}
 				await Promise.all(done);
 				return performance.now() - start;
@@ -311,6 +349,7 @@ await withServer(
 			const results = await Promise.all(
 				workers.map((worker) => worker.result.promise),
 			);
+			memory.stop();
 			const totalMs = performance.now() - started - isolationMs;
 			const cleanupMs = totalMs - workloadMs;
 			const generatorCpu = results.reduce((sum, r) => sum + r.cpuMs, 0) / 1000;
@@ -350,10 +389,13 @@ await withServer(
 				);
 			} else {
 				console.log(
-					`  cpu: host=${hostCpus} cores, server=${serverCores.toFixed(2)} ` +
-						`(load generator co-located)`,
+					`  cpu: host=${hostCpus} cores, server=${serverCores.toFixed(2)}, ` +
+						`generator=${generatorCores.toFixed(2)}, total=${totalCores.toFixed(2)} ` +
+						`(co-located)`,
 				);
 			}
+			reportMemory(memory, processCount * clientsPerProcess);
+			if (latency) reportLatency(results);
 			reportMessages({
 				setup: setupSample,
 				phases: {
@@ -384,8 +426,9 @@ await withServer(
 					},
 				});
 			}
-			reportShards(workers, results, clientsPerProcess, internal);
+			reportShards(workers, results, internal);
 		} finally {
+			if (profileDir) await Bun.sleep(500);
 			for (const worker of workers) {
 				worker.stopping = true;
 				worker.proc.kill();
@@ -574,6 +617,16 @@ function reportMessages(args: {
 			: "  fanout messages (phase averages):",
 	);
 
+	// Latency probes are extra subscribers; exclude their copies so fanout
+	// numbers stay comparable with runs that do not measure latency.
+	const probeMessages = (label: string) =>
+		latency
+			? results.reduce(
+					(sum, result) => sum + (result.latency[label]?.samples ?? 0),
+					0,
+				)
+			: 0;
+
 	const row = (
 		label: string,
 		sample: PhaseSample,
@@ -581,19 +634,18 @@ function reportMessages(args: {
 		opName: "write" | "set" | "",
 	) => {
 		const seconds = sample.ms / 1000;
-		const fanout = Math.max(0, sample.sent - ops);
+		const sent = Math.max(0, sample.sent - probeMessages(label));
+		const fanout = Math.max(0, sent - ops);
 		const frameCount = frames(label);
 		if (internal) {
 			const perOp =
 				ops > 0 ? ` fanout/${opName}=${(fanout / ops).toFixed(1)}` : "";
 			const perFrame =
-				frameCount > 0
-					? ` msgs/frame=${(sample.sent / frameCount).toFixed(1)}`
-					: "";
+				frameCount > 0 ? ` msgs/frame=${(sent / frameCount).toFixed(1)}` : "";
 			const opsText = ops > 0 ? ` ops=${formatCount(ops)}` : "";
 			console.log(
-				`    ${label.padEnd(16)} sent=${formatCount(sample.sent).padStart(10)} ` +
-					`(${formatRate(sample.sent / seconds)})  ` +
+				`    ${label.padEnd(16)} sent=${formatCount(sent).padStart(10)} ` +
+					`(${formatRate(sent / seconds)})  ` +
 					`fanout=${formatCount(fanout).padStart(10)} ` +
 					`(${formatRate(fanout / seconds)})${opsText}${perOp}${perFrame}`,
 			);
@@ -607,8 +659,8 @@ function reportMessages(args: {
 		}
 	};
 
-	const fanoutOf = (sample: PhaseSample, ops: number) =>
-		Math.max(0, sample.sent - ops);
+	const fanoutOf = (sample: PhaseSample, ops: number, label: string) =>
+		Math.max(0, sample.sent - probeMessages(label) - ops);
 
 	row("store-create", phases["store-create"], storeWrites, "write");
 	row("store-update", phases["store-update"], storeWrites, "write");
@@ -627,13 +679,16 @@ function reportMessages(args: {
 	] as const;
 	const ordered = labels.map((label) => phases[label]);
 	const totalMs = ordered.reduce((sum, phase) => sum + phase.ms, 0);
-	const totalSent = ordered.reduce((sum, phase) => sum + phase.sent, 0);
+	const totalSent = labels.reduce(
+		(sum, label) => sum + phases[label].sent - probeMessages(label),
+		0,
+	);
 	const totalOps = storeWrites * 2 + presenceSets * 2;
 	const totalFanout = Math.max(0, totalSent - totalOps);
 	const totalFrames = labels.reduce((sum, label) => sum + frames(label), 0);
 	const storeFanout =
-		fanoutOf(phases["store-create"], storeWrites) +
-		fanoutOf(phases["store-update"], storeWrites);
+		fanoutOf(phases["store-create"], storeWrites, "store-create") +
+		fanoutOf(phases["store-update"], storeWrites, "store-update");
 	const storeMs = phases["store-create"].ms + phases["store-update"].ms;
 	const presenceFanout = Math.max(0, totalFanout - storeFanout);
 
@@ -653,8 +708,11 @@ function reportMessages(args: {
 			`    ${"store total".padEnd(16)} ${formatCount(storeFanout).padStart(10)} ` +
 				`(${formatRate(storeFanout / (storeMs / 1000))})`,
 		);
+		const presenceMs =
+			phases["presence-user"].ms + phases["presence-shared"].ms;
 		console.log(
-			`    ${"presence total".padEnd(16)} ${formatCount(presenceFanout).padStart(10)}`,
+			`    ${"presence total".padEnd(16)} ${formatCount(presenceFanout).padStart(10)} ` +
+				`(${formatRate(presenceFanout / (presenceMs / 1000))})`,
 		);
 		console.log(
 			`    ${"workload total".padEnd(16)} ${formatCount(totalFanout).padStart(10)}`,
@@ -662,10 +720,72 @@ function reportMessages(args: {
 	}
 }
 
+function histogramPercentile(
+	histogram: LatencyHistogram,
+	fraction: number,
+): number | null {
+	if (histogram.samples === 0) return null;
+	const target = Math.ceil(histogram.samples * fraction);
+	let cumulative = 0;
+	for (let i = 0; i < histogram.buckets.length; i++) {
+		cumulative += histogram.buckets[i];
+		if (cumulative >= target) return (i + 1) * 5;
+	}
+	return null;
+}
+
+function mergeLatency(
+	results: WorkerResult[],
+	phase: string,
+): LatencyHistogram | null {
+	const merged: LatencyHistogram = {
+		buckets: [],
+		samples: 0,
+		overflow: 0,
+		maxMs: 0,
+	};
+	for (const result of results) {
+		const histogram = result.latency[phase];
+		if (!histogram || histogram.samples === 0) continue;
+		if (merged.buckets.length === 0) {
+			merged.buckets = new Array<number>(histogram.buckets.length).fill(0);
+		}
+		for (let i = 0; i < histogram.buckets.length; i++) {
+			merged.buckets[i] += histogram.buckets[i];
+		}
+		merged.samples += histogram.samples;
+		merged.overflow += histogram.overflow;
+		merged.maxMs = Math.max(merged.maxMs, histogram.maxMs);
+	}
+	return merged.samples === 0 ? null : merged;
+}
+
+function reportLatency(results: WorkerResult[]): void {
+	const phases = ["store-create", "store-update"] as const;
+	const rows: string[] = [];
+	for (const phase of phases) {
+		const merged = mergeLatency(results, phase);
+		if (!merged) continue;
+		const p50 = histogramPercentile(merged, 0.5);
+		const p95 = histogramPercentile(merged, 0.95);
+		const p99 = histogramPercentile(merged, 0.99);
+		rows.push(
+			`    ${phase.padEnd(16)} p50=${p50 === null ? ">" : p50}ms ` +
+				`p95=${p95 === null ? ">" : p95}ms ` +
+				`p99=${p99 === null ? ">" : p99}ms ` +
+				`max=${Math.round(merged.maxMs)}ms (${merged.samples.toLocaleString("en-US")} samples)`,
+		);
+	}
+	if (rows.length === 0) return;
+	console.log(
+		"  store fanout latency (phase start -> probe receive, 5 ms buckets):",
+	);
+	for (const row of rows) console.log(row);
+}
+
 function reportShards(
 	workers: WorkerState[],
 	results: WorkerResult[],
-	clientsPerProcess: number,
 	internal: boolean,
 ): void {
 	const shardCount = Math.max(...workers.map((worker) => worker.shard)) + 1;
@@ -674,7 +794,7 @@ function reportShards(
 		const frames = members.reduce((sum, r) => sum + r.frames, 0);
 		const bytes = members.reduce((sum, r) => sum + r.bytes, 0);
 		console.log(
-			`  shard ${shard}: clients=${members.length * clientsPerProcess}, ` +
+			`  shard ${shard}: clients=${members.reduce((sum, r) => sum + r.connections, 0)}, ` +
 				`closed=${members.reduce((sum, r) => sum + r.closed, 0)}` +
 				(internal
 					? `, frames=${frames}, bytes=${(bytes / 1e6).toFixed(1)}MB`
@@ -694,6 +814,73 @@ function reportShards(
 			console.log(`    setup failures: ${failures.join(", ")}`);
 		}
 	}
+}
+
+type MemorySampler = {
+	baselineServerBytes: number;
+	peakServerBytes: number;
+	peakGeneratorBytes: number;
+	stop: () => void;
+};
+
+function readRssBytes(pid: number): number {
+	try {
+		const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+		const match = /VmRSS:\s+(\d+) kB/.exec(status);
+		return match ? Number(match[1]) * 1024 : 0;
+	} catch {
+		return 0;
+	}
+}
+
+function startMemorySampler(
+	serverPid: number,
+	workers: WorkerState[],
+): MemorySampler {
+	let running = true;
+	const sampler: MemorySampler = {
+		baselineServerBytes: readRssBytes(serverPid),
+		peakServerBytes: 0,
+		peakGeneratorBytes: 0,
+		stop: () => {
+			running = false;
+		},
+	};
+	sampler.peakServerBytes = sampler.baselineServerBytes;
+	const tick = async () => {
+		while (running) {
+			sampler.peakServerBytes = Math.max(
+				sampler.peakServerBytes,
+				readRssBytes(serverPid),
+			);
+			let generatorBytes = 0;
+			for (const worker of workers) {
+				generatorBytes += readRssBytes(worker.proc.pid);
+			}
+			sampler.peakGeneratorBytes = Math.max(
+				sampler.peakGeneratorBytes,
+				generatorBytes,
+			);
+			await Bun.sleep(100);
+		}
+	};
+	void tick();
+	return sampler;
+}
+
+function reportMemory(memory: MemorySampler, clients: number): void {
+	const mb = (bytes: number) => (bytes / 1e6).toFixed(1);
+	const delta = Math.max(
+		0,
+		memory.peakServerBytes - memory.baselineServerBytes,
+	);
+	const perThousand = clients > 0 ? (delta / clients) * 1000 : 0;
+	console.log(
+		`  memory: server peak=${mb(memory.peakServerBytes)} MB ` +
+			`(idle ${mb(memory.baselineServerBytes)}, +${mb(delta)} MB = ` +
+			`${mb(perThousand)} MB/1k clients), ` +
+			`generator peak=${mb(memory.peakGeneratorBytes)} MB`,
+	);
 }
 
 // shortcut: Linux CLK_TCK assumed 100; benchmark-only, never used by the server.
@@ -818,6 +1005,7 @@ type WorkerMessage = {
 	setupConnections?: number;
 	shard?: number;
 	setupFail?: Record<string, number>;
+	latency?: Record<string, LatencyHistogram>;
 };
 
 function handleMessage(state: WorkerState, message: unknown): void {
@@ -872,6 +1060,7 @@ function toWorkerResult(
 		bytes: record.bytes ?? 0,
 		phaseFrames: record.phaseFrames ?? {},
 		setupFail: record.setupFail ?? {},
+		latency: record.latency ?? {},
 		shard: record.shard ?? state.shard,
 	};
 }

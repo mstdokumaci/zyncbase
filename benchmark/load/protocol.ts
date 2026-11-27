@@ -141,7 +141,7 @@ function messageId(value: unknown): number | undefined {
 	return undefined;
 }
 
-function messageType(value: unknown): number | undefined {
+export function messageType(value: unknown): number | undefined {
 	if (Array.isArray(value)) {
 		return typeof value[0] === "number" ? value[0] : undefined;
 	}
@@ -174,16 +174,25 @@ export class RawConnection {
 	private messageWaiters: MessageWaiter[] = [];
 	private ackWaiters: AckWaiter[] = [];
 	countMessages: boolean;
-	private readonly countAcks: boolean;
+	countAcks: boolean;
+	private readonly onMessage?: (message: unknown, at: number) => void;
+	private readonly onFrame?: (bytes: number) => void;
+	private readonly recordDetails: boolean;
 
 	private constructor(
 		ws: WebSocket,
 		countMessages: boolean,
 		countAcks: boolean,
+		onMessage?: (message: unknown, at: number) => void,
+		onFrame?: (bytes: number) => void,
+		recordDetails = true,
 	) {
 		this.ws = ws;
 		this.countMessages = countMessages;
 		this.countAcks = countAcks;
+		this.onMessage = onMessage;
+		this.onFrame = onFrame;
+		this.recordDetails = recordDetails;
 		ws.binaryType = "arraybuffer";
 		ws.onmessage = (event) => {
 			const bytes = bytesOf(event.data);
@@ -195,22 +204,28 @@ export class RawConnection {
 	private handleBytes(bytes: Uint8Array): void {
 		this.frames++;
 		this.bytes += bytes.byteLength;
+		this.onFrame?.(bytes.byteLength);
 		this.firstFrame ??= bytes;
 		this.lastFrame = bytes;
-		if (this.countMessages || this.countAcks) {
-			try {
-				const at = performance.now();
-				for (const message of decodeMulti(bytes)) {
-					if (this.countMessages) this.recordMessage(message, at);
-					if (this.countAcks && messageType(message) === 0x19) this.acks++;
-				}
-			} catch {
-				// A partial/malformed frame is not a valid ack; leave it uncounted.
-			}
+		if (this.countMessages || this.countAcks || this.onMessage) {
+			this.decodeFrame(bytes);
 		}
-		this.resolveWaiters();
-		this.resolveMessageWaiters();
-		this.resolveAckWaiters();
+		if (this.waiters.length > 0) this.resolveWaiters();
+		if (this.messageWaiters.length > 0) this.resolveMessageWaiters();
+		if (this.ackWaiters.length > 0) this.resolveAckWaiters();
+	}
+
+	private decodeFrame(bytes: Uint8Array): void {
+		try {
+			const at = performance.now();
+			for (const message of decodeMulti(bytes)) {
+				if (this.countMessages) this.recordMessage(message, at);
+				if (this.countAcks && messageType(message) === 0x19) this.acks++;
+				this.onMessage?.(message, at);
+			}
+		} catch {
+			// A partial/malformed frame is not a valid ack; leave it uncounted.
+		}
 	}
 
 	private handleClose(code: number): void {
@@ -239,6 +254,9 @@ export class RawConnection {
 		countMessages = false,
 		countAcks = false,
 		timing?: OpenTiming,
+		onMessage?: (message: unknown, at: number) => void,
+		onFrame?: (bytes: number) => void,
+		recordDetails = true,
 	): Promise<RawConnection> {
 		const ticketStart = performance.now();
 		const ticket = await acquireTicket(host, port, jwt);
@@ -247,8 +265,15 @@ export class RawConnection {
 		const url = new URL(`ws://${host}:${port}/v1/ws`);
 		url.searchParams.set("ticket", ticket);
 		const ws = new WebSocket(url.toString());
-		const conn = new RawConnection(ws, countMessages, countAcks);
-		await conn.waitFor(1);
+		const conn = new RawConnection(
+			ws,
+			countMessages,
+			countAcks,
+			onMessage,
+			onFrame,
+			recordDetails,
+		);
+		await conn.waitFor(1, 60_000);
 		if (timing) timing.wsMs = performance.now() - wsStart;
 		if (expectedSchema && conn.firstFrame) {
 			if (!buffersEqual(conn.firstFrame, expectedSchema)) {
@@ -293,7 +318,12 @@ export class RawConnection {
 				this.ackWaiters = this.ackWaiters.filter(
 					(waiter) => waiter.timer !== timer,
 				);
-				reject(new Error(`timed out waiting for ${acks} acks`));
+				reject(
+					new Error(
+						`timed out waiting for ${acks} acks (have ${this.acks}, ` +
+							`frames=${this.frames}, messages=${this.messages})`,
+					),
+				);
 			}, timeoutMs);
 			this.ackWaiters.push({ acks, resolve, reject, timer });
 		});
@@ -314,6 +344,7 @@ export class RawConnection {
 	private recordMessage(message: unknown, at: number): void {
 		this.messages++;
 		if (messageType(message) === 0x01) this.errors++;
+		if (!this.recordDetails) return;
 		const id = messageId(message);
 		if (id === undefined) return;
 		this.messageTimes.set(id, at);

@@ -34,6 +34,7 @@
 		"bench:corpus": "bun benchmark/capture/build-corpus.ts",
 		"bench:combo": "bun benchmark/load/combo.ts",
 		"bench:combo:50k": "bun benchmark/load/combo.ts --shards 5",
+		"bench:combo:100k": "bun benchmark/load/combo.ts --shards 10",
 		"bench": "bun benchmark/load/combo.ts"
 	},
 	"dependencies": {

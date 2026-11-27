@@ -75,6 +75,8 @@ export type ServerOptions = {
 	maxQueryResponseSize?: number;
 	/** Override `security.maxMessagesPerSecond` for unthrottled harnesses. */
 	maxMessagesPerSecond?: number;
+	/** Override `security.maxConnections` for load tests. */
+	maxConnections?: number;
 	/** Override `performance.*` values for stress scenarios. */
 	performance?: Record<string, number>;
 };
@@ -572,6 +574,8 @@ function writeServerConfig(
 		security.maxQueryResponseSize = options.maxQueryResponseSize;
 	if (options.maxMessagesPerSecond !== undefined)
 		security.maxMessagesPerSecond = options.maxMessagesPerSecond;
+	if (options.maxConnections !== undefined)
+		security.maxConnections = options.maxConnections;
 	if (Object.keys(security).length > 0) config.security = security;
 	if (options.performance) config.performance = options.performance;
 	fs.writeFileSync(configPath, JSON.stringify(config));
