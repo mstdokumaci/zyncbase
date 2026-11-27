@@ -161,30 +161,24 @@ pub const ConnectionManager = struct {
         self.stopTokenSweepTimer();
         for (&self.drain_arenas) |*arena| arena.deinit();
 
-        // Session teardown re-enters the registry (sendToConnection) and the
-        // actions service, so snapshot the connections under the lock and drop
-        // it before calling out.
-        var conns: std.ArrayListUnmanaged(*Connection) = .empty;
-        defer conns.deinit(self.allocator);
+        // Take the whole registry in one lock; teardown re-enters the registry
+        // (sendToConnection) and the actions service, so it runs unlocked. A map
+        // swap allocates nothing, so no connection can be skipped.
         self.mutex.lockUncancelable(self.io);
-        var it = self.map.valueIterator();
-        while (it.next()) |conn_ptr| conns.append(self.allocator, conn_ptr.*) catch |err| {
-            std.log.err("ConnectionManager.deinit: failed to snapshot connection {}: {}", .{ conn_ptr.*.id, err });
-            break;
-        };
+        var drained = self.map;
+        self.map = .empty;
         self.mutex.unlock(self.io);
 
-        for (conns.items) |conn| {
+        var it = drained.iterator();
+        while (it.next()) |entry| {
+            const conn = entry.value_ptr.*;
             // Ensure all logical cleanup (unsubscriptions) is performed before manager shuts down
             self.message_handler.teardownSession(conn);
             if (conn.release()) {
                 self.memory_strategy.releaseConnection(conn);
             }
         }
-
-        self.mutex.lockUncancelable(self.io);
-        self.map.deinit(self.allocator);
-        self.mutex.unlock(self.io);
+        drained.deinit(self.allocator);
 
         self.allocator.free(self.schema_sync_msg);
     }
