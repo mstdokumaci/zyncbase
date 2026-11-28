@@ -2,7 +2,6 @@ const std = @import("std");
 
 const app_test_helpers = @import("app_test_helpers.zig");
 const send_queue_mod = @import("connection/send_queue.zig");
-const fail_alloc = @import("failing_allocator_test_helper.zig");
 const msgpack = @import("msgpack_utils.zig");
 const query_ast = @import("query/ast.zig");
 const query_parser = @import("query/parser.zig");
@@ -12,7 +11,6 @@ const schema_system = @import("schema/system.zig");
 const schema_helpers = @import("schema/test_helpers.zig");
 const schema_types = @import("schema/types.zig");
 const storage_mod = @import("storage_engine.zig");
-const cache_mod = @import("storage_engine/cache.zig");
 const sth = @import("storage_engine_test_helpers.zig");
 const typed_doc_id = @import("typed/doc_id.zig");
 const tth = @import("typed/test_helpers.zig");
@@ -1382,271 +1380,6 @@ test "StorageEngine: update with rejecting guard on existing row returns Permiss
     try testing.expectEqualStrings("original", val.scalar.text);
 }
 
-test "StorageEngine: write-through cache populates cache post-commit and handles guard rejection without invalidation" {
-    const allocator = std.heap.smp_allocator;
-
-    var fields_arr = [_]sth.Field{
-        schema_helpers.makeField("val", .text),
-        schema_helpers.makeField("author_id", .doc_id),
-    };
-    const table = schema_helpers.makeTable("items", &fields_arr);
-
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "write-through-cache-test", table);
-    defer ctx.deinit();
-
-    const table_meta = try ctx.tableMetadata("items");
-    const namespace_id: i64 = 100;
-    const doc_id: typed_doc_id.DocId = 1;
-
-    const val_field_idx = table_meta.fieldIndex("val").?;
-    const author_field_idx = table_meta.fieldIndex("author_id").?;
-
-    const author_a: typed_doc_id.DocId = 50;
-    const author_b: typed_doc_id.DocId = 51;
-
-    const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
-
-    // 1. Initial upsert: Should write-through to document_cache
-    const columns = [_]sth.ColumnValue{
-        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "initial_val" } } },
-        .{ .index = author_field_idx, .value = .{ .scalar = .{ .doc_id = author_a } } },
-    };
-    try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, author_a, &columns, null, null);
-    try ctx.engine.flushPendingWrites();
-
-    // Verify cache hit immediately after write without reading DB
-    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
-        .miss => return error.TestUnexpectedResult,
-        .hit => |hit| {
-            defer hit.handle.release();
-            try testing.expectEqualStrings("initial_val", hit.record.values[val_field_idx].scalar.text);
-        },
-    }
-
-    // 2. Rejecting guard: Cache should RETAIN existing entry (no eviction)
-    var guard = try makeGuardPredicate(allocator, author_field_idx, .doc_id, .{ .scalar = .{ .doc_id = author_b } });
-    defer guard.deinit(allocator);
-
-    const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "rejected_val" } } }};
-    const conn_id: u64 = 555;
-    const msg_id: u64 = 7;
-    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, guard, .{ .conn_id = conn_id, .loop_id = 0, .msg_id = msg_id });
-    try ctx.engine.flushPendingWrites();
-
-    // Verify cache still holds "initial_val" and was NOT evicted
-    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
-        .miss => return error.TestUnexpectedResult,
-        .hit => |hit| {
-            defer hit.handle.release();
-            try testing.expectEqualStrings("initial_val", hit.record.values[val_field_idx].scalar.text);
-        },
-    }
-
-    // 3. Delete: Should evict entry post-commit
-    try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_id, namespace_id, null, null);
-    try ctx.engine.flushPendingWrites();
-
-    // Verify cache is now a miss
-    switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
-        .miss => {},
-        .hit => |hit| {
-            defer hit.handle.release();
-            return error.TestUnexpectedResult;
-        },
-    }
-}
-
-test "StorageEngine: failed document cache update evicts stale entry post-commit" {
-    const allocator = std.heap.smp_allocator;
-
-    var fields_arr = [_]sth.Field{
-        schema_helpers.makeField("val", .text),
-    };
-    const table = schema_helpers.makeTable("items", &fields_arr);
-
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "cache-update-failure-test", table);
-    defer ctx.deinit();
-
-    const table_meta = try ctx.tableMetadata("items");
-    const namespace_id: i64 = 100;
-    const doc_ids = [_]typed_doc_id.DocId{ 1, 2 };
-
-    const val_field_idx = table_meta.fieldIndex("val").?;
-
-    // Re-point the engine's document cache at an allocator that fails exactly
-    // `remaining` allocations (unlike std.testing.FailingAllocator, which
-    // fails permanently). The write worker holds a pointer to
-    // &engine.document_cache, which is unchanged by deinit+reinit in place.
-    var failing = fail_alloc.FailNextAllocator{ .backing = allocator, .remaining = 0 };
-    ctx.engine.document_cache.deinit();
-    try ctx.engine.document_cache.init(testing.io, failing.allocator(), .{});
-
-    // 1. Initial upserts should write through to document_cache.
-    const columns = [_]sth.ColumnValue{
-        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "initial_val" } } },
-    };
-    for (doc_ids) |doc_id| {
-        try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, 1, &columns, null, null);
-    }
-    try ctx.engine.flushPendingWrites();
-
-    for (doc_ids) |doc_id| {
-        const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
-        switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
-            .miss => return error.TestUnexpectedResult,
-            .hit => |hit| {
-                defer hit.handle.release();
-                try testing.expectEqualStrings("initial_val", hit.record.values[val_field_idx].scalar.text);
-            },
-        }
-    }
-
-    // 2. Fail the next cache allocation: the post-commit cache write for the
-    //    update batch below will fail, and every stale entry must be evicted.
-    failing.remaining = 1;
-
-    const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "new_val" } } }};
-    for (doc_ids) |doc_id| {
-        try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_id, namespace_id, &update_columns, null, null);
-    }
-    try ctx.engine.flushPendingWrites();
-
-    // 3. Cache entries must be gone; the DB holds both committed values.
-    for (doc_ids) |doc_id| {
-        const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
-        switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
-            .miss => {},
-            .hit => |hit| {
-                defer hit.handle.release();
-                return error.TestUnexpectedResult;
-            },
-        }
-
-        const record = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_id, namespace_id);
-        defer if (record) |r| r.deinit(allocator);
-        try testing.expect(record != null);
-        try testing.expectEqualStrings("new_val", record.?.values[val_field_idx].scalar.text);
-    }
-}
-
-test "StorageEngine: recovery clear failure keeps cache unreadable and hides unaffected stale entry despite applyBatch failure" {
-    const allocator = std.heap.smp_allocator;
-
-    var fields_arr = [_]sth.Field{
-        schema_helpers.makeField("val", .text),
-    };
-    const table = schema_helpers.makeTable("items", &fields_arr);
-
-    var ctx: sth.EngineTestContext = undefined;
-    try sth.setupEngine(&ctx, allocator, "cache-recovery-failure-test", table);
-    defer ctx.deinit();
-
-    const table_meta = try ctx.tableMetadata("items");
-    const namespace_id: i64 = 100;
-    const doc_affected: typed_doc_id.DocId = 1;
-    const doc_unaffected: typed_doc_id.DocId = 2;
-    const doc_evict: typed_doc_id.DocId = 42;
-
-    const val_field_idx = table_meta.fieldIndex("val").?;
-
-    // Use FailNextAllocator so we can fail exactly the recovery clear and applyBatch.
-    var failing = fail_alloc.FailNextAllocator{ .backing = allocator, .remaining = 0 };
-    ctx.engine.document_cache.deinit();
-    try ctx.engine.document_cache.init(testing.io, failing.allocator(), .{});
-
-    const seed_columns = [_]sth.ColumnValue{
-        .{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "initial" } } },
-    };
-    for ([_]typed_doc_id.DocId{ doc_affected, doc_unaffected, doc_evict }) |doc_id| {
-        try sth.enqueueUpsert(&ctx.engine, table_meta.index, doc_id, namespace_id, 1, &seed_columns, null, null);
-    }
-    try ctx.engine.flushPendingWrites();
-
-    // Verify all three are cached and readable before failure injection.
-    for ([_]typed_doc_id.DocId{ doc_affected, doc_unaffected, doc_evict }) |doc_id| {
-        const cache_key = cache_mod.getCacheKey(table_meta, namespace_id, doc_id);
-        switch (cache_mod.getCachedRecord(&ctx.engine.document_cache, cache_key)) {
-            .miss => return error.TestUnexpectedResult,
-            .hit => |hit| {
-                defer hit.handle.release();
-                try testing.expectEqualStrings("initial", hit.record.values[val_field_idx].scalar.text);
-            },
-        }
-    }
-
-    // Make cache unreadable to trigger recovery path on next commit.
-    ctx.engine.document_cache.invalidate();
-    try testing.expect(!ctx.engine.document_cache.readable.load(.acquire));
-    {
-        const k = cache_mod.getCacheKey(table_meta, namespace_id, doc_unaffected);
-        try testing.expectError(error.NotFound, ctx.engine.document_cache.get(k));
-    }
-
-    // Fail recovery clear and the subsequent applyBatch.
-    failing.remaining = 2;
-
-    const update_columns = [_]sth.ColumnValue{.{ .index = val_field_idx, .value = .{ .scalar = .{ .text = "new_val" } } }};
-    try sth.enqueueUpdate(&ctx.engine, table_meta.index, doc_affected, namespace_id, &update_columns, null, null);
-    try sth.enqueueDelete(&ctx.engine, table_meta.index, doc_evict, namespace_id, null, null);
-    try ctx.engine.flushPendingWrites();
-
-    // After both failures but successful evict of affected keys, cache must stay unreadable.
-    try testing.expect(!ctx.engine.document_cache.readable.load(.acquire));
-
-    // Unaffected stale entry must remain hidden (not restored via setReadable).
-    {
-        const k = cache_mod.getCacheKey(table_meta, namespace_id, doc_unaffected);
-        try testing.expectError(error.NotFound, ctx.engine.document_cache.get(k));
-    }
-    // Affected keys must also be misses while unreadable.
-    {
-        const k = cache_mod.getCacheKey(table_meta, namespace_id, doc_affected);
-        try testing.expectError(error.NotFound, ctx.engine.document_cache.get(k));
-    }
-    {
-        const k = cache_mod.getCacheKey(table_meta, namespace_id, doc_evict);
-        try testing.expectError(error.NotFound, ctx.engine.document_cache.get(k));
-    }
-
-    // DB must still have committed values despite cache being unreadable.
-    {
-        const r = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_affected, namespace_id);
-        defer if (r) |rec| rec.deinit(allocator);
-        try testing.expect(r != null);
-        try testing.expectEqualStrings("new_val", r.?.values[val_field_idx].scalar.text);
-    }
-    {
-        const r = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_evict, namespace_id);
-        defer if (r) |rec| rec.deinit(allocator);
-        try testing.expect(r == null);
-    }
-
-    // Only a successful clear restores readability and drops all stale entries.
-    failing.remaining = 0;
-    try ctx.engine.document_cache.clear();
-    try testing.expect(ctx.engine.document_cache.readable.load(.acquire));
-    {
-        const k = cache_mod.getCacheKey(table_meta, namespace_id, doc_unaffected);
-        try testing.expectError(error.NotFound, ctx.engine.document_cache.get(k));
-    }
-    // Subsequent cache hit must succeed after recovery.
-    {
-        const rec = try sth.readDoc(allocator, &ctx.engine, table_meta.index, doc_affected, namespace_id);
-        defer if (rec) |r| r.deinit(allocator);
-        try testing.expect(rec != null);
-        const cloned = try rec.?.clone(allocator);
-        try ctx.engine.document_cache.update(cache_mod.getCacheKey(table_meta, namespace_id, 99), cloned);
-    }
-    {
-        const k = cache_mod.getCacheKey(table_meta, namespace_id, 99);
-        const h = try ctx.engine.document_cache.get(k);
-        defer h.release();
-        try testing.expectEqualStrings("new_val", h.data().values[val_field_idx].scalar.text);
-    }
-}
-
 test "storage: engine init rejects empty data dir" {
     const allocator = std.heap.smp_allocator;
     var ms: sth.MemoryStrategy = undefined;
@@ -2250,31 +1983,6 @@ fn expectNoForeignKeyChanges(app: *app_test_helpers.AppTestContext) !void {
     try testing.expectEqual(@as(usize, 0), drainForeignKeyChanges(app));
 }
 
-fn expectForeignKeyCacheMiss(app: *app_test_helpers.AppTestContext, table_name: []const u8, namespace_id: i64, id: u128) !void {
-    const table = try app.tableMetadata(table_name);
-    const key = cache_mod.getCacheKey(table, namespace_id, id);
-    switch (cache_mod.getCachedRecord(&app.storage_engine.document_cache, key)) {
-        .miss => {},
-        .hit => |hit| {
-            defer hit.handle.release();
-            return error.TestUnexpectedResult;
-        },
-    }
-}
-
-fn expectForeignKeyCacheNull(app: *app_test_helpers.AppTestContext, table_name: []const u8, field_name: []const u8, namespace_id: i64, id: u128) !void {
-    const table = try app.tableMetadata(table_name);
-    const field_index = table.fieldIndex(field_name) orelse return error.TestExpectedValue;
-    const key = cache_mod.getCacheKey(table, namespace_id, id);
-    switch (cache_mod.getCachedRecord(&app.storage_engine.document_cache, key)) {
-        .miss => return error.TestUnexpectedResult,
-        .hit => |hit| {
-            defer hit.handle.release();
-            try testing.expect(hit.record.values[field_index] == .nil);
-        },
-    }
-}
-
 test "foreign key writes enforce restrict cascade set null and reconcile runtime state" {
     const allocator = testing.allocator;
     const schema_json =
@@ -2360,10 +2068,6 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
         defer nullable_after.deinit();
         try testing.expect(nullable_after.getFieldDocIdOrNull("parent_id") == null);
         try testing.expectEqual(updated_at_before, try nullable_after.getFieldInt("updated_at"));
-
-        try expectForeignKeyCacheMiss(&app, "cascade_children", 2, 22);
-        try expectForeignKeyCacheMiss(&app, "grandchildren", 3, 33);
-        try expectForeignKeyCacheNull(&app, "nullable_children", "parent_id", 4, 44);
 
         var delete_count: usize = 0;
         var update_count: usize = 0;

@@ -30,7 +30,6 @@ Technical specs for the server core and internal systems.
 **Goal**: High-performance multi-threaded core
 - [x] uWebSockets integration (with C++ wrapper)
 - [x] Multi-threaded core engine (SWMR model)
-- [x] Lock-free cache implementation (Atomic ref-counting)
 - [x] SQLite integration with WAL
 - [x] MessagePack serialization (Iterative parser)
 - [x] Memory management strategy (Duality Pool)

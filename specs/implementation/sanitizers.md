@@ -1,6 +1,6 @@
 # Sanitizers
 
-**Drivers**: [Threading](./threading.md), [Memory Strategy](./memory-strategy.md), [Lock-Free Cache](./lock-free-cache.md)
+**Drivers**: [Threading](./threading.md), [Memory Strategy](./memory-strategy.md)
 
 ZyncBase uses runtime sanitizers to enforce concurrency safety, prevent data races, and guarantee leak-free memory operations during testing and CI execution.
 
@@ -12,7 +12,6 @@ ZyncBase uses runtime sanitizers to enforce concurrency safety, prevent data rac
 |------|----------------|
 | `build.zig` | Configures compiler instrumentation options for sanitizers (`-fsanitize=thread`). |
 | `src/memory/strategy_test.zig` | Isolated-GPA leak probing for the arena/connection pools (capacity reuse, concurrent access). |
-| `src/lock_free_cache_leak_test.zig` | Validates that retired cache nodes are correctly destroyed under stress load. |
 | `src/queues/mpsc_queue_thread_safety_test.zig` | Stresses cross-thread MPSC send-queue behavior under TSan. |
 | `src/queues/spmc_blocking_queue_thread_safety_test.zig` | Stresses blocking fanout queues under TSan. |
 
@@ -20,7 +19,7 @@ ZyncBase uses runtime sanitizers to enforce concurrency safety, prevent data rac
 
 ## Sanitizer Invariants
 
-- **ThreadSanitizer (TSan)**: Enforces serialized writes (SWMR model) on the lock-free cache, detecting unsynchronized memory access between parallel read threads and the writer thread.
+- **ThreadSanitizer (TSan)**: Enforces serialized writes (SWMR model), detecting unsynchronized memory access between parallel read threads and the writer thread.
 - **DebugAllocator**: Enforces leak-free execution in debug builds. The allocator logs an error if memory is not released before program exit.
 - **Address Stability**: Live threads/mutexes must remain at stable heap/arena addresses. Live synchronization objects must never be bit-copied, which triggers panic failures.
 - **Self-Healing Pools**: Releasing non-acquired items back to the `IndexPool` must cause immediate runtime assertions.
@@ -40,4 +39,3 @@ ZyncBase uses runtime sanitizers to enforce concurrency safety, prevent data rac
 
 - [Threading](./threading.md)
 - [Memory Strategy](./memory-strategy.md)
-- [Lock-Free Cache](./lock-free-cache.md)

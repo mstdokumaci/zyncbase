@@ -196,7 +196,8 @@ synchronization boundary; cross-loop delivery is explicit.
   - connection registry: one mutex-protected map with an immutable owning-loop id per
     connection; per-loop drain arenas and sweep selectors;
   - subscription engine: thread-safe registration/matching;
-  - lock-free metadata cache: atomic reference counting and copy-on-write;
+  - namespace and identity maps: mutex-guarded, inserted only by the writer
+    after commit;
   - presence: sole mutator is the presence worker;
   - actions: shared state guarded by its mutex and delivered through the
     target loop's queue.

@@ -23,7 +23,6 @@ const managedThread = @import("threading/managed_thread.zig").managedThread;
 
 const Allocator = std.mem.Allocator;
 const Schema = schema_types.Schema;
-const document_cache_type = storage_cache.document_cache_type;
 const identity_cache_type = storage_cache.identity_cache_type;
 const namespace_cache_type = storage_cache.namespace_cache_type;
 pub const ReaderNode = connection.ReaderNode;
@@ -67,7 +66,6 @@ pub const StorageEngine = struct {
     next_reader_idx: std.atomic.Value(usize),
     node_pool: MemoryStrategy.IndexPool(write_queue_type.Node),
     schema: *const Schema,
-    document_cache: document_cache_type,
     namespace_cache: namespace_cache_type,
     identity_cache: identity_cache_type,
     options: Options,
@@ -124,8 +122,6 @@ pub const StorageEngine = struct {
             .node_pool = undefined,
             .next_reader_idx = std.atomic.Value(usize).init(0),
             .schema = schema,
-            // SAFETY: Initialized below
-            .document_cache = undefined,
             .namespace_cache = storage_cache.namespace_cache_type.init(io),
             .identity_cache = storage_cache.identity_cache_type.init(io),
             .write_worker = .{
@@ -135,15 +131,12 @@ pub const StorageEngine = struct {
                 .conn = writer_conn,
                 // SAFETY: Initialized below
                 .stmt_cache = undefined,
-                .version = std.atomic.Value(u64).init(0),
                 .thread = managedThread(WriteWorker).init(io),
                 .flush_wg = .init(io),
                 .change_queue = null,
                 .session_resolver = null,
                 .send_queue = null,
                 .notifier = .{ .callback = event_loop_notifier, .ctx = notifier_ctx },
-                // SAFETY: Set after document_cache init below
-                .document_cache = undefined,
                 // SAFETY: Set after ns/identity cache init below
                 .namespace_cache = undefined,
                 // SAFETY: Set after ns/identity cache init below
@@ -172,10 +165,6 @@ pub const StorageEngine = struct {
 
         self.write_worker.stmt_cache.init(allocator, self.write_worker.performance_config.statement_cache_size);
         errdefer self.write_worker.stmt_cache.deinit(allocator);
-
-        try self.document_cache.init(io, allocator, .{});
-        errdefer self.document_cache.deinit();
-        self.write_worker.document_cache = &self.document_cache;
 
         self.write_worker.namespace_cache = &self.namespace_cache;
         self.write_worker.identity_cache = &self.identity_cache;
@@ -273,8 +262,7 @@ pub const StorageEngine = struct {
         // 4. Deinit queues
         self.read_request_queue.deinit();
 
-        // 5. Deinit cache
-        self.document_cache.deinit();
+        // 5. Deinit metadata maps
         self.namespace_cache.deinit(gpa);
         self.identity_cache.deinit(gpa);
 
@@ -424,8 +412,6 @@ pub const StorageEngine = struct {
             &self.read_request_queue,
             send_queue,
             self.schema,
-            &self.document_cache,
-            &self.write_worker.version,
             self.write_worker.notifier.callback,
             self.write_worker.notifier.ctx,
             self.options.max_query_response_size,

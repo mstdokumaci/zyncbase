@@ -164,12 +164,10 @@ test "WriteWorker: unknown tables roll back batches" {
     defer ctx.deinit();
 
     const entries = try makeDeleteBatchOps(999);
-    const version_before = ctx.engine.write_worker.version.load(.acquire);
     ctx.engine.write_worker.beginOp();
     executeBatchForTest(&ctx, entries);
 
     try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
-    try testing.expectEqual(version_before, ctx.engine.write_worker.version.load(.acquire));
 
     try ctx.engine.write_worker.conn.exec("BEGIN TRANSACTION", .{}, .{});
     try ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{});
@@ -186,12 +184,10 @@ test "WriteWorker: unsupported ops roll back batches" {
     var latch_ckpt = storage_mod.CheckpointLatch.init(std.testing.io);
     const entries = try allocator.alloc(storage_mod.WriteOp, 1);
     entries[0] = .{ .checkpoint = .{ .mode = .passive, .latch = &latch_ckpt } };
-    const version_before = ctx.engine.write_worker.version.load(.acquire);
     ctx.engine.write_worker.beginOp();
     executeBatchForTest(&ctx, entries);
 
     try testing.expectEqual(@as(usize, 0), ctx.engine.write_worker.pendingOpCount());
-    try testing.expectEqual(version_before, ctx.engine.write_worker.version.load(.acquire));
 
     try ctx.engine.write_worker.conn.exec("BEGIN TRANSACTION", .{}, .{});
     try ctx.engine.write_worker.conn.exec("ROLLBACK", .{}, .{});

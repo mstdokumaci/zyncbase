@@ -814,12 +814,8 @@ pub fn execSetupSQL(engine: *StorageEngine, sql_query: []const u8) !void {
     // any cached prepared statements and metadata.
     engine.write_worker.stmt_cache.deinit(engine.allocator);
     engine.write_worker.stmt_cache.init(engine.allocator, engine.write_worker.performance_config.statement_cache_size);
-    engine.document_cache.deinit();
-    try engine.document_cache.init(engine.io, engine.allocator, .{});
     engine.namespace_cache.deinit(engine.allocator);
     engine.namespace_cache = storage_cache.namespace_cache_type.init(engine.io);
     engine.identity_cache.deinit(engine.allocator);
     engine.identity_cache = storage_cache.identity_cache_type.init(engine.io);
-    // Increment write_seq to notify readers that the state has changed (DDL/setup)
-    engine.write_worker.bumpVersion();
 }

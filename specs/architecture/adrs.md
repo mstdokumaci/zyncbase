@@ -156,18 +156,11 @@ variable:
 **Presence thread** — encodes presence broadcasts from batched state and pushes to the owning connection's send sink.
 **Reader pool** — up to 4 threads, each holding its own SQLite connection opened in WAL read mode. Used for cold queries (subscriptions to collections with no active warm state) and `loadMore` operations. Responses route to the requesting connection's reactor.
 **Notification threads** — drain the change buffer after storage commits, evaluate subscription filters (CPU-heavy), encode delta messages, and route each connection's delivery to its owning reactor.
-### Lock-Free Cache
+### Shared Metadata Maps
 
-Metadata shared across all thread domains is served from a lock-free cache using epoch-based reclamation and atomic reference counting. Copy-on-write map swaps allow the writer thread to publish updated versions without acquiring a reader lock. Atomic reference counting over RCU or hazard pointers: simpler to implement correctly, sufficient for the metadata access patterns involved.
+Namespace IDs (namespace string → integer) and user identities (external id → `users.id`) are immutable once created. Each lives in a mutex-guarded map (`lockedMap`). Only the writer inserts, after the resolving transaction commits, so a rollback never exposes an uncommitted id. Reactors read the maps to resolve a scope without a writer round trip. Schema metadata is immutable after startup and needs no synchronization.
 
-**The lock-free cache holds**:
-- Authentication snapshots (validated JWT claim sets)
-- Schema metadata (field definitions, collection shapes)
-- Namespace ID mappings (namespace string → integer, immutable once created)
-- User identity mappings (external_id → internal `users.id`, immutable once created)
-- Per-document records keyed by `(namespace_id, table_index, doc_id)` — used for authorization guard lookups (reading the existing row before a write to evaluate `$doc` predicates)
-
-Collection query results and subscription state are managed exclusively by the Subscription Engine; the lock-free cache does not participate in collection reads or write propagation.
+Documents are never cached in memory. SQLite is the only document source: readers query their WAL connections, and the writer reads its own transaction view (P-SOT). Subscription state is managed exclusively by the Subscription Engine.
 
 **Consequences**:
 - Deterministic resource usage — no configuration-induced performance cliffs.
@@ -256,7 +249,7 @@ The SDK hashes the `SchemaSync` payload to detect schema changes across reconnec
 
 Namespace strings are runtime values (e.g., `tenant:acme:project-123`) — they cannot be pre-compiled into a static dictionary. The engine maintains a hidden system table `_zync_namespaces (id INTEGER PRIMARY KEY, name TEXT UNIQUE)` with reserved ID `0` for the global namespace (`$global`). Runtime-created namespaces use positive IDs assigned on first use.
 
-On first use of a namespace string, the engine upserts it into this table and caches the resulting integer ID in the lock-free cache (ADR-006). All subsequent SQLite reads and writes use the integer `namespace_id` column. The SDK sends namespace strings once (via `StoreSetNamespace` or `PresenceSetNamespace`); the engine handles the mapping transparently.
+On first use of a namespace string, the engine upserts it into this table and caches the resulting integer ID in the shared namespace map (ADR-006). All subsequent SQLite reads and writes use the integer `namespace_id` column. The SDK sends namespace strings once (via `StoreSetNamespace` or `PresenceSetNamespace`); the engine handles the mapping transparently.
 
 This reduces namespace lookup cost from O(N string comparison) to O(1) integer comparison, and saves substantial storage: 8 bytes per row (integer) vs. up to 300+ bytes for long namespace strings at scale.
 
@@ -525,7 +518,7 @@ When `users.namespaced = false` (the default), `users` is a global table and the
 
 Blocking the uWS reactor during resolution would stall all concurrent connections and violate the p50 < 1ms latency target (ADR-004).
 
-**Tier 1 — Synchronous cache hit (~1μs)**: Check the namespace cache and identity cache in the lock-free cache (ADR-006). If both hit, set scope and respond immediately. Zero I/O, zero blocking. After first resolution of a `(namespace, external_id)` pair, all subsequent connections with the same pair resolve via this path.
+**Tier 1 — Synchronous cache hit (~1μs)**: Check the shared namespace and identity maps (ADR-006). If both hit, set scope and respond immediately. Zero I/O, zero blocking. After first resolution of a `(namespace, external_id)` pair, all subsequent connections with the same pair resolve via this path.
 
 **Tier 2 — Async writer handoff (cache miss)**: Enqueue a combined `resolve_session` WriteOp to the writer thread and return immediately — the reactor is free. The writer thread performs `INSERT OR IGNORE INTO _zync_namespaces` and `INSERT OR IGNORE INTO users`, populates both caches, and pushes a `SessionResolutionResult` to the `SessionResolutionBuffer`. The `SessionResolver` (running in the uWS `post_handler`) drains this buffer, acquires the target connection by ref-counted ID, applies the resolved scope, and sends the response.
 

@@ -88,7 +88,6 @@ pub const WriteWorker = struct {
     /// Pre-prepared stmt for `sql.resolveUserId`. Compile-time SQL literal.
     /// Prepared in `StorageEngine.start()`.
     resolve_user_stmt: ?*sqlite.c.sqlite3_stmt = null,
-    version: std.atomic.Value(u64),
     thread: managedThread(WriteWorker),
     flush_wg: WaitGroup,
     change_queue: ?*ChangeQueue,
@@ -98,7 +97,6 @@ pub const WriteWorker = struct {
     session_resolver: ?*SessionResolver,
     send_queue: ?*SendQueueType,
     notifier: Notifier,
-    document_cache: *storage_cache.document_cache_type,
     namespace_cache: *storage_cache.namespace_cache_type,
     identity_cache: *storage_cache.identity_cache_type,
     last_created_at: []i64,
@@ -144,10 +142,6 @@ pub const WriteWorker = struct {
 
     pub fn pendingOpCount(self: *const WriteWorker) usize {
         return self.flush_wg.value();
-    }
-
-    pub fn bumpVersion(self: *WriteWorker) void {
-        _ = self.version.fetchAdd(1, .acq_rel);
     }
 
     pub fn notifyChanges(self: *WriteWorker) void {
@@ -463,15 +457,6 @@ pub const WriteWorker = struct {
         var pending_change_index = std.AutoHashMapUnmanaged(write_queue.OpTarget, usize).empty;
         defer pending_change_index.deinit(arena_allocator);
 
-        var pending_cache_ops = std.ArrayListUnmanaged(CacheOp).empty;
-        defer {
-            for (pending_cache_ops.items) |op| switch (op) {
-                .update => |update_op| update_op.data.deinit(self.allocator),
-                .evict => {},
-            };
-            pending_cache_ops.deinit(self.allocator);
-        }
-
         try execTransactionControlChecked(&self.conn, "BEGIN TRANSACTION", "runTransaction BEGIN");
         tx_started.* = true;
         errdefer {
@@ -488,12 +473,11 @@ pub const WriteWorker = struct {
             .self = self,
             .pending_changes = &pending_changes,
             .pending_change_index = &pending_change_index,
-            .pending_cache_ops = &pending_cache_ops,
         };
 
         try self.runOps(&ctx, ops, fail_fast, rejected);
 
-        try commitBatchAndApply(self, tx_started, &pending_changes, &pending_cache_ops, fence);
+        try commitBatchAndApply(self, tx_started, &pending_changes, fence);
     }
 
     fn runOps(
@@ -560,7 +544,7 @@ pub const WriteWorker = struct {
     }
 
     /// Handles post-execute bookkeeping shared by all three write paths:
-    /// metadata-cache update/eviction, change log push, and guard-conflict detection.
+    /// change log push and guard-conflict detection.
     /// `old_record` / `new_record` ownership is consumed here — caller must
     /// not deinit them afterwards regardless of the return value.
     /// Returns true on success (row was affected or no guard conflict),
@@ -572,19 +556,17 @@ pub const WriteWorker = struct {
         namespace_id: i64,
         doc_id: typed_doc_id.DocId,
         has_guard: bool,
-        pk_delete: bool,
+        is_delete: bool,
         old_record: ?Record,
         new_record: ?Record,
     ) !bool {
-        if (new_record != null or (pk_delete and old_record != null)) {
-            // Row was affected — push change and track cache operation.
+        if (new_record != null or (is_delete and old_record != null)) {
+            // Row was affected — push change.
             errdefer {
                 if (old_record) |r| r.deinit(self.allocator);
                 if (new_record) |r| r.deinit(self.allocator);
             }
-            const table_index = table_metadata.index;
-            try trackCacheOp(ctx, table_metadata, namespace_id, doc_id, pk_delete, old_record, new_record);
-            try pushRowChange(ctx, namespace_id, table_index, doc_id, old_record, new_record);
+            try pushRowChange(ctx, namespace_id, table_metadata.index, doc_id, old_record, new_record);
             return true;
         } else {
             // Row was not affected — check for guard conflict.
@@ -592,34 +574,6 @@ pub const WriteWorker = struct {
             if (old_record) |r| r.deinit(self.allocator);
             if (new_record) |r| r.deinit(self.allocator);
             return !guard_conflict;
-        }
-    }
-
-    fn trackCacheOp(
-        ctx: *BatchCtx,
-        table_metadata: *const schema_types.Table,
-        namespace_id: i64,
-        doc_id: typed_doc_id.DocId,
-        pk_delete: bool,
-        old_record: ?Record,
-        new_record: ?Record,
-    ) !void {
-        const allocator = ctx.self.allocator;
-        const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, doc_id);
-        if (new_record) |nr| {
-            if (nr.clone(allocator)) |cloned| {
-                errdefer cloned.deinit(allocator);
-                try ctx.pending_cache_ops.append(allocator, .{ .update = .{
-                    .key = cache_key,
-                    .data = cloned,
-                } });
-            } else |err| {
-                const classified_err = errors.classifyError(err);
-                std.log.warn("Failed to clone record for cache write-through: {}", .{classified_err});
-                try ctx.pending_cache_ops.append(allocator, .{ .evict = cache_key });
-            }
-        } else if (pk_delete and old_record != null) {
-            try ctx.pending_cache_ops.append(allocator, .{ .evict = cache_key });
         }
     }
 
@@ -1181,8 +1135,6 @@ pub const WriteWorker = struct {
         cache_key: u64,
     };
 
-    const CacheOp = storage_cache.document_cache_type.Mutation;
-
     const EntryTarget = struct {
         table: *const schema_types.Table,
         namespace_id: i64,
@@ -1192,7 +1144,6 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         pending_change_index: *std.AutoHashMapUnmanaged(write_queue.OpTarget, usize),
-        pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
         referential_lookups: ?[]const ReferentialLookup = null,
     };
 
@@ -1253,53 +1204,11 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         tx_started: *bool,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
-        pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
         fence: ?*OutcomeFence,
     ) !void {
         try execTransactionControlChecked(&self.conn, "COMMIT", "executeBatchOp COMMIT");
         tx_started.* = false;
-        self.bumpVersion();
-
-        try self.applyDocumentCache(pending_cache_ops);
-
         flushPendingChanges(self, pending_changes, fence);
-    }
-
-    fn applyDocumentCache(self: *WriteWorker, pending_cache_ops: *std.ArrayListUnmanaged(CacheOp)) !void {
-        var recovery_ok = true;
-        if (!self.document_cache.readable.load(.acquire)) {
-            self.document_cache.clear() catch |clear_err| {
-                std.log.warn("Failed to recover document cache: {}", .{errors.classifyError(clear_err)});
-                recovery_ok = false;
-            };
-        }
-
-        if (self.document_cache.applyBatch(pending_cache_ops.items)) |_| {
-            pending_cache_ops.clearRetainingCapacity();
-        } else |err| {
-            const classified_err = errors.classifyError(err);
-            std.log.warn("Failed to apply document cache batch: {}", .{classified_err});
-            self.document_cache.invalidate();
-            var evict_failed = false;
-            for (pending_cache_ops.items) |op| {
-                const key = switch (op) {
-                    .update => |update_op| update_op.key,
-                    .evict => |evict_key| evict_key,
-                };
-                _ = self.document_cache.evict(key) catch |evict_err| {
-                    std.log.err("Failed to evict stale document cache entry: {}", .{errors.classifyError(evict_err)});
-                    evict_failed = true;
-                    break;
-                };
-            }
-            if (!evict_failed and recovery_ok) {
-                self.document_cache.setReadable(true);
-            } else if (evict_failed) {
-                self.document_cache.clear() catch |clear_err| {
-                    std.log.err("Failed to clear document cache after eviction failure: {}", .{errors.classifyError(clear_err)});
-                };
-            }
-        }
     }
 
     const ResolutionResult = struct {
