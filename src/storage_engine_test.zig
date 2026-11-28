@@ -2320,8 +2320,9 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
     }
 
     {
-        // Deleting a parent missing from this namespace commits as a no-op,
-        // even though the id has cascade children in another namespace.
+        // Parent 7 and its child live in namespace 1. Deleting 7 from
+        // namespace 2 removes no row, but the child lookup matches by parent
+        // id only and still finds child 77; the writer must drop it.
         try parents.insertNamed(7, 1, .{});
         try cascaded.insertNamed(77, 1, .{sth.named("parent_id", fkDocId(7))});
         try cascaded.flush();
