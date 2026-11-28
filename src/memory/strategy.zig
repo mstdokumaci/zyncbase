@@ -100,7 +100,11 @@ pub const MemoryStrategy = struct {
 
     /// Release an arena back to the pool after resetting it
     pub fn releaseArena(self: *MemoryStrategy, arena: *std.heap.ArenaAllocator) void {
-        _ = arena.reset(.{ .retain_with_limit = arena_retain_limit });
+        // A failed shrink leaves the old oversized buffer in place; free it fully
+        // so an outlier request cannot pin memory in the pool.
+        if (!arena.reset(.{ .retain_with_limit = arena_retain_limit })) {
+            _ = arena.reset(.free_all);
+        }
         self.arena_pool.release(arena);
     }
 

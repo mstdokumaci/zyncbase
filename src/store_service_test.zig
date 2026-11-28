@@ -641,8 +641,10 @@ test "StoreService: query response over the configured size limit fails with RES
     defer filter_map.free(allocator);
 
     var read_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, null);
-    errdefer read_req.deinit(allocator);
-    try app.store_service.enqueueRead(read_req);
+    app.store_service.enqueueRead(read_req) catch |err| {
+        read_req.deinit(allocator);
+        return err;
+    };
 
     // The read worker runs on its own thread; wait for its single response.
     const send_queue = &(app.test_context.send_queue orelse return error.TestExpectedValue);
@@ -670,10 +672,12 @@ test "StoreService: a failing query reports an error instead of an empty result"
     defer filter_map.free(allocator);
 
     var read_req = try app.store_service.prepareQueryRead(readCtx(1), tbl_md.index, filter_map, null);
-    errdefer read_req.deinit(allocator);
     // An out-of-range sort field makes buildSelectQuery fail inside the reader.
     read_req.filter.order_by[0].field_index = tbl_md.fields.len + 5;
-    try app.store_service.enqueueRead(read_req);
+    app.store_service.enqueueRead(read_req) catch |err| {
+        read_req.deinit(allocator);
+        return err;
+    };
 
     const send_queue = &(app.test_context.send_queue orelse return error.TestExpectedValue);
     for (0..2000) |_| {
