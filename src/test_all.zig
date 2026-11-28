@@ -73,8 +73,6 @@ test {
     _ = @import("subscription/outcome_ordering_test.zig");
     _ = @import("subscription/worker_pool_perf_test.zig");
     _ = @import("subscription/consistency_test.zig");
-    _ = @import("memory/lock_free_cache_test.zig");
-    _ = @import("memory/lock_free_cache_leak_test.zig");
     _ = @import("memory/strategy_test.zig");
     _ = @import("config/loader_test.zig");
     _ = @import("backup_test.zig");

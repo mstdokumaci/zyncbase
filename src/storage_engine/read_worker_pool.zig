@@ -7,7 +7,6 @@ const typed_doc_id = @import("../typed/doc_id.zig");
 const typed = @import("../typed/types.zig");
 const wire_encode = @import("../wire/encode.zig");
 const wire_errors = @import("../wire/errors.zig");
-const storage_cache = @import("cache.zig");
 const connection = @import("connection.zig");
 const read_buffer = @import("read_buffer.zig");
 const read_mod = @import("reader.zig");
@@ -21,7 +20,6 @@ const workerPool = @import("../threading/worker_pool.zig").workerPool;
 const Allocator = std.mem.Allocator;
 const DocId = typed_doc_id.DocId;
 const Record = typed.Record;
-const document_cache_type = storage_cache.document_cache_type;
 const ReaderNode = connection.ReaderNode;
 const ReadRequest = read_buffer.ReadRequest;
 const ReadResponse = read_buffer.ReadResponse;
@@ -54,8 +52,6 @@ pub const ReadWorker = struct {
     request_queue: *req_queue_type,
     send_queue: *SendQueueType,
     schema: *const schema_types.Schema,
-    document_cache: *document_cache_type,
-    writer_version: *std.atomic.Value(u64),
     allocator: Allocator,
     notifier: Notifier,
     memory_strategy: *MemoryStrategy,
@@ -70,8 +66,6 @@ pub const ReadWorker = struct {
         request_queue: *req_queue_type,
         send_queue: *SendQueueType,
         schema: *const schema_types.Schema,
-        document_cache: *document_cache_type,
-        writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
         max_query_response_size: usize,
@@ -82,8 +76,6 @@ pub const ReadWorker = struct {
             .request_queue = request_queue,
             .send_queue = send_queue,
             .schema = schema,
-            .document_cache = document_cache,
-            .writer_version = writer_version,
             .allocator = allocator,
             .notifier = Notifier.init(notifier_fn, notifier_ctx),
             .memory_strategy = memory_strategy,
@@ -279,55 +271,24 @@ pub const ReadWorker = struct {
         id: DocId,
         namespace_id: i64,
     ) !?Record {
-        const cache_key = storage_cache.getCacheKey(table_metadata, namespace_id, id);
+        self.node.mutex.lockUncancelable(self.node.io);
+        defer self.node.mutex.unlock(self.node.io);
 
-        switch (storage_cache.getCachedRecord(self.document_cache, cache_key)) {
-            .miss => {},
-            .hit => |hit| {
-                defer hit.handle.release();
-                return try hit.record.clone(self.read_arena.allocator());
-            },
-        }
+        // Stmts are prepared before the pool starts; null means an invariant violation.
+        const stmt = self.node.select_document_stmts[table_metadata.index] orelse unreachable;
+        var mstmt = sql.acquireStaticStmt(stmt) catch @panic("select_document_stmt not prepared");
+        defer mstmt.release();
 
-        // Snapshot writer version before the DB read to detect concurrent writes
-        const seq_before = self.writer_version.load(.acquire);
-
-        // Execute DB read under the node mutex
-        const result: ?Record = blk: {
-            self.node.mutex.lockUncancelable(self.node.io);
-            defer self.node.mutex.unlock(self.node.io);
-
-            // Stmts are prepared before the pool starts; null means an invariant violation.
-            const stmt = self.node.select_document_stmts[table_metadata.index] orelse unreachable;
-            var mstmt = sql.acquireStaticStmt(stmt) catch @panic("select_document_stmt not prepared");
-            defer mstmt.release();
-
-            break :blk try read_mod.execSelectDocument(
-                self.read_arena.allocator(),
-                &self.node.conn,
-                mstmt.stmt,
-                id,
-                namespace_id,
-                table_metadata,
-                null,
-                &self.json_buf,
-            );
-        };
-
-        // Cache update outside the node mutex — lock-free cache, version-gated
-        if (result) |record| {
-            if (self.writer_version.load(.acquire) == seq_before) {
-                const cache_record = record.clone(self.allocator) catch {
-                    return record;
-                };
-                self.document_cache.update(cache_key, cache_record) catch |err| {
-                    cache_record.deinit(self.allocator);
-                    std.log.err("ReadWorker: cache.update failed: {}", .{err});
-                };
-            }
-            return record;
-        }
-        return null;
+        return try read_mod.execSelectDocument(
+            self.read_arena.allocator(),
+            &self.node.conn,
+            mstmt.stmt,
+            id,
+            namespace_id,
+            table_metadata,
+            null,
+            &self.json_buf,
+        );
     }
 
     const SelectQueryResult = struct {
@@ -428,8 +389,6 @@ pub const ReadWorkerPool = struct {
         request_queue: *req_queue_type,
         send_queue: *SendQueueType,
         schema: *const schema_types.Schema,
-        document_cache: *document_cache_type,
-        writer_version: *std.atomic.Value(u64),
         notifier_fn: ?*const fn (?*anyopaque) void,
         notifier_ctx: ?*anyopaque,
         max_query_response_size: usize,
@@ -451,8 +410,6 @@ pub const ReadWorkerPool = struct {
                 request_queue,
                 send_queue,
                 schema,
-                document_cache,
-                writer_version,
                 notifier_fn,
                 notifier_ctx,
                 max_query_response_size,

@@ -12,7 +12,7 @@ A chronological log of significant architectural decisions. Each ADR documents t
 
 **Key Decision Areas:**
 - **Technology Stack**: Choice of Zig, uWebSockets, and SQLite.
-- **Engine Design**: Multi-threading, lock-free caching, and storage optimization.
+- **Engine Design**: Multi-threading, in-memory caching, and storage optimization.
 - **API & Protocol**: MessagePack wire format, Prisma-inspired queries, committed writes, and realtime subscriptions.
 - **Security**: Declarative authorization and server-side validation.
 - **Schema Evolution**: Snapshot-based change classification and developer-owned data migrations (ADR-024).

@@ -119,6 +119,5 @@ Subscription fanout:
 
 - [Message Handler](./message-handler.md)
 - [Storage](./storage.md)
-- [Lock-Free Cache](./lock-free-cache.md)
 - [Presence Internals](./presence-internals.md)
 - [Threading Model](../architecture/threading-model.md)

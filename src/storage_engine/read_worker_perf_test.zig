@@ -9,7 +9,6 @@ const sth = @import("../storage_engine_test_helpers.zig");
 const typed_doc_id = @import("../typed/doc_id.zig");
 const tth = @import("../typed/test_helpers.zig");
 const wire_encode = @import("../wire/encode.zig");
-const storage_cache = @import("cache.zig");
 const read_mod = @import("reader.zig");
 const StorageEngine = @import("../storage_engine.zig").StorageEngine;
 const ReadWorker = @import("read_worker_pool.zig").ReadWorker;
@@ -52,7 +51,7 @@ fn makeUpsertOp(
     } };
 }
 
-/// Insert one row via flushBatch so it hits SQLite + metadata cache.
+/// Insert one row via flushBatch so it hits SQLite.
 fn insertRow(
     allocator: Allocator,
     ctx: *EngineTestContext,
@@ -350,124 +349,46 @@ fn concurrentThreadFn(tctx: *ConcurrentThreadCtx) void {
     }
 }
 
-test "ReadWorker: cache miss → cache hit" {
+test "ReadWorker: point lookup latency" {
     const allocator = std.heap.smp_allocator;
     var ctx: EngineTestContext = undefined;
-    try ctx.initWithPerformance(allocator, "read_cache_miss_hit", &.{items_table}, .{}, .{
+    try ctx.initWithPerformance(allocator, "read_point_lookup", &.{items_table}, .{}, .{
         .in_memory = true,
         .reader_pool_size = 1,
     });
     defer ctx.deinit();
-    defer ctx.engine.document_cache.reclaim(true);
 
     const table_metadata = try ctx.tableMetadata("items");
     const doc_id: DocId = 42;
 
-    // Insert row into SQLite. The metadata cache is cold for this key, so
-    // executeSelectDocument should go to SQLite and populate the cache.
     try insertRow(allocator, &ctx, table_metadata, doc_id, 100);
     ctx.engine.stopReaderPool();
 
     const worker = firstWorker(&ctx.engine);
 
-    // Collect repeated miss/hit measurements and take the median.
+    // Collect repeated measurements and take the median.
     const rounds: usize = 20;
-    var miss_samples: [rounds]u64 = undefined;
-    var hit_samples: [rounds]u64 = undefined;
+    var samples: [rounds]u64 = undefined;
 
     for (0..rounds) |i| {
-        // Miss: first read for this doc_id in a fresh arena reset cycle.
-        // We evict the cache entry between rounds to force a miss.
-        _ = try ctx.engine.document_cache.evict(storage_cache.getCacheKey(table_metadata, 1, doc_id));
-
-        const miss_start_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
-        const record_a = try worker.executeSelectDocument(table_metadata, doc_id, 1);
-        miss_samples[i] = @intCast(std.Io.Clock.awake.now(std.testing.io).toNanoseconds() - miss_start_ns);
-        try testing.expect(record_a != null);
-        if (record_a) |r| r.deinit(worker.read_arena.allocator());
-
-        // Hit: same doc_id — metadata cache now has the entry.
-        const hit_start_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
-        const record_b = try worker.executeSelectDocument(table_metadata, doc_id, 1);
-        hit_samples[i] = @intCast(std.Io.Clock.awake.now(std.testing.io).toNanoseconds() - hit_start_ns);
-        try testing.expect(record_b != null);
-        if (record_b) |r| r.deinit(worker.read_arena.allocator());
+        const start_ns = std.Io.Clock.awake.now(std.testing.io).toNanoseconds();
+        const record = try worker.executeSelectDocument(table_metadata, doc_id, 1);
+        samples[i] = @intCast(std.Io.Clock.awake.now(std.testing.io).toNanoseconds() - start_ns);
+        try testing.expect(record != null);
+        defer if (record) |r| r.deinit(worker.read_arena.allocator());
+        try testing.expectEqual(@as(i64, 100), try sth.getFieldInt(record.?, table_metadata, "val"));
     }
 
-    // Verify the last read returned the correct value.
-    const record_check = try worker.executeSelectDocument(table_metadata, doc_id, 1);
-    try testing.expect(record_check != null);
-    defer if (record_check) |r| r.deinit(worker.read_arena.allocator());
-    const val = try sth.getFieldInt(record_check.?, table_metadata, "val");
-    try testing.expectEqual(@as(i64, 100), val);
+    std.mem.sort(u64, &samples, {}, comptime std.sort.asc(u64));
+    const median = samples[rounds / 2];
 
-    // Sort samples and take the median (middle element).
-    std.mem.sort(u64, &miss_samples, {}, comptime std.sort.asc(u64));
-    std.mem.sort(u64, &hit_samples, {}, comptime std.sort.asc(u64));
-    const median_miss = miss_samples[rounds / 2];
-    const median_hit = hit_samples[rounds / 2];
-
-    std.debug.print("ReadWorker cache: miss={d:.0} ns, hit={d:.0} ns, speedup={d:.2}x (median of {d})\n", .{
-        @as(f64, @floatFromInt(median_miss)),
-        @as(f64, @floatFromInt(median_hit)),
-        if (median_hit > 0) @as(f64, @floatFromInt(median_miss)) / @as(f64, @floatFromInt(median_hit)) else 0,
-        rounds,
-    });
-
-    // Cache hit must be at least as fast as cache miss.
-    try testing.expect(median_hit <= median_miss);
+    std.debug.print("ReadWorker point lookup: {d:.0} ns (median of {d})\n", .{ @as(f64, @floatFromInt(median)), rounds });
 
     const is_debug = builtin.mode == .Debug;
     const is_tsan = builtin.sanitize_thread;
     // 4x local median: per-operation ns timing carries fixed clock/CPU-frequency noise.
-    const miss_limit: u64 = if (is_tsan) 66_000 else if (is_debug) 40_000 else 8_600;
-    const hit_limit: u64 = if (is_tsan) 3_500 else if (is_debug) 3_200 else 960;
-    try testing.expect(median_miss < miss_limit);
-    try testing.expect(median_hit < hit_limit);
-}
-
-test "ReadWorker: version-gated cache update" {
-    const allocator = std.heap.smp_allocator;
-    var ctx: EngineTestContext = undefined;
-    try ctx.initWithPerformance(allocator, "read_version_gate", &.{items_table}, .{}, .{
-        .in_memory = true,
-        .reader_pool_size = 1,
-    });
-    defer ctx.deinit();
-    defer ctx.engine.document_cache.reclaim(true);
-
-    const table_metadata = try ctx.tableMetadata("items");
-    const doc_id: DocId = 77;
-
-    // Insert row and let cache populate via a normal read.
-    try insertRow(allocator, &ctx, table_metadata, doc_id, 10);
-    ctx.engine.stopReaderPool();
-
-    const worker = firstWorker(&ctx.engine);
-
-    // First read populates cache.
-    const r1 = try worker.executeSelectDocument(table_metadata, doc_id, 1);
-    try testing.expect(r1 != null);
-    defer if (r1) |r| r.deinit(worker.read_arena.allocator());
-
-    // Bump writer_version — simulates a concurrent write between reads.
-    // executeSelectDocument snapshots seq_before; cache.update is gated on
-    // writer_version still equaling seq_before. With the bumped version the
-    // gate fails and the (now stale) cache entry is NOT overwritten.
-    const old_version = ctx.engine.write_worker.version.load(.monotonic);
-    ctx.engine.write_worker.version.store(old_version + 1, .release);
-
-    // Re-read: goes to SQLite, gets the *same* DB row (we didn't actually
-    // update it), but version gate blocks cache refresh — this is correct
-    // behaviour: a concurrent write *might* have changed the row, so we
-    // must not blindly overwrite cache with a potentially stale snapshot.
-    const r2 = try worker.executeSelectDocument(table_metadata, doc_id, 1);
-    try testing.expect(r2 != null);
-    defer if (r2) |r| r.deinit(worker.read_arena.allocator());
-
-    // Verify the returned value is still correct.
-    const val = try sth.getFieldInt(r2.?, table_metadata, "val");
-    try testing.expectEqual(@as(i64, 10), val);
+    const limit: u64 = if (is_tsan) 66_000 else if (is_debug) 40_000 else 8_600;
+    try testing.expect(median < limit);
 }
 
 test "ReadWorker: concurrent readers — no data race" {
@@ -480,7 +401,6 @@ test "ReadWorker: concurrent readers — no data race" {
         .reader_pool_size = reader_pool_size,
     });
     defer ctx.deinit();
-    defer ctx.engine.document_cache.reclaim(true);
 
     const table_metadata = try ctx.tableMetadata("items");
     const ns_id: i64 = 1;

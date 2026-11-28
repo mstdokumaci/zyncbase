@@ -44,7 +44,7 @@ fn runBatchSweep(
     allocator: Allocator,
     batch_len: usize,
     distinct_doc_count: usize,
-    cache_population: usize,
+    seed_rows: usize,
     iterations: usize,
     ctx: *EngineTestContext,
 ) !struct { avg_flush: f64, avg_drain: f64, change_jobs: usize } {
@@ -57,7 +57,7 @@ fn runBatchSweep(
     var total_drain: u64 = 0;
     const ww_alloc = ctx.engine.write_worker.allocator;
 
-    // Warmup: insert initial rows so later iterations hit the update path (prefetchOldRecord).
+    // Warmup: insert initial rows so later iterations hit the update path.
     for (0..5) |warmup_idx| {
         var batch = std.ArrayListUnmanaged(WriteOp).empty;
         defer {
@@ -65,7 +65,7 @@ fn runBatchSweep(
             batch.deinit(allocator);
         }
 
-        const warmup_len = if (warmup_idx == 0) @max(batch_len, cache_population) else batch_len;
+        const warmup_len = if (warmup_idx == 0) @max(batch_len, seed_rows) else batch_len;
         for (0..warmup_len) |i| {
             const id: DocId = @intCast(if (warmup_idx == 0) i else i % distinct_doc_count);
             try batch.append(allocator, makeUpsertOp(ww_alloc, table_metadata, id, ns_id, @intCast(i)));
@@ -110,7 +110,7 @@ fn runBatchSweep(
 
         // Stage BC: full flushBatch (calls endOp internally, balancing the WaitGroup).
         // Includes BEGIN, N sqlite3_step() calls, COMMIT (WAL fsync to in-memory VFS),
-        // cache write-through, ChangeQueue.push, and SendQueue.push.
+        // ChangeQueue.push, and SendQueue.push.
         // In production on NVMe, COMMIT alone is ~3-5x slower than measured here due
         // to WAL file sync.
         var last_batch_time = std.Io.Clock.real.now(std.testing.io).toMilliseconds();
@@ -180,9 +180,9 @@ test "WriteWorker: flushBatch throughput" {
     const r100 = try runBatchSweep(allocator, 100, 100, 100, if (is_tsan) 50 else if (is_debug) 50 else 200, &ctx);
     std.debug.print("flushBatch (batch_len=100) [ms]: flush={d:.3} drain={d:.3}\n", .{ r100.avg_flush, r100.avg_drain });
 
-    // Production-sized batch against a small cache that still exposes per-write map cloning.
+    // Production-sized batch over a table that already holds 512 rows.
     const r200 = try runBatchSweep(allocator, 200, 200, 512, if (is_debug) 5 else if (is_release_safe) 10 else 20, &ctx);
-    std.debug.print("flushBatch (batch_len=200, cache_entries=512) [ms]: flush={d:.3} drain={d:.3}\n", .{ r200.avg_flush, r200.avg_drain });
+    std.debug.print("flushBatch (batch_len=200, seed_rows=512) [ms]: flush={d:.3} drain={d:.3}\n", .{ r200.avg_flush, r200.avg_drain });
 
     const r200_hot = try runBatchSweep(allocator, 200, 10, 512, if (is_debug) 5 else if (is_release_safe) 10 else 20, &ctx);
     std.debug.print("flushBatch (batch_len=200, distinct_docs=10) [ms]: flush={d:.3} drain={d:.3} jobs={d}\n", .{ r200_hot.avg_flush, r200_hot.avg_drain, r200_hot.change_jobs });
