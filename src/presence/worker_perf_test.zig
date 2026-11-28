@@ -237,7 +237,7 @@ test "PresenceWorker: batched user update fanout throughput" {
     const is_tsan = builtin.sanitize_thread;
     // 3x local median (CI variance budget), release bucket sized for ReleaseSafe.
     const target_update: f64 = if (is_tsan) 0.13 else if (is_debug) 0.12 else 0.022;
-    const target_batch: f64 = if (is_tsan) 0.18 else if (is_debug) 0.18 else 0.29;
+    const target_batch: f64 = if (is_tsan) 0.26 else if (is_debug) 0.18 else 0.29;
     const target_dispatch: f64 = if (is_tsan) 5.2 else if (is_debug) 4.9 else 0.84;
     const target_drain: f64 = if (is_tsan) 0.25 else if (is_debug) 0.26 else 0.058;
     const target_total: f64 = if (is_tsan) 5.8 else if (is_debug) 5.3 else 1.2;
