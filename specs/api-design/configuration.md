@@ -906,9 +906,11 @@ await zyncbase.remove(projects.proj-1')
 
 **Reference Options:**
 
-- `onDelete: "cascade"` - Delete tasks when project is deleted (default)
-- `onDelete: "restrict"` - Prevent project deletion if tasks exist
+- `onDelete: "restrict"` - Prevent project deletion if tasks exist (default)
+- `onDelete: "cascade"` - Delete tasks when project is deleted
 - `onDelete: "set_null"` - Set projectId to null when project is deleted
+
+**Namespaces:** references never cross tenants. A namespaced collection can reference a global (`"namespaced": false`) collection, or a document in its own namespace. A reference to a document in another namespace fails with `SCHEMA_VALIDATION_FAILED`, just like a missing document. A global collection can only reference global collections; anything else fails at startup.
 
 **Benefits:**
 - Data integrity enforced automatically
@@ -1010,7 +1012,7 @@ CREATE UNIQUE INDEX "uidx__tasks__created_at" ON "tasks"("created_at");
 CREATE INDEX "idx__tasks__field__status" ON "tasks"("status");
 ```
 
-The primary key is `id`, not `(namespace_id, id)`. Namespace-aware tables still require document IDs that are unique across the whole collection; reusing one from another namespace fails with `UNIQUE_CONSTRAINT_VIOLATED`. That keeps references, cursors, caches, and SDK addressing single-key. Tables are `STRICT`: a value that can't be stored in a column's type fails the statement that wrote it.
+The primary key is `id`, not `(namespace_id, id)`. Namespace-aware tables still require document IDs that are unique across the whole collection; reusing one from another namespace fails with `UNIQUE_CONSTRAINT_VIOLATED`. That keeps references, cursors, and SDK addressing single-key. Tables are `STRICT`: a value that can't be stored in a column's type fails the statement that wrote it.
 
 ### What happens at startup
 

@@ -230,13 +230,14 @@ test "startup: auto changes reach the same layout as a fresh database and keep r
 test "startup: a users rebuild keeps external_id" {
     var h = try Harness.init();
     defer h.deinit();
+    // users is global, so the referenced table must be global too.
     _ = try h.migrate(
-        \\{"version":"1.0.0","store":{"teams":{"fields":{}},"users":{"fields":{"team":{"type":"string","references":"teams"}}}}}
+        \\{"version":"1.0.0","store":{"teams":{"namespaced":false,"fields":{}},"users":{"fields":{"team":{"type":"string","references":"teams"}}}}}
     );
     try h.exec("INSERT INTO users (id, namespace_id, owner_id, external_id, created_at, updated_at) VALUES (zeroblob(16), 0, zeroblob(16), 'auth0|alice', 1, 1)");
 
     const json =
-        \\{"version":"1.1.0","store":{"teams":{"fields":{}},"users":{"fields":{"team":{"type":"string","references":"teams","onDelete":"set_null"}}}}}
+        \\{"version":"1.1.0","store":{"teams":{"namespaced":false,"fields":{}},"users":{"fields":{"team":{"type":"string","references":"teams","onDelete":"set_null"}}}}}
     ;
     const report = try h.migrate(json);
     try std.testing.expect(report.rebuilt);

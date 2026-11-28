@@ -1095,6 +1095,60 @@ test "StorageEngine: orphan reference in a flush fails only its own write" {
     try testing.expectEqual(@as(usize, 2), drainChangeCount(&ctx));
 }
 
+test "StorageEngine: a reference to a parent in another namespace fails like a missing parent" {
+    const allocator = std.heap.smp_allocator;
+    const schema_json =
+        \\{"version":"1.0.0","store":{
+        \\  "parents":{"fields":{}},
+        \\  "labels":{"namespaced":false,"fields":{}},
+        \\  "children":{"fields":{
+        \\    "parent_id":{"type":"string","references":"parents"},
+        \\    "label_id":{"type":"string","references":"labels"}
+        \\  }}
+        \\}}
+    ;
+    var ctx: sth.EngineTestContext = undefined;
+    try ctx.initFromJsonWithPerformance(allocator, "fk-namespace-isolation", schema_json, .{}, .{ .in_memory = true, .reader_pool_size = 1 });
+    defer ctx.deinit();
+
+    const parents = try ctx.tableMetadata("parents");
+    const labels = try ctx.tableMetadata("labels");
+    const children = try ctx.tableMetadata("children");
+    const parent_idx = children.fieldIndex("parent_id").?;
+    const label_idx = children.fieldIndex("label_id").?;
+
+    try sth.flushUpsertsNow(&ctx.engine, 1, &.{.{ .table_index = parents.index, .id = 1, .columns = &.{} }});
+    try sth.flushUpsertsNow(&ctx.engine, 2, &.{
+        .{ .table_index = parents.index, .id = 2, .columns = &.{} },
+        .{ .table_index = labels.index, .id = 5, .columns = &.{} },
+    });
+    _ = drainChangeCount(&ctx);
+
+    // From namespace 2: parent 1 lives in namespace 1, label 5 is global, parent 2 is local.
+    const foreign_parent = [_]sth.ColumnValue{.{ .index = parent_idx, .value = fkDocId(1) }};
+    const global_label = [_]sth.ColumnValue{.{ .index = label_idx, .value = fkDocId(5) }};
+    const local_parent = [_]sth.ColumnValue{.{ .index = parent_idx, .value = fkDocId(2) }};
+    try sth.flushUpsertsNow(&ctx.engine, 2, &.{
+        .{ .table_index = children.index, .id = 10, .conn_id = 3001, .columns = &foreign_parent },
+        .{ .table_index = children.index, .id = 11, .conn_id = 3002, .columns = &global_label },
+        .{ .table_index = children.index, .id = 12, .conn_id = 3003, .columns = &local_parent },
+    });
+    try expectFlushOutcomes(&ctx, 3, 3001, "SCHEMA_VALIDATION_FAILED");
+    try expectDocPresence(&ctx, children.index, 10, 2, false);
+    try expectDocPresence(&ctx, children.index, 11, 2, true);
+    try expectDocPresence(&ctx, children.index, 12, 2, true);
+    _ = drainChangeCount(&ctx);
+
+    // The update path is checked too: repointing child 12 at parent 1 fails.
+    try sth.flushUpsertsNow(&ctx.engine, 2, &.{
+        .{ .table_index = children.index, .id = 12, .conn_id = 3004, .columns = &foreign_parent },
+    });
+    try expectFlushOutcomes(&ctx, 1, 3004, "SCHEMA_VALIDATION_FAILED");
+    const child = try sth.readDoc(allocator, &ctx.engine, children.index, 12, 2);
+    defer if (child) |r| r.deinit(allocator);
+    try testing.expectEqual(@as(u128, 2), child.?.values[parent_idx].scalar.doc_id);
+}
+
 fn makeSlugUpsertOp(allocator: std.mem.Allocator, table: *const sth.TableMetadata, id: typed_doc_id.DocId, slug: []const u8) !storage_mod.WriteOp {
     const columns = try allocator.alloc(sth.ColumnValue, 1);
     errdefer allocator.free(columns);
@@ -2048,13 +2102,13 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
 
     {
         try parents.insertNamed(2, 1, .{});
-        try cascaded.insertNamed(22, 2, .{sth.named("parent_id", fkDocId(2))});
-        try grandchildren.insertNamed(33, 3, .{sth.named("child_id", fkDocId(22))});
-        try nullable.insertNamed(44, 4, .{sth.named("parent_id", fkDocId(2))});
+        try cascaded.insertNamed(22, 1, .{sth.named("parent_id", fkDocId(2))});
+        try grandchildren.insertNamed(33, 1, .{sth.named("child_id", fkDocId(22))});
+        try nullable.insertNamed(44, 1, .{sth.named("parent_id", fkDocId(2))});
         try nullable.flush();
         _ = drainForeignKeyChanges(&app);
 
-        var nullable_before = try nullable.getOne(allocator, 44, 4);
+        var nullable_before = try nullable.getOne(allocator, 44, 1);
         const updated_at_before = try nullable_before.getFieldInt("updated_at");
         nullable_before.deinit();
 
@@ -2062,9 +2116,9 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
         try parents.flush();
 
         try testing.expect((try parents.readDoc(allocator, 2, 1)) == null);
-        try testing.expect((try cascaded.readDoc(allocator, 22, 2)) == null);
-        try testing.expect((try grandchildren.readDoc(allocator, 33, 3)) == null);
-        var nullable_after = try nullable.getOne(allocator, 44, 4);
+        try testing.expect((try cascaded.readDoc(allocator, 22, 1)) == null);
+        try testing.expect((try grandchildren.readDoc(allocator, 33, 1)) == null);
+        var nullable_after = try nullable.getOne(allocator, 44, 1);
         defer nullable_after.deinit();
         try testing.expect(nullable_after.getFieldDocIdOrNull("parent_id") == null);
         try testing.expectEqual(updated_at_before, try nullable_after.getFieldInt("updated_at"));
@@ -2102,9 +2156,9 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
         };
         entries[0] = try makeForeignKeyUpsertOp(write_allocator, parents.metadata, 3, 1, null, 0);
         initialized_entries += 1;
-        entries[1] = try makeForeignKeyUpsertOp(write_allocator, cascaded.metadata, 55, 2, "parent_id", 3);
+        entries[1] = try makeForeignKeyUpsertOp(write_allocator, cascaded.metadata, 55, 1, "parent_id", 3);
         initialized_entries += 1;
-        entries[2] = try makeForeignKeyUpsertOp(write_allocator, nullable.metadata, 66, 4, "parent_id", 3);
+        entries[2] = try makeForeignKeyUpsertOp(write_allocator, nullable.metadata, 66, 1, "parent_id", 3);
         initialized_entries += 1;
         entries[3] = .{ .delete = .{ .table_index = parents.metadata.index, .id = 3, .namespace_id = 1 } };
         initialized_entries += 1;
@@ -2113,8 +2167,8 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
         try app.storage_engine.flushPendingWrites();
 
         try testing.expect((try parents.readDoc(allocator, 3, 1)) == null);
-        try testing.expect((try cascaded.readDoc(allocator, 55, 2)) == null);
-        var batch_nullable = try nullable.getOne(allocator, 66, 4);
+        try testing.expect((try cascaded.readDoc(allocator, 55, 1)) == null);
+        var batch_nullable = try nullable.getOne(allocator, 66, 1);
         defer batch_nullable.deinit();
         try testing.expect(batch_nullable.getFieldDocIdOrNull("parent_id") == null);
 

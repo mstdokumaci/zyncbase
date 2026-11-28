@@ -1206,7 +1206,12 @@ fn validateReferences(schema: *const types.Schema) !void {
     for (schema.tables) |table| {
         for (table.userFields()) |field| {
             if (field.references) |target| {
-                if (schema.table(target) == null) return error.InvalidReference;
+                const parent = schema.table(target) orelse return error.InvalidReference;
+                // A global row is visible to every namespace, so it must never point into one.
+                if (!table.namespaced and parent.namespaced) {
+                    std.log.warn("Schema: global table '{s}' field '{s}' references namespaced table '{s}'; references may only point to a global table or one in the same namespace", .{ table.name, field.name, parent.name });
+                    return error.CrossNamespaceReference;
+                }
             }
         }
     }

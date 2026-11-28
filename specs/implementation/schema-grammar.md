@@ -67,7 +67,7 @@ Schema configuration is rooted, not a bare table map:
 |:---|:---:|:---|:---|
 | `type` | `string` | - | **Required.** One of: `string`, `integer`, `number`, `boolean`, `bytes`, `array`, `object`. |
 | `indexed` | `boolean` | `false` | Creates a database index for this column. Prohibited on `bytes` fields (`error.InvalidFieldDefinition`). Reference fields are indexed regardless of this setting. |
-| `references` | `string` | `null` | Target table name for an immediately enforced foreign key to that table's `id`. Stored as `BLOB(16)` internally. |
+| `references` | `string` | `null` | Target table name for an immediately enforced foreign key to that table's `id`. Stored as `BLOB(16)` internally. The target must be global or in the same namespace ([rules](#metadata-and-reserved-validation-keywords)). |
 | `onDelete` | `string` | `"restrict"` | Enforced delete rule: `set_null`, `cascade`, or `restrict`. `set_null` is invalid for required fields. |
 | `items` | `string` | - | **Required for `array` type.** Primitive element type (e.g., `"string"`, `"integer"`). Cannot be `bytes` or `array`. |
 | `fields` | `object` | - | **Required for `object` type.** Map of sub-fields (arbitrary nesting allowed). |
@@ -219,7 +219,7 @@ Actions are declared under the top-level `actions` key as a map of action names 
 
 The parser validates and stores `enum`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, and `maximum`. Store and presence writes enforce these constraints before accepting the operation.
 
-Reference values may be `null` when the field is optional. Non-null values must identify an existing row in the referenced table; failed writes and restricted deletes use the public `SCHEMA_VALIDATION_FAILED` error contract. References are ID-based and may cross namespaces because document IDs are table-wide primary keys. Foreign keys are immediate, so a batch must create a parent before a child that references it. `ON UPDATE` actions and deferred constraints are not supported.
+Reference values may be `null` when the field is optional. Non-null values must identify an existing row in the referenced table; failed writes and restricted deletes use the public `SCHEMA_VALIDATION_FAILED` error contract. References never cross tenants. A namespaced table may reference a global (`"namespaced": false`) table, or a namespaced table whose row is in the writer's namespace. A reference to a row in another namespace fails exactly like a missing row, so it reveals nothing about other namespaces. A global table may only reference global tables; referencing a namespaced table fails schema load with `error.CrossNamespaceReference`. Foreign keys are immediate, so a batch must create a parent before a child that references it. `ON UPDATE` actions and deferred constraints are not supported.
 
 ---
 

@@ -456,6 +456,10 @@ test "schema_parse: validates references and on delete rules" {
     try std.testing.expectError(error.InvalidOnDelete, schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"required":["author_id"],"fields":{"author_id":{"type":"string","references":"users","onDelete":"set_null"}}}}}
     ));
+    // A global row must not point into a namespace.
+    try std.testing.expectError(error.CrossNamespaceReference, schema_parse.initFromJson(allocator,
+        \\{"version":"1.0.0","store":{"projects":{"fields":{}},"templates":{"namespaced":false,"fields":{"project_id":{"type":"string","references":"projects"}}}}}
+    ));
 
     var parsed = try schema_parse.initFromJson(allocator,
         \\{"version":"1.0.0","store":{"posts":{"fields":{"author_id":{"type":"string","references":"users"}}}}}
