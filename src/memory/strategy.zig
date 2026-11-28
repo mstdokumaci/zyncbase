@@ -94,9 +94,9 @@ pub const MemoryStrategy = struct {
         return self.arena_pool.acquire();
     }
 
-    /// Capacity a reset arena keeps. Larger peaks are freed so one big request
-    /// cannot pin memory in a pooled or long-lived arena for the process lifetime.
-    pub const arena_retain_limit: usize = 64 * 1024;
+    /// Capacity a reset arena keeps. Only outliers above it are freed, so one
+    /// pathological request cannot pin memory for the process lifetime.
+    pub const arena_retain_limit: usize = 8 * 1024 * 1024;
 
     /// Release an arena back to the pool after resetting it
     pub fn releaseArena(self: *MemoryStrategy, arena: *std.heap.ArenaAllocator) void {
