@@ -294,6 +294,49 @@ pub const WriteWorker = struct {
         return try sql.stepHasMore(&self.conn, stmt);
     }
 
+    /// References never cross tenants: a namespaced row may point to a global
+    /// row or to one in its own namespace. The SQLite foreign key matches by id
+    /// only, so this checks the namespace before the statement runs. A miss
+    /// fails like a missing parent, revealing nothing about other namespaces.
+    fn checkReferenceNamespaces(
+        self: *WriteWorker,
+        table_metadata: *const schema_types.Table,
+        namespace_id: i64,
+        id: DocId,
+        columns: []const sql.ColumnValue,
+    ) !void {
+        if (!table_metadata.namespaced) return;
+        for (columns) |col| {
+            if (col.index >= table_metadata.fields.len) return StorageError.UnknownField;
+            const target = table_metadata.fields[col.index].references orelse continue;
+            const parent = self.schema.table(target) orelse return StorageError.UnknownTable;
+            if (!parent.namespaced) continue;
+            const parent_id = switch (col.value) {
+                .scalar => |scalar| switch (scalar) {
+                    .doc_id => |doc_id| doc_id,
+                    else => continue,
+                },
+                else => continue, // null clears the reference
+            };
+            // A row may reference itself; it does not exist until this statement runs.
+            if (parent.index == table_metadata.index and parent_id == id) continue;
+
+            const sql_str = try std.mem.concat(self.batch_arena.allocator(), u8, &.{
+                "SELECT 1 FROM ",
+                parent.name_quoted,
+                " WHERE ",
+                schema_system.quoted_id,
+                "=? AND ",
+                schema_system.quoted_namespace_id,
+                "=?",
+            });
+            var mstmt = try self.stmt_cache.acquire(self.allocator, &self.conn, std.hash.Wyhash.hash(0, sql_str), sql_str);
+            defer mstmt.release();
+            try sql.bindDocIdNamespace(mstmt.stmt, &self.conn, 1, parent_id, namespace_id);
+            if (!try sql.stepHasMore(&self.conn, mstmt.stmt)) return StorageError.ConstraintViolation;
+        }
+    }
+
     /// Classify a zero-row write. Returns null for an idempotent no-op (an
     /// auth-only guard on a missing row), otherwise the rejection error.
     ///
@@ -1476,6 +1519,7 @@ pub const WriteWorker = struct {
         table_metadata: *const schema_types.Table,
     ) !?Record {
         const arena_alloc = self.batch_arena.allocator();
+        try self.checkReferenceNamespaces(table_metadata, namespace_id, op.id, op.columns);
 
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
         const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);
@@ -1522,6 +1566,7 @@ pub const WriteWorker = struct {
         table_metadata: *const schema_types.Table,
     ) !?Record {
         const arena_alloc = self.batch_arena.allocator();
+        try self.checkReferenceNamespaces(table_metadata, namespace_id, op.id, op.columns);
 
         const guard_ptr: ?*const query_ast.FilterPredicate = if (op.guard_predicate) |*p| p else null;
         const rendered_guard = try filter_sql.renderAndClause(arena_alloc, table_metadata, guard_ptr);

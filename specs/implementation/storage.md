@@ -100,7 +100,7 @@ Conditional writes and atomic increments reuse the writer transaction and the sa
 - `created_at` is required, immutable, JavaScript-safe, strictly increasing in writer order within one table, and enforced unique by SQLite.
 - Startup rejects persisted `created_at` values outside `0..Number.MAX_SAFE_INTEGER`; no global cross-table clock exists.
 - Transaction-local delta coalescing changes only subscription publication. Every SQL operation, guard, referential action, and write outcome still executes in its original order.
-- Immediate foreign keys require parent-before-child ordering inside a batch. Optional references accept `null`; non-null values must resolve by table-wide document ID, including across namespace boundaries.
+- Immediate foreign keys require parent-before-child ordering inside a batch. Optional references accept `null`; non-null values must resolve to a global row or to a row in the writer's namespace. SQLite's foreign key matches by id only, so before an INSERT or UPDATE the writer probes each namespaced-to-namespaced reference with `id = ? AND namespace_id = ?`. A miss is `ConstraintViolation`, the same as a missing parent, and is statement-local. Cascade and set-null lookups still match by parent id only, because a global parent has children in every namespace; a delete that removes no row discards what they captured.
 - Checkpoint/reconnect behavior must not reorder committed write outcomes.
 
 ## Performance Contract
