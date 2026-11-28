@@ -241,7 +241,7 @@ work; the writer, readers, and notification pool remain shared.
 - Deterministic thread allocation; no runtime knobs.
 - Warm reads are in-memory.
 - SQLite parallel reads are fully used.
-- Lock-free metadata lookups.
+- Metadata lookups are in-memory and mutex-guarded; no writer round trip.
 - Connection-local ordering with explicit cross-loop routing.
 
 ### Cons

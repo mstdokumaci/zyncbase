@@ -518,7 +518,7 @@ When `users.namespaced = false` (the default), `users` is a global table and the
 
 Blocking the uWS reactor during resolution would stall all concurrent connections and violate the p50 < 1ms latency target (ADR-004).
 
-**Tier 1 — Synchronous cache hit (~1μs)**: Check the shared namespace and identity maps (ADR-006). If both hit, set scope and respond immediately. Zero I/O, zero blocking. After first resolution of a `(namespace, external_id)` pair, all subsequent connections with the same pair resolve via this path.
+**Tier 1 — Synchronous cache hit**: Check the shared namespace and identity maps (ADR-006). If both hit, set scope and respond immediately — no I/O, no writer round trip. Each lookup takes the map's mutex, so a hit can briefly wait while the writer holds it. After first resolution of a `(namespace, external_id)` pair, all subsequent connections with the same pair resolve via this path.
 
 **Tier 2 — Async writer handoff (cache miss)**: Enqueue a combined `resolve_session` WriteOp to the writer thread and return immediately — the reactor is free. The writer thread performs `INSERT OR IGNORE INTO _zync_namespaces` and `INSERT OR IGNORE INTO users`, populates both caches, and pushes a `SessionResolutionResult` to the `SessionResolutionBuffer`. The `SessionResolver` (running in the uWS `post_handler`) drains this buffer, acquires the target connection by ref-counted ID, applies the resolved scope, and sends the response.
 
@@ -535,9 +535,9 @@ Combining namespace + user resolution into a single `resolve_session` WriteOp el
 A per-connection monotonic counter is incremented on each scope reset. Carried in every `resolve_session` WriteOp and checked at delivery — if the connection's current `scope_seq` does not match the result's `scope_seq`, the result is stale (a subsequent namespace change was issued) and is silently discarded.
 
 **Consequences**:
-- The uWS reactor is never blocked during identity or namespace resolution.
-- Warm-cache resolution (~1μs) makes repeated connections and namespace switches essentially free.
-- The full TCP handshake → data-ready path is async with no reactor blocking.
+- The uWS reactor is never blocked on I/O or a writer round trip during identity or namespace resolution; a cache hit only takes the metadata-map mutex.
+- Warm-cache resolution is synchronous in the reactor, so repeated connections and namespace switches skip the writer round trip.
+- The full TCP handshake → data-ready path awaits no reactor-blocking I/O or writer reply.
 - Liveness probing is answerable before scope readiness, so a connection is never unobservable while it comes up.
 - A silently broken connection is detected on both ends, and its failure is indistinguishable from a close by the time recovery runs.
 
