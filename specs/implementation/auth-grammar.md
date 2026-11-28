@@ -111,11 +111,11 @@ Increment operations are rejected when the collection's write rule references `$
 
 ## Write Operations and `$doc` Interpretation
 
-For mutations (`StoreSet`, `StoreRemove`), the `$doc` variable behaves differently based on write kinds:
+For mutations (`StoreSet`, `StoreRemove`), the `$doc` variable behaves differently based on write kinds. An unconditional `StoreSet` is checked both ways before enqueue, because only the writer knows whether the row exists. A rule that denies both kinds is an accept-phase `PERMISSION_DENIED`.
 
 | Write Kind | `$doc` Representation | Evaluation Method | Invariant / Failure Behavior |
 |:---|:---|:---|:---|
-| **Create** | Candidate document (normalized fields + owner + default values). | RAM check | Checked in-memory before database query. Denied if required fields are missing. |
+| **Create** | Candidate document (normalized fields + owner + default values). | RAM check | Checked in-memory before enqueue. A failed check, or a missing required field, rejects the set as a write-phase error only if the writer finds the row missing. |
 | **Update** | Existing database row. | Predicate Lowering | Lowered to SQL filter. If match fails, 0 rows are affected (zero-read verify). |
 | **Delete** | Existing database row. | Predicate Lowering | Lowered to SQL filter. If match fails, 0 rows are affected (zero-read verify). |
 

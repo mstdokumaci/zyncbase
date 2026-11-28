@@ -225,6 +225,8 @@ test "WriteWorker: resolution queued after a write waits for that write" {
     try ctx.engine.enqueueSessionResolution(0, 1, 0, 0, "resolution-order", external_user_id, false);
     try ctx.engine.flushPendingWrites();
 
-    try testing.expect(ctx.engine.documentExists(users_index, user_id));
+    const user = try sth.readDoc(allocator, &ctx.engine, users_index, user_id, 1);
+    defer if (user) |r| r.deinit(allocator);
+    try testing.expect(user != null);
     try testing.expectEqual(user_id, ctx.engine.cachedUserId(schema_system.global_namespace_id, external_user_id).?);
 }

@@ -21,7 +21,6 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 | `src/storage_engine/filter_sql.zig` | Query predicate lowering to SQL fragments and bound values. |
 | `src/storage_engine/cache.zig` | Namespace/identity metadata cache keys and values. |
 | `src/storage_engine/errors.zig` | SQLite error classification into internal storage errors. |
-| `src/storage_engine/pk_set.zig` | Primary-key set helpers for write/delete/query support. |
 | `src/typed/types.zig`, `src/typed/codec.zig`, `src/typed/doc_id.zig` | Runtime typed values, binary codecs, and 16-byte document id support. |
 | `src/checkpoint_worker.zig` | Background WAL checkpoint scheduling and execution. |
 | `src/migration/*.zig` | Schema snapshot, change classification, and migration execution. See [Schema Migrations](./schema-migrations.md). |
@@ -36,7 +35,6 @@ The storage layer persists store data in SQLite with WAL mode. It owns schema-to
 | `write_queue_type` | `spscQueue(WriteOp, IndexPool)` | Type alias for the SPSC write op queue. `IndexPool` provides zero-allocation pooled nodes. |
 | `ReadWorkerPool` / `ReadWorker` | `workerPool`, `managedThread`, `read_request_queue`, per-loop send queue, `Notifier` | Pool of dedicated reader threads; each `ReadWorker` owns an exclusive `ReaderNode` (SQLite connection + statement cache). |
 | `ChangeJob` | `OwnedRecordChange`, `Allocator` | Ownership wrapper bundling a committed record change with its writer allocator for safe cross-thread handoff to subscription workers. |
-| `pk_set_type` | typed doc ids | Tracks primary keys for set/delete/query helper paths. |
 | `ColumnValue` | typed values | Represents values bound into SQLite statements. |
 | `DDLGenerator` | `Schema` | Produces table/index DDL from loaded schema. |
 
@@ -72,9 +70,9 @@ Document timestamps are server-generated Unix microseconds. Before worker thread
 
 1. Store service validates payload shape and authorization.
 2. Mutation is enqueued through the single-writer path (SPSC write queue).
-3. `WriteWorker` applies schema validation, ownership checks, and conflict semantics.
+3. `WriteWorker` applies schema validation, ownership checks, and conflict semantics. An unconditional set reads its row inside the transaction, so it sees every earlier write. An existing row takes the UPDATE path. A missing row fails with the set's create denial (missing required fields, or a write rule that rejects the candidate) when it has one, and otherwise INSERTs. An INSERT that returns no row hit the id in another namespace and fails with `UNIQUE_CONSTRAINT_VIOLATED`.
 4. SQLite enforces referenced-row existence and `restrict`, `cascade`, or `set_null` actions. Cascades are database integrity operations and do not run child authorization checks.
-5. Before a parent delete, `WriteWorker` snapshots rows reachable through cascade/set-null edges. After SQLite applies the actions, those rows flow through the normal pending cache, primary-key-set, and `ChangeJob` bookkeeping; all effects remain invisible until commit. SQLite-driven `set_null` does not modify `updated_at`.
+5. Before a parent delete, `WriteWorker` snapshots rows reachable through cascade/set-null edges. After SQLite applies the actions, those rows flow through the normal pending cache and `ChangeJob` bookkeeping; all effects remain invisible until commit. SQLite-driven `set_null` does not modify `updated_at`.
 6. During the transaction, successful row effects accumulate by canonical `(namespace_id, table_index, doc_id)`, retaining the first old record and last new record. After commit, the writer pushes at most one endpoint `ChangeJob` per key to `ChangeQueue`; an absent-to-absent endpoint is suppressed.
 7. Every client write carries a `WriteAck` (`conn_id`, request `msg_id`); internal writes carry none. After the transaction outcome is known, the writer encodes `WriteCommitted` or `WriteError` with the request id into the transaction's `OutcomeFence`. Every `ChangeJob` the commit pushes holds a fence reference, released after its deltas are pushed. The thread that drops the last reference, a subscription worker or the writer, pushes the outcomes to the origin loop's send queue and wakes the owning reactor, so a connection gets the transaction's deltas first (ADR-018). Without active subscriptions no job holds the fence.
 
@@ -98,11 +96,11 @@ Conditional writes and atomic increments reuse the writer transaction and the sa
 - Same-row authorization guards should be expressed in the write SQL path when possible.
 - Reader statements/results are owned by their reader connection and allocator.
 - Batch writes are atomic at the storage boundary: either the batch commits consistently or returns a failure.
-- Guard, precondition, increment, and constraint rejections are per-operation in the coalesced flush path and abort the whole transaction in an explicit batch. A constraint failure (unique, foreign key, check, not null) undoes only its own statement under SQLite's ABORT resolution and is raised before any cache, primary-key-set, or change-queue bookkeeping, so the flush transaction stays open for the remaining operations. Failures that are not statement-local (I/O, disk full, allocation, `BEGIN`/`COMMIT`, or an auto-rolled-back transaction) fail every operation in the flush. A rejection never drops an unrelated write.
+- Guard, precondition, increment, and constraint rejections are per-operation in the coalesced flush path and abort the whole transaction in an explicit batch. A constraint failure (unique, foreign key, check, not null) undoes only its own statement under SQLite's ABORT resolution and is raised before any cache or change-queue bookkeeping, so the flush transaction stays open for the remaining operations. Failures that are not statement-local (I/O, disk full, allocation, `BEGIN`/`COMMIT`, or an auto-rolled-back transaction) fail every operation in the flush. A rejection never drops an unrelated write.
 - `created_at` is required, immutable, JavaScript-safe, strictly increasing in writer order within one table, and enforced unique by SQLite.
 - Startup rejects persisted `created_at` values outside `0..Number.MAX_SAFE_INTEGER`; no global cross-table clock exists.
 - Transaction-local delta coalescing changes only subscription publication. Every SQL operation, guard, referential action, and write outcome still executes in its original order.
-- Document cache and primary-key-set mutations replay in committed operation order and must match SQLite's final state after repeated writes to one document.
+- Document cache mutations replay in committed operation order and must match SQLite's final state after repeated writes to one document.
 - Immediate foreign keys require parent-before-child ordering inside a batch. Optional references accept `null`; non-null values must resolve by table-wide document ID, including across namespace boundaries.
 - Checkpoint/reconnect behavior must not reorder committed write outcomes.
 

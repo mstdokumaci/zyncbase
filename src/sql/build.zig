@@ -156,19 +156,6 @@ pub fn buildSelectDocumentSql(allocator: Allocator, select_from_sql: []const u8)
     });
 }
 
-/// Builds `SELECT "id" FROM "<table>"`.
-pub fn buildSelectAllIdsSql(allocator: Allocator, table_name_quoted: []const u8) ![]const u8 {
-    var buf = SqlBuf.init();
-    defer buf.deinit(allocator);
-
-    try buf.appendSlice(allocator, "SELECT ");
-    try buf.appendSlice(allocator, system.quoted_id);
-    try buf.appendSlice(allocator, " FROM ");
-    try buf.appendSlice(allocator, table_name_quoted);
-
-    return buf.toOwnedSlice(allocator);
-}
-
 /// Builds `SELECT MAX("created_at") FROM "<table>"`.
 pub fn buildSelectMaxCreatedAtSql(allocator: Allocator, table_name_quoted: []const u8) ![]const u8 {
     var buf = SqlBuf.init();

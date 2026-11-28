@@ -26,6 +26,7 @@ const wire_error_map = std.StaticStringMap(WireError).initComptime(.{
     .{ "TypeMismatch", wireError("SCHEMA_VALIDATION_FAILED", "Field type mismatch") },
     .{ "ConstraintViolation", wireError("SCHEMA_VALIDATION_FAILED", "Schema constraint violation") },
     .{ "UniqueConstraintViolation", wireError("UNIQUE_CONSTRAINT_VIOLATED", "Unique constraint violated") },
+    .{ "DocumentIdConflict", wireError("UNIQUE_CONSTRAINT_VIOLATED", "Document id already exists in another namespace") },
     .{ "MissingRequiredField", wireError("SCHEMA_VALIDATION_FAILED", "Required field missing during document creation") },
     .{ "NullNotAllowed", wireError("SCHEMA_VALIDATION_FAILED", "Required field cannot be null") },
     .{ "SchemaValidationFailed", wireError("SCHEMA_VALIDATION_FAILED", "Schema validation failed") },

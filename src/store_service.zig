@@ -158,14 +158,6 @@ pub const StoreService = struct {
         doc_id: DocId,
     };
 
-    const DocKey = struct {
-        table_index: usize,
-        doc_id: DocId,
-    };
-
-    const BatchDocState = enum { exists, deleted };
-    const BatchDocStates = std.AutoHashMap(DocKey, BatchDocState);
-
     pub fn tryResolveScopeCached(self: *StoreService, namespace: []const u8, external_user_id: []const u8) !?request_context.Scope {
         if (namespace.len == 0) return error.InvalidMessageFormat;
         if (external_user_id.len == 0) return error.InvalidMessageFormat;
@@ -382,9 +374,6 @@ pub const StoreService = struct {
         if (ops.len == 0) return false;
         if (ops.len > 500) return error.BatchTooLarge;
 
-        var doc_states = BatchDocStates.init(self.allocator);
-        defer doc_states.deinit();
-
         var entries = try self.allocator.alloc(storage_mod.WriteOp, ops.len);
         var initialized: usize = 0;
         var entries_owned = true;
@@ -396,7 +385,7 @@ pub const StoreService = struct {
         const timestamp = std.Io.Clock.real.now(self.io).toMicroseconds();
 
         for (ops) |op_payload| {
-            entries[initialized] = try self.buildBatchEntry(ctx, op_payload, timestamp, &doc_states);
+            entries[initialized] = try self.buildBatchEntry(ctx, op_payload, timestamp);
             initialized += 1;
         }
 
@@ -423,7 +412,6 @@ pub const StoreService = struct {
         ctx: WriteContext,
         payload: msgpack.Payload,
         timestamp: i64,
-        doc_states: *BatchDocStates,
     ) !storage_mod.WriteOp {
         if (payload != .arr or payload.arr.len < 2) return error.InvalidMessageFormat;
         const tuple = payload.arr;
@@ -434,13 +422,13 @@ pub const StoreService = struct {
             if (tuple.len < 3) return error.MissingRequiredFields;
             if (tuple.len > 4) return error.InvalidMessageFormat;
             const if_payload = if (tuple.len == 4) tuple[3] else null;
-            return self.buildBatchSetEntry(ctx, tuple[1], tuple[2], if_payload, timestamp, doc_states);
+            return self.buildBatchSetEntry(ctx, tuple[1], tuple[2], if_payload, timestamp);
         }
         if (std.mem.eql(u8, kind, "r")) {
             if (tuple.len < 2) return error.MissingRequiredFields;
             if (tuple.len > 3) return error.InvalidMessageFormat;
             const if_payload = if (tuple.len == 3) tuple[2] else null;
-            return self.buildBatchRemoveEntry(ctx, tuple[1], if_payload, timestamp, doc_states);
+            return self.buildBatchRemoveEntry(ctx, tuple[1], if_payload, timestamp);
         }
         if (std.mem.eql(u8, kind, "i")) {
             if (tuple.len < 4) return error.MissingRequiredFields;
@@ -493,41 +481,15 @@ pub const StoreService = struct {
         var precondition = try self.decodePrecondition(path.table, if_payload);
         errdefer if (precondition) |*p| p.deinit(self.allocator);
 
-        // A conditional set is a compare-and-set on an existing row. It never
-        // creates: the upsert INSERT branch has no WHERE guard.
-        const is_create = if (has_conditional) false else !self.storage_engine.documentExists(path.table_index, path.doc_id);
-
-        if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
-
-        var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
-            .config = self.auth_config,
-            .table = path.table,
-            .session_user_id = ctx.request.user_doc_id,
-            .session_external_id = ctx.request.external_user_id,
-            .session_claims = ctx.request.session_claims,
-            .namespace = ctx.request.store_namespace orelse return error.SessionNotReady,
-            .doc_id = path.doc_id,
-            .value = &value,
-            .is_create = is_create,
-        });
+        const auth = try self.authorizeSet(ctx, path, &value, columns.items, has_conditional);
+        var store_write = auth.guard;
         errdefer if (store_write) |*p| p.deinit(self.allocator);
 
         if (has_conditional) try self.mergeReadGuard(ctx, path.table, &store_write);
 
         const columns_slice = try columns.toOwnedSlice(self.allocator);
 
-        const op = if (is_create) storage_mod.WriteOp{
-            .upsert = .{
-                .table_index = path.table_index,
-                .id = path.doc_id,
-                .namespace_id = ctx.request.store_namespace_id,
-                .owner_doc_id = ctx.request.user_doc_id,
-                .columns = columns_slice,
-                .guard_predicate = store_write,
-                .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
-                .ack = ctx.ack(),
-            },
-        } else storage_mod.WriteOp{
+        const op = if (has_conditional) storage_mod.WriteOp{
             .update = .{
                 .table_index = path.table_index,
                 .id = path.doc_id,
@@ -535,6 +497,18 @@ pub const StoreService = struct {
                 .columns = columns_slice,
                 .guard_predicate = store_write,
                 .precondition_predicate = precondition,
+                .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
+                .ack = ctx.ack(),
+            },
+        } else storage_mod.WriteOp{
+            .upsert = .{
+                .table_index = path.table_index,
+                .id = path.doc_id,
+                .namespace_id = ctx.request.store_namespace_id,
+                .owner_doc_id = ctx.request.user_doc_id,
+                .columns = columns_slice,
+                .guard_predicate = store_write,
+                .create_denial = auth.create_denial,
                 .timestamp = std.Io.Clock.real.now(self.io).toMicroseconds(),
                 .ack = ctx.ack(),
             },
@@ -546,6 +520,49 @@ pub const StoreService = struct {
         try self.storage_engine.enqueueWriteOp(op);
     }
 
+    const SetAuthorization = struct {
+        guard: ?query_ast.FilterPredicate,
+        create_denial: ?anyerror = null,
+    };
+
+    /// Authorizes a set for whichever path the writer takes. Only the writer
+    /// knows whether the row exists, so an unconditional set carries the
+    /// reason it may not create, applied only if the row is missing then.
+    /// A conditional set is a compare-and-set on an existing row and never
+    /// creates. Only an outright deny fails here.
+    fn authorizeSet(
+        self: *StoreService,
+        ctx: WriteContext,
+        path: StorePath,
+        value: *const msgpack.Payload,
+        columns: []const storage_mod.ColumnValue,
+        has_conditional: bool,
+    ) !SetAuthorization {
+        var input: authorization_store.StoreWriteInput = .{
+            .config = self.auth_config,
+            .table = path.table,
+            .session_user_id = ctx.request.user_doc_id,
+            .session_external_id = ctx.request.external_user_id,
+            .session_claims = ctx.request.session_claims,
+            .namespace = ctx.request.store_namespace orelse return error.SessionNotReady,
+            .doc_id = path.doc_id,
+            .value = value,
+            .is_create = !has_conditional,
+        };
+        if (has_conditional) return .{ .guard = try authorization_store.authorizeStoreWrite(self.allocator, input) };
+
+        var create_denial: ?anyerror = if (validateRequiredFieldsForCreate(path.table, columns)) |_| null else |err| err;
+        // The update guard is the same predicate; is_create only adds the
+        // candidate check, so a denied create retries as an update.
+        const guard = authorization_store.authorizeStoreWrite(self.allocator, input) catch |err| blk: {
+            if (err != error.AccessDenied) return err;
+            create_denial = create_denial orelse err;
+            input.is_create = false;
+            break :blk try authorization_store.authorizeStoreWrite(self.allocator, input);
+        };
+        return .{ .guard = guard, .create_denial = create_denial };
+    }
+
     fn buildBatchSetEntry(
         self: *StoreService,
         ctx: WriteContext,
@@ -553,7 +570,6 @@ pub const StoreService = struct {
         value: msgpack.Payload,
         if_payload: ?msgpack.Payload,
         timestamp: i64,
-        doc_states: *BatchDocStates,
     ) !storage_mod.WriteOp {
         const path = try self.parseStorePath(path_payload);
 
@@ -570,49 +586,30 @@ pub const StoreService = struct {
         var precondition = try self.decodePrecondition(path.table, if_payload);
         errdefer if (precondition) |*p| p.deinit(self.allocator);
 
-        const key = DocKey{ .table_index = path.table_index, .doc_id = path.doc_id };
-        const effective_state = doc_states.get(key);
-        const is_create = if (has_conditional) false else if (effective_state) |state|
-            state == .deleted
-        else
-            !self.storage_engine.documentExists(path.table_index, path.doc_id);
-
-        if (is_create) try validateRequiredFieldsForCreate(path.table, columns.items);
-
-        var store_write = try authorization_store.authorizeStoreWrite(self.allocator, .{
-            .config = self.auth_config,
-            .table = path.table,
-            .session_user_id = ctx.request.user_doc_id,
-            .session_external_id = ctx.request.external_user_id,
-            .session_claims = ctx.request.session_claims,
-            .namespace = ctx.request.store_namespace orelse return error.SessionNotReady,
-            .doc_id = path.doc_id,
-            .value = &value,
-            .is_create = is_create,
-        });
+        const auth = try self.authorizeSet(ctx, path, &value, columns.items, has_conditional);
+        var store_write = auth.guard;
         errdefer if (store_write) |*p| p.deinit(self.allocator);
 
         if (has_conditional) try self.mergeReadGuard(ctx, path.table, &store_write);
 
-        try doc_states.put(key, .exists);
-
         const columns_slice = try columns.toOwnedSlice(self.allocator);
 
-        const op = if (is_create) storage_mod.WriteOp{ .upsert = .{
-            .table_index = path.table_index,
-            .id = path.doc_id,
-            .namespace_id = ctx.request.store_namespace_id,
-            .owner_doc_id = ctx.request.user_doc_id,
-            .columns = columns_slice,
-            .guard_predicate = store_write,
-            .timestamp = timestamp,
-        } } else storage_mod.WriteOp{ .update = .{
+        const op = if (has_conditional) storage_mod.WriteOp{ .update = .{
             .table_index = path.table_index,
             .id = path.doc_id,
             .namespace_id = ctx.request.store_namespace_id,
             .columns = columns_slice,
             .guard_predicate = store_write,
             .precondition_predicate = precondition,
+            .timestamp = timestamp,
+        } } else storage_mod.WriteOp{ .upsert = .{
+            .table_index = path.table_index,
+            .id = path.doc_id,
+            .namespace_id = ctx.request.store_namespace_id,
+            .owner_doc_id = ctx.request.user_doc_id,
+            .columns = columns_slice,
+            .guard_predicate = store_write,
+            .create_denial = auth.create_denial,
             .timestamp = timestamp,
         } };
         store_write = null;
@@ -688,7 +685,6 @@ pub const StoreService = struct {
         path_payload: msgpack.Payload,
         if_payload: ?msgpack.Payload,
         timestamp: i64,
-        doc_states: *BatchDocStates,
     ) !storage_mod.WriteOp {
         _ = timestamp;
         const path = try self.parseStorePath(path_payload);
@@ -712,9 +708,6 @@ pub const StoreService = struct {
         errdefer if (store_write) |*p| p.deinit(self.allocator);
 
         if (has_conditional) try self.mergeReadGuard(ctx, path.table, &store_write);
-
-        const key = DocKey{ .table_index = path.table_index, .doc_id = path.doc_id };
-        try doc_states.put(key, .deleted);
 
         const op = storage_mod.WriteOp{ .delete = .{
             .table_index = path.table_index,

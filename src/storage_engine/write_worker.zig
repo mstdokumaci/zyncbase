@@ -101,7 +101,6 @@ pub const WriteWorker = struct {
     document_cache: *storage_cache.document_cache_type,
     namespace_cache: *storage_cache.namespace_cache_type,
     identity_cache: *storage_cache.identity_cache_type,
-    pk_sets: []storage_cache.pk_set_type,
     last_created_at: []i64,
     schema: *const schema_types.Schema,
     is_healthy: std.atomic.Value(bool),
@@ -485,20 +484,16 @@ pub const WriteWorker = struct {
             }
         }
 
-        var pk_mutations = std.ArrayListUnmanaged(PkMutation).empty;
-        defer pk_mutations.deinit(self.allocator);
-
         var ctx = BatchCtx{
             .self = self,
             .pending_changes = &pending_changes,
             .pending_change_index = &pending_change_index,
-            .pk_mutations = &pk_mutations,
             .pending_cache_ops = &pending_cache_ops,
         };
 
         try self.runOps(&ctx, ops, fail_fast, rejected);
 
-        try commitBatchAndApply(self, tx_started, &pk_mutations, &pending_changes, &pending_cache_ops, fence);
+        try commitBatchAndApply(self, tx_started, &pending_changes, &pending_cache_ops, fence);
     }
 
     fn runOps(
@@ -565,7 +560,7 @@ pub const WriteWorker = struct {
     }
 
     /// Handles post-execute bookkeeping shared by all three write paths:
-    /// PK tracking, metadata-cache update/eviction, change log push, and guard-conflict detection.
+    /// metadata-cache update/eviction, change log push, and guard-conflict detection.
     /// `old_record` / `new_record` ownership is consumed here — caller must
     /// not deinit them afterwards regardless of the return value.
     /// Returns true on success (row was affected or no guard conflict),
@@ -577,20 +572,18 @@ pub const WriteWorker = struct {
         namespace_id: i64,
         doc_id: typed_doc_id.DocId,
         has_guard: bool,
-        pk_insert: bool,
         pk_delete: bool,
         old_record: ?Record,
         new_record: ?Record,
     ) !bool {
         if (new_record != null or (pk_delete and old_record != null)) {
-            // Row was affected — track PK, push change, and track cache operation.
+            // Row was affected — push change and track cache operation.
             errdefer {
                 if (old_record) |r| r.deinit(self.allocator);
                 if (new_record) |r| r.deinit(self.allocator);
             }
             const table_index = table_metadata.index;
             try trackCacheOp(ctx, table_metadata, namespace_id, doc_id, pk_delete, old_record, new_record);
-            try trackPkMutations(ctx, table_index, doc_id, pk_insert, pk_delete, old_record);
             try pushRowChange(ctx, namespace_id, table_index, doc_id, old_record, new_record);
             return true;
         } else {
@@ -630,22 +623,6 @@ pub const WriteWorker = struct {
         }
     }
 
-    fn trackPkMutations(
-        ctx: *BatchCtx,
-        table_index: usize,
-        doc_id: typed_doc_id.DocId,
-        pk_insert: bool,
-        pk_delete: bool,
-        old_record: ?Record,
-    ) !void {
-        if (pk_insert and old_record == null) {
-            try ctx.pk_mutations.append(ctx.self.allocator, .{ .table_index = table_index, .id = doc_id, .operation = .insert });
-        }
-        if (pk_delete) {
-            try ctx.pk_mutations.append(ctx.self.allocator, .{ .table_index = table_index, .id = doc_id, .operation = .delete });
-        }
-    }
-
     fn pushRowChange(
         ctx: *BatchCtx,
         namespace_id: i64,
@@ -677,11 +654,10 @@ pub const WriteWorker = struct {
         }
     }
 
-    /// Unified upsert handler shared by the flush-batched write path and the
-    /// atomic batch-op path. Returns true on success (or a no-op without guard
-    /// conflict), false when the guard rejected the operation. Callers decide
-    /// how to treat rejection: the flush path tracks it in guard_rejected, the
-    /// batch path converts it to error.PermissionDenied.
+    /// Unified set handler shared by the flush-batched write path and the
+    /// atomic batch-op path. The writer classifies create vs update here,
+    /// inside the transaction, so earlier queued writes are always visible.
+    /// Returns null on success, otherwise the rejection error.
     fn executeUpsertEntry(
         ctx: *BatchCtx,
         entry: anytype,
@@ -689,24 +665,34 @@ pub const WriteWorker = struct {
         table_metadata: *const schema_types.Table,
     ) !?anyerror {
         const self = ctx.self;
-        const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
 
-        const old_record = self.prefetchOldRecord("pre-UPSERT", entry, namespace_id);
-
-        const maybe_new_record = executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata) catch |err| {
-            return mapAndLogError("upsertEntry", err, table_metadata.name, self.allocator, old_record);
+        const old_record = self.getDocumentHelper(entry.table_index, namespace_id, entry.id) catch |err| {
+            return mapAndLogError("upsertEntry read", err, table_metadata.name, self.allocator, null);
         };
-
-        // An upsert returning no row under a guard means the row exists and the
-        // guard failed — unconditionally a conflict. The insert branch always
-        // returns a row.
-        if (maybe_new_record == null and entry.guard_predicate != null) {
-            if (old_record) |r| r.deinit(self.allocator);
-            return @as(?anyerror, error.PermissionDenied);
+        if (old_record) |record| {
+            // UPDATE, not ON CONFLICT: SQLite checks NOT NULL on the INSERT
+            // branch first, so a partial set on an existing row would fail.
+            const update: @FieldType(WriteOp, "update") = .{
+                .table_index = entry.table_index,
+                .id = entry.id,
+                .namespace_id = entry.namespace_id,
+                .columns = entry.columns,
+                .guard_predicate = entry.guard_predicate,
+                .timestamp = entry.timestamp,
+            };
+            return finishUpdate(ctx, update, namespace_id, table_metadata, record);
         }
 
-        const applied = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, true, false, old_record, maybe_new_record);
-        if (!applied) return @as(?anyerror, error.PermissionDenied);
+        if (entry.create_denial) |err| return @as(?anyerror, err);
+
+        const owner_doc_id = if (table_metadata.is_users_table) entry.id else entry.owner_doc_id;
+        const maybe_new_record = executeUpsert(self, entry, namespace_id, owner_doc_id, table_metadata) catch |err| {
+            return mapAndLogError("upsertEntry", err, table_metadata.name, self.allocator, null);
+        };
+        // The INSERT branch always returns a row. None means ON CONFLICT hit
+        // the id in another namespace: ids are unique per table.
+        const new_record = maybe_new_record orelse return @as(?anyerror, StorageError.DocumentIdConflict);
+        _ = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, false, false, null, new_record);
         return null;
     }
 
@@ -717,9 +703,19 @@ pub const WriteWorker = struct {
         namespace_id: i64,
         table_metadata: *const schema_types.Table,
     ) !?anyerror {
-        const self = ctx.self;
+        const old_record = ctx.self.prefetchOldRecord("pre-UPDATE", entry, namespace_id);
+        return finishUpdate(ctx, entry, namespace_id, table_metadata, old_record);
+    }
 
-        const old_record = self.prefetchOldRecord("pre-UPDATE", entry, namespace_id);
+    /// Runs the UPDATE for `entry`. Consumes `old_record`.
+    fn finishUpdate(
+        ctx: *BatchCtx,
+        entry: anytype,
+        namespace_id: i64,
+        table_metadata: *const schema_types.Table,
+        old_record: ?Record,
+    ) !?anyerror {
+        const self = ctx.self;
 
         const maybe_new_record = executeUpdate(self, entry, namespace_id, table_metadata) catch |err| {
             return mapAndLogError("updateEntry", err, table_metadata.name, self.allocator, old_record);
@@ -734,7 +730,7 @@ pub const WriteWorker = struct {
             return try self.classifyRejectedWrite(entry.table_index, namespace_id, entry.id, guard_ptr, precondition_ptr, entry.increments.len > 0);
         }
 
-        const applied = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, false, old_record, maybe_new_record);
+        const applied = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, old_record, maybe_new_record);
         if (!applied) return @as(?anyerror, error.PermissionDenied);
         return null;
     }
@@ -933,24 +929,11 @@ pub const WriteWorker = struct {
                 change.namespace_id,
                 change.id,
                 false,
-                false,
                 change.action == .delete,
                 old_record,
                 new_record,
             );
         }
-    }
-
-    fn containsEffectivePk(ctx: *BatchCtx, table_index: usize, id: DocId) bool {
-        var mutation_index = ctx.pk_mutations.items.len;
-        while (mutation_index > 0) {
-            mutation_index -= 1;
-            const mutation = ctx.pk_mutations.items[mutation_index];
-            if (mutation.table_index == table_index and mutation.id == id) {
-                return mutation.operation == .insert;
-            }
-        }
-        return ctx.self.pk_sets[table_index].contains(id);
     }
 
     /// Unified delete handler shared by both write paths. See executeUpsertEntry.
@@ -962,8 +945,8 @@ pub const WriteWorker = struct {
     ) !?anyerror {
         const self = ctx.self;
 
-        const traverse_references = table_metadata.has_incoming_cascade_or_set_null and
-            containsEffectivePk(ctx, entry.table_index, entry.id);
+        // A missing parent finds no children: reference fields are indexed.
+        const traverse_references = table_metadata.has_incoming_cascade_or_set_null;
         var referential_changes = if (traverse_references)
             try captureReferentialChanges(ctx, table_metadata, entry.id)
         else
@@ -985,7 +968,7 @@ pub const WriteWorker = struct {
         }
 
         const deleted = maybe_old_record != null;
-        const applied = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, false, true, maybe_old_record, null);
+        const applied = try applyWriteResult(self, ctx, table_metadata, namespace_id, entry.id, entry.guard_predicate != null, true, maybe_old_record, null);
         if (deleted and traverse_references) try applyReferentialChanges(self, ctx, &referential_changes);
         if (!applied) return @as(?anyerror, error.PermissionDenied);
         return null;
@@ -1181,12 +1164,6 @@ pub const WriteWorker = struct {
         };
     }
 
-    const PkMutation = struct {
-        table_index: usize,
-        id: DocId,
-        operation: enum { insert, delete },
-    };
-
     const ReferentialAction = enum { delete, set_null };
     const ReferentialKey = struct { table_index: usize, id: DocId };
     const ReferentialChange = struct {
@@ -1215,7 +1192,6 @@ pub const WriteWorker = struct {
         self: *WriteWorker,
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         pending_change_index: *std.AutoHashMapUnmanaged(write_queue.OpTarget, usize),
-        pk_mutations: *std.ArrayListUnmanaged(PkMutation),
         pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
         referential_lookups: ?[]const ReferentialLookup = null,
     };
@@ -1276,37 +1252,15 @@ pub const WriteWorker = struct {
     fn commitBatchAndApply(
         self: *WriteWorker,
         tx_started: *bool,
-        pk_mutations: *std.ArrayListUnmanaged(PkMutation),
         pending_changes: *std.ArrayListUnmanaged(OwnedRecordChange),
         pending_cache_ops: *std.ArrayListUnmanaged(CacheOp),
         fence: ?*OutcomeFence,
     ) !void {
-        const insert_counts = try self.allocator.alloc(u32, self.pk_sets.len);
-        defer self.allocator.free(insert_counts);
-        @memset(insert_counts, 0);
-        for (pk_mutations.items) |mutation| {
-            if (mutation.operation == .insert and mutation.table_index < self.pk_sets.len) {
-                insert_counts[mutation.table_index] += 1;
-            }
-        }
-        for (self.pk_sets, insert_counts) |*pk_set, insert_count| {
-            if (insert_count > 0) try pk_set.ensureUnusedCapacity(self.allocator, insert_count);
-        }
-
         try execTransactionControlChecked(&self.conn, "COMMIT", "executeBatchOp COMMIT");
         tx_started.* = false;
         self.bumpVersion();
 
         try self.applyDocumentCache(pending_cache_ops);
-
-        for (pk_mutations.items) |mutation| {
-            if (mutation.table_index < self.pk_sets.len) {
-                switch (mutation.operation) {
-                    .insert => self.pk_sets[mutation.table_index].putAssumeCapacity(mutation.id, {}),
-                    .delete => _ = self.pk_sets[mutation.table_index].remove(mutation.id),
-                }
-            }
-        }
 
         flushPendingChanges(self, pending_changes, fence);
     }

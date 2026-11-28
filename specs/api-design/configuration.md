@@ -1010,7 +1010,7 @@ CREATE UNIQUE INDEX "uidx__tasks__created_at" ON "tasks"("created_at");
 CREATE INDEX "idx__tasks__field__status" ON "tasks"("status");
 ```
 
-The primary key is `id`, not `(namespace_id, id)`. Namespace-aware tables still require document IDs that are unique across the whole collection. That keeps references, cursors, caches, and SDK addressing single-key. Tables are `STRICT`: a value that can't be stored in a column's type fails the statement that wrote it.
+The primary key is `id`, not `(namespace_id, id)`. Namespace-aware tables still require document IDs that are unique across the whole collection; reusing one from another namespace fails with `UNIQUE_CONSTRAINT_VIOLATED`. That keeps references, cursors, caches, and SDK addressing single-key. Tables are `STRICT`: a value that can't be stored in a column's type fails the statement that wrote it.
 
 ### What happens at startup
 

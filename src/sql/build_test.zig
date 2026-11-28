@@ -146,16 +146,6 @@ test "buildSelectDocumentSql builds no-guard SELECT document query" {
     );
 }
 
-test "buildSelectAllIdsSql builds simple id projection" {
-    const allocator = std.testing.allocator;
-    const sql = try build.buildSelectAllIdsSql(allocator, "\"test_table\"");
-    defer allocator.free(sql);
-    try std.testing.expectEqualStrings(
-        "SELECT \"id\" FROM \"test_table\"",
-        sql,
-    );
-}
-
 test "buildSelectMaxCreatedAtSql builds max timestamp projection" {
     const allocator = std.testing.allocator;
     const sql = try build.buildSelectMaxCreatedAtSql(allocator, "\"test_table\"");

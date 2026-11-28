@@ -10,6 +10,8 @@ pub const StorageError = error{
     ConstraintViolation,
     /// A user-defined unique index rejected the write
     UniqueConstraintViolation,
+    /// The document id already exists in another namespace of the table
+    DocumentIdConflict,
     /// Disk is full, cannot write more data
     DiskFull,
     /// Database file is corrupted
