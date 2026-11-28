@@ -58,11 +58,10 @@ pub fn buildSelectQuery(
     // 3.. ORDER BY
     try sql_build.appendOrderBySql(allocator, &buf, table_metadata, filter.order_by);
 
-    // 4.. LIMIT (+1 overfetch for accurate hasMore detection)
+    // 4.. LIMIT (+1 overfetch for accurate hasMore detection; parser caps l)
     if (filter.limit) |l| {
-        const effective_limit: u32 = if (l == std.math.maxInt(u32)) l else l + 1;
         try buf.appendSlice(allocator, " LIMIT ?");
-        try values.append(allocator, Value{ .scalar = .{ .integer = @intCast(effective_limit) } });
+        try values.append(allocator, Value{ .scalar = .{ .integer = @as(i64, l) + 1 } });
     }
 
     const sql_owned = try buf.toOwnedSlice(allocator);

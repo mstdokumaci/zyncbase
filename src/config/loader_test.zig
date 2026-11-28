@@ -613,6 +613,32 @@ test "config: validation - invalid max query response size" {
     try std.testing.expectError(error.InvalidMaxQueryResponseSize, result);
 }
 
+test "config: validation - zero ticket ttl" {
+    const allocator = std.heap.smp_allocator;
+
+    var context = try schema_helpers.TestContext.init(allocator, "config-invalid-ticket-ttl");
+    defer context.deinit();
+
+    const schema_file_path = try std.fs.path.join(allocator, &.{ context.test_dir, "test-schema-invalid-ticket-ttl.json" });
+    defer allocator.free(schema_file_path);
+
+    const config_content = try std.fmt.allocPrint(allocator,
+        \\{{
+        \\  "authentication": {{
+        \\    "ticket": {{ "ttlSeconds": 0 }}
+        \\  }},
+        \\  "schema": "{s}"
+        \\}}
+    , .{schema_file_path});
+    defer allocator.free(config_content);
+
+    const temp_file_path = try writeConfigWithSchema(allocator, context.test_dir, "test-config-invalid-ticket-ttl.json", schema_file_path, config_content);
+    defer allocator.free(temp_file_path);
+
+    const result = loadConfig(allocator, temp_file_path);
+    try std.testing.expectError(error.InvalidTicketTtl, result);
+}
+
 test "config: max query response size defaults to 8 MiB and is overridable" {
     const allocator = std.heap.smp_allocator;
 

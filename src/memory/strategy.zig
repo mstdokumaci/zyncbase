@@ -94,9 +94,17 @@ pub const MemoryStrategy = struct {
         return self.arena_pool.acquire();
     }
 
+    /// Capacity a reset arena keeps. Only outliers above it are freed, so one
+    /// pathological request cannot pin memory for the process lifetime.
+    pub const arena_retain_limit: usize = 8 * 1024 * 1024;
+
     /// Release an arena back to the pool after resetting it
     pub fn releaseArena(self: *MemoryStrategy, arena: *std.heap.ArenaAllocator) void {
-        _ = arena.reset(.retain_capacity);
+        // A failed shrink leaves the old oversized buffer in place; free it fully
+        // so an outlier request cannot pin memory in the pool.
+        if (!arena.reset(.{ .retain_with_limit = arena_retain_limit })) {
+            _ = arena.reset(.free_all);
+        }
         self.arena_pool.release(arena);
     }
 

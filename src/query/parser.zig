@@ -41,6 +41,7 @@ pub const ParserError = error{
     EmptyPrecondition,
     PreconditionTooLarge,
     InvalidPrecondition,
+    QueryLimitTooLarge,
     OutOfMemory,
 };
 
@@ -49,6 +50,9 @@ pub const max_sort_clauses: usize = 8;
 
 /// Maximum number of conditions in a write precondition (AND + OR combined).
 pub const max_write_predicate_conditions: usize = 32;
+
+/// Maximum client-supplied query `limit`. Larger result sets page with `after`.
+pub const max_query_limit: u32 = 10_000;
 
 /// Decodes a Base64-encoded MessagePack cursor token into a Cursor.
 /// Decoded shape: [table_index, [[field_index, desc], ...], [value_0, ..., unique_value]]
@@ -398,13 +402,20 @@ const FilterParseCtx = struct {
         self.predicate.or_clauses = clause_slice;
     }
 
+    /// Range-checks before narrowing: the wire value is a u64/i64.
     fn parseLimit(self: *FilterParseCtx, value: msgpack.Payload) ParserError!void {
-        if (value == .uint) {
-            self.limit.* = @intCast(value.uint);
-        } else if (value == .int and value.int >= 0) {
-            self.limit.* = @intCast(value.int);
-        }
-        if (self.limit.* != null and self.limit.*.? == 0) return error.InvalidMessageFormat;
+        const raw: u64 = switch (value) {
+            .nil => {
+                self.limit.* = null;
+                return;
+            },
+            .uint => |v| v,
+            .int => |v| if (v > 0) @intCast(v) else return error.InvalidMessageFormat,
+            else => return error.InvalidMessageFormat,
+        };
+        if (raw == 0) return error.InvalidMessageFormat;
+        if (raw > max_query_limit) return error.QueryLimitTooLarge;
+        self.limit.* = @intCast(raw);
     }
 };
 

@@ -79,7 +79,7 @@ Loader (`src/config/loader.zig`) requires both keys together, both non-empty; ot
 | Key | Type | Default | Description |
 |:---|:---:|:---|:---|
 | `secret` | `string` | `null` | 32-byte ticket signing secret. If omitted, a runtime secret is generated. |
-| `ttlSeconds` | `number` | `60` | Short-lived WebSocket ticket lifetime. |
+| `ttlSeconds` | `number` | `60` | Short-lived WebSocket ticket lifetime. Must be greater than 0. |
 
 ### `authentication.anonymous` Settings
 

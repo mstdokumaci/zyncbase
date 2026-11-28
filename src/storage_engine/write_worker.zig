@@ -111,7 +111,7 @@ pub const WriteWorker = struct {
     in_memory: bool,
     /// Per-batch arena for JIT SQL generation and guard rendering.
     /// Acquired from MemoryStrategy pool at init, held for worker lifetime.
-    /// Reset (.retain_capacity) at the start of each batch flush.
+    /// Reset (retaining up to MemoryStrategy.arena_retain_limit) at the start of each batch flush.
     batch_arena: *std.heap.ArenaAllocator,
     /// Reusable scratch buffer for streaming array-to-JSON serialization.
     /// Reset (length only) between uses; capacity is retained for steady-state reuse.
@@ -996,7 +996,7 @@ pub const WriteWorker = struct {
         batch: *std.ArrayListUnmanaged(WriteOp),
         last_batch_time: *i64,
     ) void {
-        _ = self.batch_arena.reset(.retain_capacity);
+        _ = self.batch_arena.reset(.{ .retain_with_limit = MemoryStrategy.arena_retain_limit });
         const batch_len = batch.items.len;
         std.log.debug("flushBatch: flushing {} ops", .{batch_len});
 
@@ -1237,7 +1237,7 @@ pub const WriteWorker = struct {
         bop: @FieldType(WriteOp, "batch"),
         last_batch_time: *i64,
     ) void {
-        _ = self.batch_arena.reset(.retain_capacity);
+        _ = self.batch_arena.reset(.{ .retain_with_limit = MemoryStrategy.arena_retain_limit });
         const entries = bop.entries;
         var tx_started = false;
         var final_err: ?anyerror = null;
@@ -1465,7 +1465,7 @@ pub const WriteWorker = struct {
         std.log.debug("flushResolutions: flushing {} ops", .{count});
 
         const arena_alloc = self.batch_arena.allocator();
-        _ = self.batch_arena.reset(.retain_capacity);
+        _ = self.batch_arena.reset(.{ .retain_with_limit = MemoryStrategy.arena_retain_limit });
 
         var local = LocalCaches{};
         defer local.deinit(arena_alloc);

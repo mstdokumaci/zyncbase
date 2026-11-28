@@ -641,8 +641,10 @@ test "StoreService: query response over the configured size limit fails with RES
     defer filter_map.free(allocator);
 
     var read_req = try app.store_service.prepareQueryRead(ctx, table_index, filter_map, null);
-    errdefer read_req.deinit(allocator);
-    try app.store_service.enqueueRead(read_req);
+    app.store_service.enqueueRead(read_req) catch |err| {
+        read_req.deinit(allocator);
+        return err;
+    };
 
     // The read worker runs on its own thread; wait for its single response.
     const send_queue = &(app.test_context.send_queue orelse return error.TestExpectedValue);
@@ -650,6 +652,40 @@ test "StoreService: query response over the configured size limit fails with RES
         if (send_queue.popFrom(0)) |entry| {
             defer entry.deinit();
             try testing.expect(std.mem.indexOf(u8, entry.data, "RESPONSE_TOO_LARGE") != null);
+            return;
+        }
+        try testing.io.sleep(.fromNanoseconds(std.time.ns_per_ms), .awake);
+    }
+    return error.TestExpectedValue;
+}
+
+test "StoreService: a failing query reports an error instead of an empty result" {
+    const allocator = std.heap.smp_allocator;
+    var app: helpers.AppTestContext = undefined;
+    try app.init(allocator, "service-query-error", &.{
+        .{ .name = "people", .fields = &.{"name"} },
+    });
+    defer app.deinit();
+
+    const tbl_md = app.schema.table("people") orelse return error.UnknownTable;
+    const filter_map = try qth.createQueryFilterPayload(allocator, tbl_md, .{});
+    defer filter_map.free(allocator);
+
+    var read_req = try app.store_service.prepareQueryRead(readCtx(1), tbl_md.index, filter_map, null);
+    // An out-of-range sort field makes buildSelectQuery fail inside the reader.
+    read_req.filter.order_by[0].field_index = tbl_md.fields.len + 5;
+    app.store_service.enqueueRead(read_req) catch |err| {
+        read_req.deinit(allocator);
+        return err;
+    };
+
+    const send_queue = &(app.test_context.send_queue orelse return error.TestExpectedValue);
+    for (0..2000) |_| {
+        if (send_queue.popFrom(0)) |entry| {
+            defer entry.deinit();
+            const parsed = try helpers.parseResponse(allocator, entry.data);
+            defer if (parsed.code) |code| allocator.free(code);
+            try testing.expectEqualStrings("STORE_QUERY", parsed.code orelse return error.TestExpectedValue);
             return;
         }
         try testing.io.sleep(.fromNanoseconds(std.time.ns_per_ms), .awake);

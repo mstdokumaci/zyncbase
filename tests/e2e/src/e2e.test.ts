@@ -14,6 +14,7 @@ import {
 	withServer,
 } from "./harness";
 import { run as runActions } from "./test-actions";
+import { run as runAuthTicket } from "./test-auth-ticket";
 import { run as runBackup } from "./test-backup";
 import { run as runBatch } from "./test-batch";
 import { run as runComboStress } from "./test-combo-stress";
@@ -262,6 +263,22 @@ describe("ZyncBase E2E", () => {
 				},
 				async ({ port }) => {
 					await runResponseLimit(port);
+				},
+			);
+		});
+	});
+
+	test("/auth/ticket rejects oversized bodies with 413 and keeps serving", async () => {
+		await runE2ETest("Ticket body limit", async (ctx) => {
+			await withServer(
+				ctx,
+				{
+					schemaPath: ctx.schemaPath("schema-sync.json"),
+					dataDir: ctx.dataPath("ticket-body-limit"),
+					configName: "zyncbase-config-ticket-body-limit.json",
+				},
+				async ({ port }) => {
+					await runAuthTicket(port);
 				},
 			);
 		});

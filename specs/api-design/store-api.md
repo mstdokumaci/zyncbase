@@ -200,7 +200,7 @@ if (users.nextCursor) {
 - `options` (object) - Query options:
   - `where` (object) - Filter conditions
   - `orderBy` (array) - Ordered sort clauses, e.g. `[{ created_at: 'desc' }]`; each clause has exactly one field and direction
-  - `limit` (number) - Max results to return (must be > 0)
+  - `limit` (number) - Max results to return (1 to 10000)
   - `after` (string) - Opaque token for the next page (cursor)
 
 **Returns**: `Promise<Array & { nextCursor: string | null }>` - A standard JavaScript Array with an additional `nextCursor` property.

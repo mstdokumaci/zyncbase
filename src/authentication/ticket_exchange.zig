@@ -264,13 +264,10 @@ pub const TicketExchange = struct {
         , .{ ticket, exp });
         defer allocator.free(response_body);
 
-        if (!ctx.aborted) {
-            const ssl_val: c_int = if (ctx.ssl) 1 else 0;
-            c.uws_res_write_status(ssl_val, ctx.res, "200 OK", "200 OK".len);
-            c.uws_res_write_header(ssl_val, ctx.res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
-            c.uws_res_end(ssl_val, ctx.res, response_body.ptr, response_body.len, 0);
-            ctx.response_sent = true;
-        }
+        const ssl_val: c_int = if (ctx.ssl) 1 else 0;
+        c.uws_res_write_status(ssl_val, ctx.res, "200 OK", "200 OK".len);
+        c.uws_res_write_header(ssl_val, ctx.res, "Content-Type", "Content-Type".len, "application/json", "application/json".len);
+        c.uws_res_end(ssl_val, ctx.res, response_body.ptr, response_body.len, 0);
     }
 
     pub fn validateAnonymousSubject(self: *TicketExchange, subject: []const u8) !void {
@@ -304,6 +301,13 @@ pub const TicketExchange = struct {
     }
 };
 
+/// Largest accepted `/auth/ticket` body; the only body is `{"anonymousSubject":...}`.
+pub const max_ticket_body_bytes: usize = 4 * 1024;
+
+/// Lives from handleAuthTicket until either the last body chunk is answered
+/// or the request aborts. uWS `end()` always completes the write and clears
+/// `onAborted`, and it never calls `onData` after the last chunk or an abort,
+/// so each of those two paths frees the context exactly once.
 pub const RequestContext = struct {
     allocator: Allocator,
     exchange: *TicketExchange,
@@ -311,20 +315,14 @@ pub const RequestContext = struct {
     ssl: bool,
     body: std.ArrayListUnmanaged(u8),
     auth_header: ?[]const u8,
-    aborted: bool,
-    response_sent: bool,
+    /// Set when the body overflows or cannot be buffered; answered on the last chunk.
+    failure: ?anyerror = null,
 };
 
 fn destroyRequestContext(ctx: *RequestContext) void {
     ctx.body.deinit(ctx.allocator);
     if (ctx.auth_header) |header| ctx.allocator.free(header);
     ctx.allocator.destroy(ctx);
-}
-
-fn sendInternalServerError(ctx: *RequestContext) void {
-    const ssl: c_int = if (ctx.ssl) 1 else 0;
-    c.uws_res_write_status(ssl, ctx.res, "500 Internal Server Error", "500 Internal Server Error".len);
-    c.uws_res_end(ssl, ctx.res, "Internal Server Error", "Internal Server Error".len, 0);
 }
 
 const TicketErrorResponse = struct {
@@ -335,6 +333,16 @@ const TicketErrorResponse = struct {
 
 fn ticketErrorResponse(err: anyerror) TicketErrorResponse {
     return switch (err) {
+        error.PayloadTooLarge => .{
+            .status = "413 Payload Too Large",
+            .code = "MESSAGE_TOO_LARGE",
+            .message = "Request body exceeds 4096 bytes",
+        },
+        error.OutOfMemory => .{
+            .status = "500 Internal Server Error",
+            .code = "INTERNAL_ERROR",
+            .message = "Internal Server Error",
+        },
         error.InvalidMessage => .{
             .status = "400 Bad Request",
             .code = "INVALID_MESSAGE",
@@ -372,46 +380,41 @@ fn sendTicketError(ctx: *RequestContext, err: anyerror) void {
     c.uws_res_end(ssl, ctx.res, body.ptr, body.len, 0);
 }
 
+/// The client went away before the last chunk: no response and no further onData.
 fn onAbortedCallback(user_data: ?*anyopaque) callconv(.c) void {
-    if (user_data == null) return;
-    const ctx: *RequestContext = @ptrCast(@alignCast(user_data.?));
-    if (ctx.response_sent) {
-        // Response was already sent; clean up the context now that
-        // uWebSockets can no longer invoke the abort callback.
-        destroyRequestContext(ctx);
-    } else {
-        ctx.aborted = true;
-    }
+    const ctx: *RequestContext = @ptrCast(@alignCast(user_data orelse return));
+    destroyRequestContext(ctx);
 }
 
 fn onDataCallback(res: ?*c.uws_res_t, chunk: [*c]const u8, chunk_len: usize, is_last: c_int, user_data: ?*anyopaque) callconv(.c) void {
     _ = res;
-    if (user_data == null) return;
-    const ctx: *RequestContext = @ptrCast(@alignCast(user_data.?));
-    if (ctx.aborted) return;
+    const ctx: *RequestContext = @ptrCast(@alignCast(user_data orelse return));
 
-    ctx.body.appendSlice(ctx.allocator, chunk[0..chunk_len]) catch {
-        sendInternalServerError(ctx);
-        destroyRequestContext(ctx);
-        return;
-    };
-
-    if (is_last != 0) {
-        ctx.exchange.handlePostTicketComplete(ctx) catch |err| {
-            std.log.warn("Error handling ticket POST: {}", .{err});
-            if (!ctx.aborted) sendTicketError(ctx, err);
-        };
-
-        if (ctx.aborted) {
-            // Aborted before response was sent — no callback will follow,
-            // safe to destroy now.
-            destroyRequestContext(ctx);
+    // Never respond before the last chunk: uWS keeps delivering the rest of
+    // the body, and the context must outlive those callbacks.
+    if (ctx.failure == null) {
+        if (ctx.body.items.len + chunk_len > max_ticket_body_bytes) {
+            ctx.failure = error.PayloadTooLarge;
+            ctx.body.clearAndFree(ctx.allocator);
         } else {
-            // Response was sent; keep ctx alive so onAbortedCallback can
-            // safely access it if uWebSockets fires the abort after the send.
-            ctx.response_sent = true;
+            ctx.body.appendSlice(ctx.allocator, chunk[0..chunk_len]) catch |err| {
+                std.log.warn("Failed to buffer ticket request body: {}", .{err});
+                ctx.failure = err;
+            };
         }
     }
+
+    if (is_last == 0) return;
+
+    if (ctx.failure) |err| {
+        sendTicketError(ctx, err);
+    } else {
+        ctx.exchange.handlePostTicketComplete(ctx) catch |err| {
+            std.log.warn("Error handling ticket POST: {}", .{err});
+            sendTicketError(ctx, err);
+        };
+    }
+    destroyRequestContext(ctx);
 }
 
 pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*anyopaque) callconv(.c) void {
@@ -448,8 +451,6 @@ pub fn handleAuthTicket(res: ?*c.uws_res_t, req: ?*c.uws_req_t, user_data: ?*any
         .ssl = exchange.ssl,
         .body = std.ArrayListUnmanaged(u8).empty,
         .auth_header = auth_header_dup,
-        .aborted = false,
-        .response_sent = false,
     };
 
     c.uws_res_on_aborted(ssl_val, res_nn, onAbortedCallback, ctx);
