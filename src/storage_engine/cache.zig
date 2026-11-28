@@ -20,8 +20,6 @@ pub const document_cache_type = lockFreeCache(typed.Record, DocumentCacheKey);
 pub const namespace_cache_type = lockedMap(u64, i64, std.Io.Mutex); // zwanzig-disable-line: identifier-style
 pub const identity_cache_type = lockedMap(u64, DocId, std.Io.Mutex); // zwanzig-disable-line: identifier-style
 
-pub const pk_set_type = lockedMap(DocId, void, std.Io.RwLock); // zwanzig-disable-line: identifier-style
-
 pub const NamespaceCacheKey = u64;
 pub const IdentityCacheKey = u64;
 

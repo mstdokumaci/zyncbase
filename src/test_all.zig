@@ -87,6 +87,7 @@ test {
     _ = @import("checkpoint_worker_test.zig");
     _ = @import("message_handler_test.zig");
     _ = @import("store_service_test.zig");
+    _ = @import("store_service_race_test.zig");
     _ = @import("msgpack_utils_test.zig");
     _ = @import("thread_budget_test.zig");
     _ = @import("storage_engine_stability_test.zig");

@@ -73,6 +73,9 @@ pub const WriteOp = union(enum) {
         owner_doc_id: typed_doc_id.DocId,
         columns: []sql.ColumnValue,
         guard_predicate: ?query_ast.FilterPredicate = null,
+        /// Why this set may not create the row; the writer returns it only
+        /// when the row is missing at execution time.
+        create_denial: ?anyerror = null,
         timestamp: i64,
         ack: ?WriteAck = null,
     },

@@ -56,6 +56,21 @@ fn storePath(allocator: std.mem.Allocator, table_index: usize, id: typed_doc_id.
     return .{ .arr = arr };
 }
 
+/// Pops the next write outcome; a null `code` expects write_committed.
+fn expectNextOutcome(app: *helpers.AppTestContext, code: ?[]const u8) !void {
+    const allocator = std.heap.smp_allocator;
+    const entry = app.test_context.send_queue.?.popFrom(0) orelse return error.TestExpectedValue;
+    defer entry.deinit();
+    const parsed = try helpers.parseResponse(allocator, entry.data);
+    defer if (parsed.code) |c| allocator.free(c);
+    if (code) |expected| {
+        try testing.expectEqual(.write_error, parsed.resp_type);
+        try testing.expectEqualStrings(expected, parsed.code orelse return error.TestExpectedValue);
+    } else {
+        try testing.expectEqual(.write_committed, parsed.resp_type);
+    }
+}
+
 fn documentPath(allocator: std.mem.Allocator, table_index: usize, id: typed_doc_id.DocId) !msgpack.Payload {
     return storePath(allocator, table_index, id);
 }
@@ -438,13 +453,15 @@ test "StoreService: persistence and namespace isolation" {
 
         try app.store_service.setPath(writeCtx(2), path, val, null);
         try app.storage_engine.flushPendingWrites();
+        try expectNextOutcome(&app, null);
 
         var stored_doc = try test_table.getOne(allocator, 1, 2);
         defer stored_doc.deinit();
         _ = try stored_doc.expectFieldString("val", "value1");
     }
 
-    // 2. Duplicate ids do not cross namespace boundaries
+    // 2. Ids are unique per table: reusing one in another namespace fails
+    // loudly and leaves both namespaces untouched.
     {
         const val = try store_helpers.createDocumentMapPayload(allocator, test_table.metadata, .{
             .{ "val", "value2" },
@@ -456,12 +473,13 @@ test "StoreService: persistence and namespace isolation" {
 
         try service.setPath(writeCtx(3), path, val, null);
         try app.storage_engine.flushPendingWrites();
+        try expectNextOutcome(&app, "UNIQUE_CONSTRAINT_VIOLATED");
 
         var doc_a = try test_table.getOne(allocator, 1, 2);
         defer doc_a.deinit();
         _ = try doc_a.expectFieldString("val", "value1");
 
-        const record_b = try test_table.readDoc(allocator, 1, 4);
+        const record_b = try test_table.readDoc(allocator, 1, 3);
         defer if (record_b) |r| r.deinit(allocator);
         try testing.expect(record_b == null);
     }
@@ -1116,8 +1134,6 @@ test "StoreService: batchWrite coalesces transaction changes to first-old and la
     const record_5 = try items.readDoc(allocator, 5, 1);
     defer if (record_5) |owned| owned.deinit(allocator);
     try testing.expect(record_5 == null);
-    try testing.expect(app.storage_engine.documentExists(items.metadata.index, 4));
-    try testing.expect(!app.storage_engine.documentExists(items.metadata.index, 5));
 }
 
 test "StoreService: batchWrite - empty ops is a no-op" {
@@ -1385,7 +1401,7 @@ test "StoreService: create requires all required fields but update does not" {
     const items = try app.table("items");
     const doc_id: typed_doc_id.DocId = 1;
 
-    // 1. Create without required field 'status' should fail
+    // 1. Create without required field 'status' fails in the writer
     {
         const val = try store_helpers.createDocumentMapPayload(allocator, items.metadata, .{
             .{ "name", "Test Item" },
@@ -1396,8 +1412,13 @@ test "StoreService: create requires all required fields but update does not" {
         var path = try documentPath(allocator, app.tableIndex("items"), doc_id);
         defer path.free(allocator);
 
-        const result = service.setPath(writeCtx(1), path, val, null);
-        try testing.expectError(StorageError.MissingRequiredField, result);
+        try service.setPath(writeCtx(1), path, val, null);
+        try app.storage_engine.flushPendingWrites();
+        try expectNextOutcome(&app, "SCHEMA_VALIDATION_FAILED");
+
+        const record = try items.readDoc(allocator, doc_id, 1);
+        defer if (record) |r| r.deinit(allocator);
+        try testing.expect(record == null);
     }
 
     // 2. Create with all required fields should succeed

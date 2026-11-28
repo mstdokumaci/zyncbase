@@ -72,7 +72,6 @@ pub const StorageEngine = struct {
     identity_cache: identity_cache_type,
     options: Options,
     write_worker: WriteWorker,
-    pk_sets: []storage_cache.pk_set_type,
     last_created_at: []i64,
 
     pub fn init(
@@ -149,8 +148,6 @@ pub const StorageEngine = struct {
                 .namespace_cache = undefined,
                 // SAFETY: Set after ns/identity cache init below
                 .identity_cache = undefined,
-                // SAFETY: Set after pk_sets init below
-                .pk_sets = undefined,
                 // SAFETY: Set after last_created_at init below
                 .last_created_at = undefined,
                 .schema = schema,
@@ -165,8 +162,6 @@ pub const StorageEngine = struct {
                 .json_buf = sql.JsonBuf.init(allocator),
             },
             .state = std.atomic.Value(StorageEngine.State).init(.setup),
-            // SAFETY: Initialized below
-            .pk_sets = undefined,
             // SAFETY: Initialized below
             .last_created_at = undefined,
         };
@@ -192,14 +187,6 @@ pub const StorageEngine = struct {
         errdefer self.write_worker.queue.deinit();
 
         const num_tables = schema.tables.len;
-        self.pk_sets = try allocator.alloc(storage_cache.pk_set_type, num_tables);
-        errdefer allocator.free(self.pk_sets);
-        for (self.pk_sets) |*pk_set| {
-            pk_set.* = storage_cache.pk_set_type.init(io);
-        }
-
-        self.write_worker.pk_sets = self.pk_sets;
-
         self.last_created_at = try allocator.alloc(i64, num_tables);
         errdefer allocator.free(self.last_created_at);
         @memset(self.last_created_at, 0);
@@ -291,11 +278,7 @@ pub const StorageEngine = struct {
         self.namespace_cache.deinit(gpa);
         self.identity_cache.deinit(gpa);
 
-        // 6. Deinit pk_sets
-        for (self.pk_sets) |*pk_set| {
-            pk_set.deinit(gpa);
-        }
-        gpa.free(self.pk_sets);
+        // 6. Deinit per-table state
         gpa.free(self.last_created_at);
 
         // 7. Clean up readers
@@ -349,18 +332,6 @@ pub const StorageEngine = struct {
     pub fn ensureMutationAllowed(self: *StorageEngine) !void {
         try self.ensureRunning();
         try self.ensureHealthy();
-    }
-
-    pub fn documentExists(self: *StorageEngine, table_index: usize, id: DocId) bool {
-        if (table_index >= self.pk_sets.len) return false;
-        return self.pk_sets[table_index].contains(id);
-    }
-
-    pub fn reset_pk_sets(self: *StorageEngine) void {
-        for (self.pk_sets) |*pk_set| {
-            pk_set.deinit(self.allocator);
-            pk_set.* = storage_cache.pk_set_type.init(self.io);
-        }
     }
 
     /// Transitions the engine from 'setup' to 'running' and spawns the write thread.
@@ -473,7 +444,6 @@ pub const StorageEngine = struct {
 
     fn bootstrapRuntimeTableState(self: *StorageEngine) !void {
         // Reset state populated by a previous failed bootstrap attempt.
-        self.reset_pk_sets();
         @memset(self.last_created_at, 0);
 
         // These statements run once at startup and must not pollute stmt_cache.
@@ -491,24 +461,6 @@ pub const StorageEngine = struct {
                 const last = sqlite.c.sqlite3_column_int64(max_stmt.stmt, 0);
                 if (last < 0 or last > schema_system.max_safe_timestamp_us) return StorageError.InvalidOperation;
                 self.last_created_at[table_index] = last;
-            }
-
-            const sql_str = try sql_build.buildSelectAllIdsSql(self.allocator, table.name_quoted);
-            defer self.allocator.free(sql_str);
-
-            var dynamic = try self.write_worker.conn.prepareDynamic(sql_str);
-            defer dynamic.deinit();
-
-            while (true) {
-                const rc = sqlite.c.sqlite3_step(dynamic.stmt);
-                if (rc == sqlite.c.SQLITE_DONE) break;
-                if (rc != sqlite.c.SQLITE_ROW) return storage_errors.classifyStepError(&self.write_worker.conn);
-
-                const ptr = sqlite.c.sqlite3_column_blob(dynamic.stmt, 0);
-                const len: usize = @intCast(sqlite.c.sqlite3_column_bytes(dynamic.stmt, 0));
-                const bytes = if (ptr != null) @as([*]const u8, @ptrCast(ptr))[0..len] else &[_]u8{};
-                const doc_id = try typed_doc_id.fromBytes(bytes);
-                try self.pk_sets[table_index].put(self.allocator, doc_id, {});
             }
         }
     }

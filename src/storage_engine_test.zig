@@ -1056,7 +1056,6 @@ test "StorageEngine: unique violation in a flush fails only its own write" {
     try expectDocPresence(&ctx, table_meta.index, 1, ns, true);
     try expectDocPresence(&ctx, table_meta.index, 2, ns, false);
     try expectDocPresence(&ctx, table_meta.index, 3, ns, true);
-    try testing.expect(!ctx.engine.documentExists(table_meta.index, 2));
     try testing.expectEqual(@as(usize, 2), drainChangeCount(&ctx));
 }
 
@@ -1095,9 +1094,6 @@ test "StorageEngine: orphan reference in a flush fails only its own write" {
     try expectDocPresence(&ctx, parents.index, 2, ns, true);
     try expectDocPresence(&ctx, children.index, 10, ns, false);
     try expectDocPresence(&ctx, children.index, 11, ns, true);
-    try testing.expect(ctx.engine.documentExists(parents.index, 2));
-    try testing.expect(!ctx.engine.documentExists(children.index, 10));
-    try testing.expect(ctx.engine.documentExists(children.index, 11));
     try testing.expectEqual(@as(usize, 2), drainChangeCount(&ctx));
 }
 
@@ -2026,11 +2022,12 @@ test "storage: data persistence across restarts" {
         defer ctx.deinitNoCleanup();
 
         const test_table = try ctx.table("test");
-        try testing.expect(ctx.engine.documentExists(test_table.metadata.index, 1));
-        try testing.expect(!ctx.engine.documentExists(test_table.metadata.index, 2));
         const record = try test_table.readDoc(allocator, 1, 1);
         defer if (record) |r| r.deinit(allocator);
         try testing.expect(record != null);
+        const missing = try test_table.readDoc(allocator, 2, 1);
+        defer if (missing) |r| r.deinit(allocator);
+        try testing.expect(missing == null);
     }
 }
 
@@ -2323,6 +2320,25 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
     }
 
     {
+        // Parent 7 and its child live in namespace 1. Deleting 7 from
+        // namespace 2 removes no row, but the child lookup matches by parent
+        // id only and still finds child 77; the writer must drop it.
+        try parents.insertNamed(7, 1, .{});
+        try cascaded.insertNamed(77, 1, .{sth.named("parent_id", fkDocId(7))});
+        try cascaded.flush();
+        _ = drainForeignKeyChanges(&app);
+
+        try parents.deleteDocument(7, 2);
+        try parents.flush();
+        try expectNoForeignKeyChanges(&app);
+        try testing.expect(app.storage_engine.isHealthy());
+        var kept_parent = try parents.getOne(allocator, 7, 1);
+        kept_parent.deinit();
+        var kept_child = try cascaded.getOne(allocator, 77, 1);
+        kept_child.deinit();
+    }
+
+    {
         try parents.insertNamed(2, 1, .{});
         try cascaded.insertNamed(22, 2, .{sth.named("parent_id", fkDocId(2))});
         try grandchildren.insertNamed(33, 3, .{sth.named("child_id", fkDocId(22))});
@@ -2345,9 +2361,6 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
         try testing.expect(nullable_after.getFieldDocIdOrNull("parent_id") == null);
         try testing.expectEqual(updated_at_before, try nullable_after.getFieldInt("updated_at"));
 
-        try testing.expect(!app.storage_engine.documentExists(cascaded.metadata.index, 22));
-        try testing.expect(!app.storage_engine.documentExists(grandchildren.metadata.index, 33));
-        try testing.expect(app.storage_engine.documentExists(nullable.metadata.index, 44));
         try expectForeignKeyCacheMiss(&app, "cascade_children", 2, 22);
         try expectForeignKeyCacheMiss(&app, "grandchildren", 3, 33);
         try expectForeignKeyCacheNull(&app, "nullable_children", "parent_id", 4, 44);
@@ -2400,9 +2413,6 @@ test "foreign key writes enforce restrict cascade set null and reconcile runtime
         var batch_nullable = try nullable.getOne(allocator, 66, 4);
         defer batch_nullable.deinit();
         try testing.expect(batch_nullable.getFieldDocIdOrNull("parent_id") == null);
-        try testing.expect(!app.storage_engine.documentExists(parents.metadata.index, 3));
-        try testing.expect(!app.storage_engine.documentExists(cascaded.metadata.index, 55));
-        try testing.expect(app.storage_engine.documentExists(nullable.metadata.index, 66));
 
         var change_count: usize = 0;
         const queue = &app.test_context.change_queue.?;

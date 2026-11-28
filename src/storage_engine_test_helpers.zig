@@ -820,7 +820,6 @@ pub fn execSetupSQL(engine: *StorageEngine, sql_query: []const u8) !void {
     engine.namespace_cache = storage_cache.namespace_cache_type.init(engine.io);
     engine.identity_cache.deinit(engine.allocator);
     engine.identity_cache = storage_cache.identity_cache_type.init(engine.io);
-    engine.reset_pk_sets();
     // Increment write_seq to notify readers that the state has changed (DDL/setup)
     engine.write_worker.bumpVersion();
 }

@@ -43,6 +43,8 @@ const id = await client.store.create('elements', { type: 'rect', x: 10 })
 
 Custom document IDs are also supported when supplied in the path directly, but they must match the strict short-ID grammar: `[a-z0-9_-]{1,24}`.
 
+Document IDs are unique per collection across all namespaces. A `set` whose ID already exists in another namespace fails with `UNIQUE_CONSTRAINT_VIOLATED`. Short IDs are global, so use `store.create` (UUIDv7) for namespaced data.
+
 ### `store.get(path)`
 Read a committed value from the state tree; the client's pending writes are not applied.
 ```typescript

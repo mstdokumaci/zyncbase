@@ -680,8 +680,8 @@ Delivery:
 ### Error Phases
 
 Errors fall into two phases:
-- **accept** — rejection before the writer owns the operation (malformed message, invalid path/field, schema validation failure, session not ready, pre-enqueue authorization failure, queue admission failure).
-- **write** — writer-thread failure (storage error, constraint violation, precondition failure, post-read authorization failure against a stored row).
+- **accept** — rejection before the writer owns the operation (malformed message, invalid path/field, schema validation failure, session not ready, a write rule that denies the write outright, queue admission failure).
+- **write** — writer-thread failure (storage error, constraint violation, precondition failure, post-read authorization failure against a stored row). Only the writer knows whether a set creates, so missing required fields and a create denied by the write rule are write-phase failures too.
 
 Both use `ZyncBaseError` with a `details.phase: 'accept' | 'write'` discriminant. The server sends accept-phase failures as `error {id}`; the SDK tags them with `phase: 'accept'`.
 
@@ -883,7 +883,7 @@ Every generated index begins with `namespace_id`: equal values may coexist acros
 
 ### Write Behavior
 
-The upsert conflict target remains `ON CONFLICT("id")`; a conflict on a user unique index therefore aborts the write instead of updating another row. An explicit batch rolls back as a whole, preserving all-or-nothing semantics; in a coalesced writer flush only the colliding write fails and the other writes commit. The colliding write rejects with public code `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Constraint names are not part of the wire contract.
+The writer classifies a set as create or update inside its transaction, so it sees every earlier write. The upsert conflict target remains `ON CONFLICT("id")`; a conflict on a user unique index therefore aborts the write instead of updating another row. An explicit batch rolls back as a whole, preserving all-or-nothing semantics; in a coalesced writer flush only the colliding write fails and the other writes commit. The colliding write rejects with public code `UNIQUE_CONSTRAINT_VIOLATED` (`validation`, non-retryable). Constraint names are not part of the wire contract.
 
 ### Migration Behavior
 
